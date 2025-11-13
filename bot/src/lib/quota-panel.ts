@@ -5,6 +5,9 @@ import {
     Message,
 } from 'discord.js';
 import { getQuotaLeaderboard, getGuildChannels, updateQuotaRoleConfig, getJSON } from './http.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('QuotaPanel');
 
 /**
  * Update or create a quota leaderboard panel for a specific role
@@ -27,26 +30,26 @@ export async function updateQuotaPanel(
         const quotaChannelId = channels.channels['quota'];
         
         if (!quotaChannelId) {
-            console.log(`[Quota Panel] No quota channel configured for guild ${guildId}`);
+            logger.debug('No quota channel configured', { guildId });
             return;
         }
 
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-            console.log(`[Quota Panel] Guild ${guildId} not found in cache`);
+            logger.warn('Guild not found in cache', { guildId });
             return;
         }
 
         const quotaChannel = await guild.channels.fetch(quotaChannelId);
         if (!quotaChannel || !quotaChannel.isTextBased()) {
-            console.log(`[Quota Panel] Quota channel ${quotaChannelId} not found or not text-based`);
+            logger.warn('Quota channel not found or not text-based', { guildId, quotaChannelId });
             return;
         }
 
         // Get role and its members
         const role = guild.roles.cache.get(roleId);
         if (!role) {
-            console.log(`[Quota Panel] Role ${roleId} not found in guild ${guildId}`);
+            logger.warn('Role not found in guild', { guildId, roleId });
             return;
         }
 
@@ -58,16 +61,16 @@ export async function updateQuotaPanel(
             memberIds = role.members.map(m => m.id);
         } else {
             // Need to fetch members to populate the role.members cache
-            console.log(`[Quota Panel] Fetching all guild members to populate role cache`);
+            logger.debug('Fetching all guild members to populate role cache', { guildId, roleId });
             await guild.members.fetch();
             memberIds = role.members.map(m => m.id);
         }
         
-        console.log(`[Quota Panel] Fetching leaderboard for ${memberIds.length} members`);
+        logger.debug('Fetching leaderboard', { guildId, roleId, memberCount: memberIds.length });
         
         // Get leaderboard data
         const result = await getQuotaLeaderboard(guildId, roleId, memberIds);
-        console.log(`[Quota Panel] Got leaderboard with ${result.leaderboard.length} entries`);
+        logger.debug('Received leaderboard data', { guildId, roleId, entryCount: result.leaderboard.length });
         
         // Build embed
         const embed = buildLeaderboardEmbed(
@@ -78,24 +81,28 @@ export async function updateQuotaPanel(
             result.leaderboard,
             guild
         );
-        console.log(`[Quota Panel] Built embed for role ${role.name}`);
 
         // Update or create message
         let message: Message | null = null;
         
         if (config.panel_message_id) {
-            console.log(`[Quota Panel] Attempting to fetch and update message ${config.panel_message_id}`);
+            logger.debug('Attempting to update existing panel message', { guildId, roleId, messageId: config.panel_message_id });
         } else {
-            console.log(`[Quota Panel] No panel_message_id, will create new panel`);
+            logger.debug('No panel_message_id, will create new panel', { guildId, roleId });
         }
         
         if (config.panel_message_id) {
             try {
                 message = await (quotaChannel as TextChannel).messages.fetch(config.panel_message_id);
                 await message.edit({ embeds: [embed] });
-                console.log(`[Quota Panel] Updated panel for role ${role.name} in guild ${guildId}`);
+                logger.info('Updated quota panel', { guildId, roleId, roleName: role.name });
             } catch (err) {
-                console.log(`[Quota Panel] Failed to fetch message ${config.panel_message_id}, creating new one`);
+                logger.warn('Failed to fetch panel message, creating new one', { 
+                    guildId, 
+                    roleId, 
+                    messageId: config.panel_message_id,
+                    error: err instanceof Error ? err.message : String(err)
+                });
                 message = null;
             }
         }
@@ -111,11 +118,11 @@ export async function updateQuotaPanel(
                 panel_message_id: message.id,
             });
             
-            console.log(`[Quota Panel] Created new panel for role ${role.name} in guild ${guildId}`);
+            logger.info('Created new quota panel', { guildId, roleId, roleName: role.name, messageId: message.id });
         }
 
     } catch (err) {
-        console.error(`[Quota Panel] Failed to update panel for role ${roleId} in guild ${guildId}:`, err);
+        logger.error('Failed to update quota panel', { guildId, roleId, err });
     }
 }
 
@@ -204,9 +211,9 @@ export async function updateAllQuotaPanels(client: Client, guildId: string): Pro
             }
         }
 
-        console.log(`[Quota Panel] Updated ${configs.configs.length} panels for guild ${guildId}`);
+        logger.info('Updated all quota panels', { guildId, panelCount: configs.configs.length });
     } catch (err) {
-        console.error(`[Quota Panel] Failed to update all panels for guild ${guildId}:`, err);
+        logger.error('Failed to update all quota panels', { guildId, err });
     }
 }
 
@@ -219,21 +226,19 @@ export async function updateQuotaPanelsForUser(
     userId: string
 ): Promise<void> {
     try {
-        console.log(`[Quota Panel] Starting panel update for user ${userId} in guild ${guildId}`);
+        logger.debug('Starting panel update for user', { guildId, userId });
         
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-            console.log(`[Quota Panel] Guild ${guildId} not found in cache`);
+            logger.warn('Guild not found in cache', { guildId });
             return;
         }
 
         const member = await guild.members.fetch(userId);
         if (!member) {
-            console.log(`[Quota Panel] Member ${userId} not found in guild ${guildId}`);
+            logger.warn('Member not found in guild', { guildId, userId });
             return;
         }
-
-        console.log(`[Quota Panel] Member ${userId} has roles: ${Array.from(member.roles.cache.keys()).join(', ')}`);
 
         // Fetch all quota configs for the guild
         const configs = await getJSON<{
@@ -246,25 +251,24 @@ export async function updateQuotaPanelsForUser(
             }>;
         }>(`/quota/configs/${guildId}`);
 
-        console.log(`[Quota Panel] Found ${configs.configs.length} quota configs for guild`);
+        logger.debug('Found quota configs', { guildId, configCount: configs.configs.length });
 
         // Update panels for roles this user has
         let updatedCount = 0;
         for (const config of configs.configs) {
-            console.log(`[Quota Panel] Checking config for role ${config.discord_role_id}, has panel: ${!!config.panel_message_id}, user has role: ${member.roles.cache.has(config.discord_role_id)}`);
             if (member.roles.cache.has(config.discord_role_id)) {
-                console.log(`[Quota Panel] Updating panel for role ${config.discord_role_id}`);
+                logger.debug('Updating panel for user role', { guildId, userId, roleId: config.discord_role_id });
                 await updateQuotaPanel(client, guildId, config.discord_role_id, config);
                 updatedCount++;
             }
         }
 
         if (updatedCount > 0) {
-            console.log(`[Quota Panel] Updated ${updatedCount} panels for user ${userId} in guild ${guildId}`);
+            logger.info('Updated quota panels for user', { guildId, userId, updatedCount });
         } else {
-            console.log(`[Quota Panel] No panels updated for user ${userId} in guild ${guildId}`);
+            logger.debug('No panels updated for user', { guildId, userId });
         }
     } catch (err) {
-        console.error(`[Quota Panel] Failed to update panels for user ${userId} in guild ${guildId}:`, err);
+        logger.error('Failed to update panels for user', { guildId, userId, err });
     }
 }

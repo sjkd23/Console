@@ -1,5 +1,8 @@
 // backend/src/lib/quota.ts
 import { query } from '../db/pool.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('Quota');
 
 /**
  * Action types for quota events.
@@ -163,6 +166,68 @@ export async function getDungeonOverrides(
 }
 
 /**
+ * Get the point value for a specific dungeon considering all of the user's roles.
+ * Returns the HIGHEST point value found across all the user's roles that have quota configs.
+ * If no override exists for any role, returns the default of 1 point.
+ * 
+ * @param guildId - Discord guild ID
+ * @param dungeonKey - Dungeon identifier (e.g., 'shatters', 'fungal')
+ * @param userRoleIds - Array of Discord role IDs the user has (optional)
+ * @returns The point value for this dungeon (highest override or default 1)
+ */
+export async function getPointsForDungeon(
+    guildId: string,
+    dungeonKey: string,
+    userRoleIds?: string[]
+): Promise<number> {
+    // If no user roles provided, check across ALL quota configs in the guild
+    // This is useful for auto-end scenarios where we don't have the organizer's current roles
+    if (!userRoleIds || userRoleIds.length === 0) {
+        const res = await query<{ points: string }>(
+            `SELECT points
+             FROM quota_dungeon_override
+             WHERE guild_id = $1::bigint 
+               AND dungeon_key = $2
+             ORDER BY points DESC
+             LIMIT 1`,
+            [guildId, dungeonKey]
+        );
+
+        if (res.rowCount && res.rowCount > 0) {
+            const points = Number(res.rows[0].points);
+            logger.debug({ guildId, dungeonKey, points }, 'Found max dungeon override (no role filter)');
+            return points;
+        }
+
+        logger.debug({ guildId, dungeonKey, defaultPoints: 1 }, 'No dungeon override found, using default');
+        return 1;
+    }
+
+    // Query all dungeon overrides for this dungeon across all the user's roles
+    const res = await query<{ points: string }>(
+        `SELECT points
+         FROM quota_dungeon_override
+         WHERE guild_id = $1::bigint 
+           AND discord_role_id = ANY($2::bigint[])
+           AND dungeon_key = $3
+         ORDER BY points DESC
+         LIMIT 1`,
+        [guildId, userRoleIds, dungeonKey]
+    );
+
+    // If we found an override, use the highest value
+    if (res.rowCount && res.rowCount > 0) {
+        const points = Number(res.rows[0].points);
+        logger.debug({ guildId, dungeonKey, points, rolesChecked: userRoleIds.length }, 'Found dungeon override');
+        return points;
+    }
+
+    // No override found, use default
+    logger.debug({ guildId, dungeonKey, defaultPoints: 1 }, 'No dungeon override found, using default');
+    return 1;
+}
+
+/**
  * Set dungeon point override for a specific role
  */
 export async function setDungeonOverride(
@@ -192,6 +257,164 @@ export async function deleteDungeonOverride(
         `DELETE FROM quota_dungeon_override
          WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint AND dungeon_key = $3`,
         [guildId, discordRoleId, dungeonKey]
+    );
+}
+
+/**
+ * RAIDER POINTS CONFIGURATION
+ * These functions manage guild-wide point values for raiders completing dungeons
+ */
+
+/**
+ * Get all raider points configurations for a guild
+ * Returns a map of dungeon_key -> points
+ */
+export async function getRaiderPointsConfig(
+    guildId: string
+): Promise<Record<string, number>> {
+    const res = await query<{ dungeon_key: string; points: string }>(
+        `SELECT dungeon_key, points
+         FROM raider_points_config
+         WHERE guild_id = $1::bigint`,
+        [guildId]
+    );
+
+    const config: Record<string, number> = {};
+    for (const row of res.rows) {
+        config[row.dungeon_key] = Number(row.points);
+    }
+    return config;
+}
+
+/**
+ * Get raider points for a specific dungeon
+ * Returns 1 if no config exists (default is 1 point per completion)
+ */
+export async function getRaiderPointsForDungeon(
+    guildId: string,
+    dungeonKey: string
+): Promise<number> {
+    const res = await query<{ points: string }>(
+        `SELECT points
+         FROM raider_points_config
+         WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
+    );
+
+    if (res.rowCount && res.rowCount > 0) {
+        return Number(res.rows[0].points);
+    }
+
+    return 1; // Default: 1 point per completion
+}
+
+/**
+ * Set raider points for a specific dungeon
+ */
+export async function setRaiderPointsForDungeon(
+    guildId: string,
+    dungeonKey: string,
+    points: number
+): Promise<void> {
+    await query(
+        `INSERT INTO raider_points_config (guild_id, dungeon_key, points, updated_at)
+         VALUES ($1::bigint, $2, $3, NOW())
+         ON CONFLICT (guild_id, dungeon_key)
+         DO UPDATE SET points = EXCLUDED.points, updated_at = NOW()`,
+        [guildId, dungeonKey, points]
+    );
+}
+
+/**
+ * Delete raider points config for a specific dungeon (reverts to default 0 points)
+ */
+export async function deleteRaiderPointsForDungeon(
+    guildId: string,
+    dungeonKey: string
+): Promise<void> {
+    await query(
+        `DELETE FROM raider_points_config
+         WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
+    );
+}
+
+/**
+ * KEY POP POINTS CONFIGURATION
+ * These functions manage guild-wide point values for raiders popping keys
+ */
+
+/**
+ * Get all key pop points configurations for a guild
+ * Returns a map of dungeon_key -> points
+ */
+export async function getKeyPopPointsConfig(
+    guildId: string
+): Promise<Record<string, number>> {
+    const res = await query<{ dungeon_key: string; points: string }>(
+        `SELECT dungeon_key, points
+         FROM key_pop_points_config
+         WHERE guild_id = $1::bigint`,
+        [guildId]
+    );
+
+    const config: Record<string, number> = {};
+    for (const row of res.rows) {
+        config[row.dungeon_key] = Number(row.points);
+    }
+    return config;
+}
+
+/**
+ * Get key pop points for a specific dungeon
+ * Returns 5 if no config exists (default is 5 points per key)
+ */
+export async function getKeyPopPointsForDungeon(
+    guildId: string,
+    dungeonKey: string
+): Promise<number> {
+    const res = await query<{ points: string }>(
+        `SELECT points
+         FROM key_pop_points_config
+         WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
+    );
+
+    if (res.rowCount && res.rowCount > 0) {
+        return Number(res.rows[0].points);
+    }
+
+    return 5; // Default: 5 points per key pop
+}
+
+/**
+ * Set key pop points for a specific dungeon
+ */
+export async function setKeyPopPointsForDungeon(
+    guildId: string,
+    dungeonKey: string,
+    points: number
+): Promise<void> {
+    await query(
+        `INSERT INTO key_pop_points_config (guild_id, dungeon_key, points, updated_at)
+         VALUES ($1::bigint, $2, $3, NOW())
+         ON CONFLICT (guild_id, dungeon_key)
+         DO UPDATE SET points = EXCLUDED.points, updated_at = NOW()`,
+        [guildId, dungeonKey, points]
+    );
+}
+
+/**
+ * Delete key pop points config for a specific dungeon (reverts to default 0 points)
+ */
+export async function deleteKeyPopPointsForDungeon(
+    guildId: string,
+    dungeonKey: string
+): Promise<void> {
+    await query(
+        `DELETE FROM key_pop_points_config
+         WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
     );
 }
 
@@ -242,12 +465,16 @@ export function getQuotaPeriodEnd(config: QuotaRoleConfig): Date {
  * - For 'run_completed': Uses unique constraint on (guild_id, subject_id) to prevent double-counting
  * - For 'verify_member': No constraint, each verification is unique
  * 
+ * Points vs Quota Points:
+ * - points: For raiders completing/joining runs (to be implemented)
+ * - quota_points: For organizers organizing runs and verifiers verifying members
+ * 
  * @param guildId - Discord guild ID
  * @param actorUserId - Discord user ID who earned the points
  * @param actionType - Type of action that earned points
  * @param subjectId - Optional subject identifier for idempotency (e.g., 'run:123')
  * @param dungeonKey - Optional dungeon identifier for per-dungeon tracking (e.g., 'fungal', 'osanc')
- * @param points - Optional point override (defaults to action type default)
+ * @param quotaPoints - Optional point override for quota_points (defaults to action type default)
  * @returns The created quota event or null if it was a duplicate (idempotent no-op)
  */
 export async function logQuotaEvent(
@@ -256,32 +483,96 @@ export async function logQuotaEvent(
     actionType: QuotaActionType,
     subjectId?: string,
     dungeonKey?: string,
-    points?: number
-): Promise<{ id: number; points: number } | null> {
-    const effectivePoints = points ?? getDefaultPoints(actionType);
+    quotaPoints?: number
+): Promise<{ id: number; points: number; quota_points: number } | null> {
+    const effectiveQuotaPoints = quotaPoints ?? getDefaultPoints(actionType);
+    const effectivePoints = 0; // Regular points not yet implemented for raiders
 
     try {
-        const res = await query<{ id: number; points: number }>(
-            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points)
-             VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6)
+        const res = await query<{ id: number; points: number; quota_points: number }>(
+            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
+             VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6, $7)
              ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
              DO NOTHING
-             RETURNING id, points`,
-            [guildId, actorUserId, actionType, subjectId || null, dungeonKey || null, effectivePoints]
+             RETURNING id, points, quota_points`,
+            [guildId, actorUserId, actionType, subjectId || null, dungeonKey || null, effectivePoints, effectiveQuotaPoints]
         );
 
         if (res.rowCount === 0) {
             // Duplicate event (idempotent no-op)
-            console.log(`[Quota] Skipped duplicate quota event: guild=${guildId}, actor=${actorUserId}, action=${actionType}, subject=${subjectId}, dungeon=${dungeonKey}`);
+            logger.debug({ guildId, actorUserId, actionType, subjectId, dungeonKey }, 'Skipped duplicate quota event');
             return null;
         }
 
-        console.log(`[Quota] Logged quota event: guild=${guildId}, actor=${actorUserId}, action=${actionType}, subject=${subjectId}, dungeon=${dungeonKey}, points=${effectivePoints}`);
+        logger.info({ guildId, actorUserId, actionType, subjectId, dungeonKey, quotaPoints: effectiveQuotaPoints }, 'Logged quota event');
         return res.rows[0];
     } catch (err) {
-        console.error(`[Quota] Failed to log quota event:`, err);
+        logger.error({ err, guildId, actorUserId, actionType }, 'Failed to log quota event');
         throw err;
     }
+}
+
+/**
+ * Award raider points to all participants when a run completes.
+ * This should be called after a run status changes to 'ended'.
+ * 
+ * @param guildId - Discord guild ID
+ * @param runId - Run ID that was completed
+ * @param dungeonKey - Dungeon identifier for looking up point config
+ * @returns Number of raiders who received points
+ */
+export async function awardRaiderPoints(
+    guildId: string,
+    runId: number,
+    dungeonKey: string
+): Promise<number> {
+    // Get raider points configuration for this dungeon
+    const raiderPoints = await getRaiderPointsForDungeon(guildId, dungeonKey);
+    
+    // If points are 0 (default/not configured), skip awarding points
+    if (raiderPoints === 0) {
+        logger.debug({ runId, dungeonKey, guildId }, 'Skipping raider points - dungeon has 0 points configured');
+        return 0;
+    }
+
+    // Get all raiders who joined this run
+    const raiders = await query<{ user_id: string }>(
+        `SELECT DISTINCT user_id
+         FROM reaction
+         WHERE run_id = $1::bigint AND state = 'join'`,
+        [runId]
+    );
+
+    if (raiders.rowCount === 0) {
+        logger.debug({ runId, guildId }, 'No raiders to award points');
+        return 0;
+    }
+
+    // Award points to each raider
+    let awardedCount = 0;
+    for (const raider of raiders.rows) {
+        try {
+            // Log quota event for the raider (using subject_id for idempotency)
+            // This prevents double-awarding if the run is processed multiple times
+            const event = await query<{ id: number }>(
+                `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
+                 VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
+                 ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
+                 DO NOTHING
+                 RETURNING id`,
+                [guildId, raider.user_id, `raider:${runId}:${raider.user_id}`, dungeonKey, raiderPoints]
+            );
+
+            if (event.rowCount && event.rowCount > 0) {
+                awardedCount++;
+            }
+        } catch (err) {
+            logger.error({ err, userId: raider.user_id, runId, guildId }, 'Failed to award points to raider');
+        }
+    }
+
+    logger.info({ runId, dungeonKey, guildId, raiderPoints, awardedCount, totalRaiders: raiders.rowCount }, 'Awarded raider points');
+    return awardedCount;
 }
 
 /**
@@ -310,36 +601,47 @@ export async function isRunAlreadyLogged(
 
 /**
  * Get quota statistics for a user in a guild.
- * Returns total points and per-action/per-dungeon breakdowns.
+ * Returns total points (raiders), total quota points (organizers/verifiers), and per-action/per-dungeon breakdowns.
  * 
  * @param guildId - Discord guild ID
  * @param userId - Discord user ID
- * @returns Quota statistics including total points and breakdowns
+ * @returns Quota statistics including total points, total quota points, and breakdowns
  */
 export async function getUserQuotaStats(
     guildId: string,
     userId: string
 ): Promise<{
     total_points: number;
+    total_quota_points: number;
     total_runs_organized: number;
     total_verifications: number;
-    dungeons: Array<{ dungeon_key: string; count: number; points: number }>;
+    total_keys_popped: number;
+    dungeons: Array<{ dungeon_key: string; completed: number; organized: number; keys_popped: number }>;
 }> {
-    // Get total points
-    const totalRes = await query<{ total: string }>(
+    // Get total points (raiders)
+    const totalPointsRes = await query<{ total: string }>(
         `SELECT COALESCE(SUM(points), 0)::text AS total
          FROM quota_event
          WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
         [guildId, userId]
     );
 
-    // Get run count
+    // Get total quota points (organizers/verifiers)
+    const totalQuotaPointsRes = await query<{ total: string }>(
+        `SELECT COALESCE(SUM(quota_points), 0)::text AS total
+         FROM quota_event
+         WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
+        [guildId, userId]
+    );
+
+    // Get run count (organizer activities - where they earned quota_points)
     const runsRes = await query<{ count: string }>(
         `SELECT COUNT(*)::text AS count
          FROM quota_event
          WHERE guild_id = $1::bigint 
            AND actor_user_id = $2::bigint
-           AND action_type = 'run_completed'`,
+           AND action_type = 'run_completed'
+           AND quota_points > 0`,
         [guildId, userId]
     );
 
@@ -353,33 +655,56 @@ export async function getUserQuotaStats(
         [guildId, userId]
     );
 
-    // Get per-dungeon breakdown
-    const dungeonsRes = await query<{ dungeon_key: string; count: string; total_points: string }>(
-        `SELECT dungeon_key, COUNT(*)::text AS count, SUM(points)::text AS total_points
-         FROM quota_event
-         WHERE guild_id = $1::bigint 
-           AND actor_user_id = $2::bigint
-           AND action_type = 'run_completed'
-           AND dungeon_key IS NOT NULL
-         GROUP BY dungeon_key
-         ORDER BY total_points DESC, count DESC`,
+    // Get total keys popped count
+    const keysRes = await query<{ total: string }>(
+        `SELECT COALESCE(SUM(count), 0)::text AS total
+         FROM key_pop
+         WHERE guild_id = $1::bigint AND user_id = $2::bigint`,
+        [guildId, userId]
+    );
+
+    // Get per-dungeon breakdown showing completed, organized, and keys popped
+    const dungeonsRes = await query<{ dungeon_key: string; completed: string; organized: string; keys_popped: string }>(
+        `SELECT 
+            COALESCE(qe.dungeon_key, kp.dungeon_key) AS dungeon_key,
+            COALESCE(COUNT(*) FILTER (WHERE qe.points > 0), 0)::text AS completed,
+            COALESCE(COUNT(*) FILTER (WHERE qe.quota_points > 0), 0)::text AS organized,
+            COALESCE(MAX(kp.count), 0)::text AS keys_popped
+         FROM quota_event qe
+         FULL OUTER JOIN (
+            SELECT dungeon_key, SUM(count) AS count
+            FROM key_pop
+            WHERE guild_id = $1::bigint AND user_id = $2::bigint
+            GROUP BY dungeon_key
+         ) kp ON qe.dungeon_key = kp.dungeon_key
+         WHERE (qe.guild_id = $1::bigint AND qe.actor_user_id = $2::bigint AND qe.action_type = 'run_completed')
+            OR kp.dungeon_key IS NOT NULL
+         GROUP BY COALESCE(qe.dungeon_key, kp.dungeon_key)
+         HAVING COUNT(*) FILTER (WHERE qe.points > 0) > 0 
+             OR COUNT(*) FILTER (WHERE qe.quota_points > 0) > 0
+             OR COALESCE(MAX(kp.count), 0) > 0
+         ORDER BY (COALESCE(COUNT(*) FILTER (WHERE qe.points > 0), 0) + COALESCE(COUNT(*) FILTER (WHERE qe.quota_points > 0), 0) + COALESCE(MAX(kp.count), 0)) DESC`,
         [guildId, userId]
     );
 
     return {
-        total_points: Number(totalRes.rows[0].total),
+        total_points: Number(totalPointsRes.rows[0].total),
+        total_quota_points: Number(totalQuotaPointsRes.rows[0].total),
         total_runs_organized: Number(runsRes.rows[0].count),
         total_verifications: Number(verifRes.rows[0].count),
+        total_keys_popped: Number(keysRes.rows[0].total),
         dungeons: dungeonsRes.rows.map(row => ({
             dungeon_key: row.dungeon_key,
-            count: Number(row.count),
-            points: Number(row.total_points),
+            completed: Number(row.completed),
+            organized: Number(row.organized),
+            keys_popped: Number(row.keys_popped),
         })),
     };
 }
 
 /**
  * Get quota leaderboard for a specific role and time period
+ * Uses quota_points since leaderboards track organizer/verifier activity
  */
 export async function getQuotaLeaderboard(
     guildId: string,
@@ -392,11 +717,17 @@ export async function getQuotaLeaderboard(
         return [];
     }
 
-    console.log(`[Quota Leaderboard Query] guild=${guildId}, role=${discordRoleId}, members=${memberUserIds.length}, period=${periodStart.toISOString()} to ${periodEnd.toISOString()}`);
+    logger.debug({ 
+        guildId, 
+        discordRoleId, 
+        memberCount: memberUserIds.length, 
+        periodStart: periodStart.toISOString(), 
+        periodEnd: periodEnd.toISOString() 
+    }, 'Querying quota leaderboard');
 
     const res = await query<{ actor_user_id: string; total_points: string; run_count: string }>(
         `SELECT actor_user_id, 
-                COALESCE(SUM(points), 0)::text AS total_points,
+                COALESCE(SUM(quota_points), 0)::text AS total_points,
                 COUNT(CASE WHEN action_type = 'run_completed' THEN 1 END)::text AS run_count
          FROM quota_event
          WHERE guild_id = $1::bigint 
@@ -409,14 +740,15 @@ export async function getQuotaLeaderboard(
         [guildId, memberUserIds, periodStart.toISOString(), periodEnd.toISOString()]
     );
 
-    console.log(`[Quota Leaderboard Query] Found ${res.rowCount} rows`);
+    logger.debug({ guildId, rowCount: res.rowCount }, 'Quota leaderboard query completed');
+    
     if (res.rowCount === 0) {
-        console.log(`[Quota Leaderboard Query] No events found - checking if events exist for these users...`);
+        logger.debug({ guildId }, 'No quota events found in period - checking all-time events');
         const checkRes = await query(
             `SELECT COUNT(*) as count FROM quota_event WHERE guild_id = $1::bigint AND actor_user_id = ANY($2::bigint[])`,
             [guildId, memberUserIds]
         );
-        console.log(`[Quota Leaderboard Query] Total events for these users (any time): ${checkRes.rows[0].count}`);
+        logger.debug({ guildId, totalEvents: checkRes.rows[0].count }, 'Total events for users (all-time)');
     }
 
     return res.rows.map(row => ({
@@ -428,6 +760,7 @@ export async function getQuotaLeaderboard(
 
 /**
  * Get quota stats for all members with a specific role in the current period
+ * Uses quota_points since this tracks organizer/verifier activity
  */
 export async function getQuotaStatsForRole(
     guildId: string,
@@ -441,7 +774,7 @@ export async function getQuotaStatsForRole(
 
     const res = await query<{ actor_user_id: string; total_points: string; run_count: string }>(
         `SELECT actor_user_id, 
-                COALESCE(SUM(points), 0)::text AS total_points,
+                COALESCE(SUM(quota_points), 0)::text AS total_points,
                 COUNT(CASE WHEN action_type = 'run_completed' THEN 1 END)::text AS run_count
          FROM quota_event
          WHERE guild_id = $1::bigint 

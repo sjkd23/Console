@@ -11,10 +11,16 @@ import {
     type GuildTextBasedChannel
 } from 'discord.js';
 import type { SlashCommand } from './_types.js';
-import { getMemberRoleIds } from '../lib/permissions.js';
+import { getMemberRoleIds } from '../lib//permissions/permissions.js';
 import { postJSON } from '../lib/http.js';
-import { dungeonByCode, searchDungeons } from '../constants/dungeon-helpers.js';
-import { addRecentDungeon, getRecentDungeons } from '../lib/dungeon-cache.js';
+import { dungeonByCode } from '../constants/dungeon-helpers.js';
+import { addRecentDungeon } from '../lib/dungeon-cache.js';
+import { getReactionInfo } from '../constants/MappedAfkCheckReactions.js';
+import { ensureGuildContext, fetchGuildMember } from '../lib/interaction-helpers.js';
+import { formatErrorMessage } from '../lib/error-handler.js';
+import { handleDungeonAutocomplete } from '../lib/dungeon-autocomplete.js';
+import { formatKeyLabel } from '../lib/key-emoji-helpers.js';
+import { logRaidCreation } from '../lib/raid-logger.js';
 
 export const runCreate: SlashCommand = {
     requiredRole: 'organizer',
@@ -39,17 +45,11 @@ export const runCreate: SlashCommand = {
 
     // Slash action
     async run(interaction: ChatInputCommandInteraction): Promise<void> {
-        // Must be in a guild
-        if (!interaction.inGuild() || !interaction.guild) {
-            await interaction.reply({
-                content: 'This command can only be used in a server.',
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
+        const guild = await ensureGuildContext(interaction);
+        if (!guild) return;
 
         // Fetch member for role IDs (permission check done by middleware)
-        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+        const member = await fetchGuildMember(guild, interaction.user.id);
         if (!member) {
             await interaction.reply({
                 content: 'Could not fetch your member information.',
@@ -76,15 +76,13 @@ export const runCreate: SlashCommand = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         // Track this dungeon as recently used for this guild
-        if (interaction.guildId) {
-            addRecentDungeon(interaction.guildId, codeName);
-        }
+        addRecentDungeon(guild.id, codeName);
 
         // Create DB run
         try {
             const { runId } = await postJSON<{ runId: number }>('/runs', {
-                guildId: interaction.guildId!,
-                guildName: interaction.guild?.name ?? 'unknown',
+                guildId: guild.id,
+                guildName: guild.name,
                 organizerId: interaction.user.id,
                 organizerUsername: interaction.user.username,
                 organizerRoles: getMemberRoleIds(member),
@@ -105,6 +103,11 @@ export const runCreate: SlashCommand = {
                     { name: 'Raiders', value: '0', inline: false }
                 )
                 .setTimestamp(new Date());
+
+            // Add Keys field if the dungeon has key reactions
+            if (d.keyReactions && d.keyReactions.length > 0) {
+                embed.addFields({ name: 'Keys', value: 'No keys reported', inline: false });
+            }
 
             // Add Organizer Note field if description provided
             if (desc) {
@@ -135,6 +138,33 @@ export const runCreate: SlashCommand = {
                     .setStyle(ButtonStyle.Secondary)
             );
 
+            // Key buttons based on dungeon type
+            const keyRows: ActionRowBuilder<ButtonBuilder>[] = [];
+            if (d.keyReactions && d.keyReactions.length > 0) {
+                // Group key buttons into rows of up to 5 buttons each
+                const keyButtons: ButtonBuilder[] = [];
+                for (const keyReaction of d.keyReactions) {
+                    const reactionInfo = getReactionInfo(keyReaction.mapKey);
+                    const button = new ButtonBuilder()
+                        .setCustomId(`run:key:${runId}:${keyReaction.mapKey}`)
+                        .setLabel(formatKeyLabel(keyReaction.mapKey))
+                        .setStyle(ButtonStyle.Secondary);
+                    
+                    // Add emoji if available
+                    if (reactionInfo?.emojiInfo?.identifier) {
+                        button.setEmoji(reactionInfo.emojiInfo.identifier);
+                    }
+                    
+                    keyButtons.push(button);
+                }
+
+                // Split into rows of up to 5 buttons
+                for (let i = 0; i < keyButtons.length; i += 5) {
+                    const rowButtons = keyButtons.slice(i, i + 5);
+                    keyRows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...rowButtons));
+                }
+            }
+
             // Must be in a guild text channel to send a public message
             if (!interaction.inGuild() || !interaction.channel) {
                 await interaction.editReply(
@@ -158,7 +188,7 @@ export const runCreate: SlashCommand = {
             const sent = await channel.send({
                 content,
                 embeds: [embed],
-                components: [row]
+                components: [row, ...keyRows]
             });
 
             // NEW: tell backend the message id we just posted
@@ -168,71 +198,45 @@ export const runCreate: SlashCommand = {
                 console.error('Failed to store post_message_id:', e);
             }
 
+            // Log the run creation to raid-log channel
+            try {
+                await logRaidCreation(
+                    interaction.client,
+                    {
+                        guildId: guild.id,
+                        organizerId: interaction.user.id,
+                        organizerUsername: interaction.user.username,
+                        dungeonName: d.dungeonName,
+                        type: 'run',
+                        runId: runId
+                    },
+                    {
+                        party,
+                        location,
+                        description: desc
+                    }
+                );
+            } catch (e) {
+                console.error('Failed to log run creation to raid-log:', e);
+            }
+
             await interaction.editReply(
                 `Run created${sent ? ` and posted: ${sent.url}` : ''}`
             );
         } catch (err) {
-            console.error('Failed to create run:', err);
-            
-            // Provide helpful error messages based on error type
-            let errorMessage = '❌ **Failed to create run**\n\n';
-            
-            if (err instanceof Error) {
-                if (err.message.includes('Organizer role') || err.message.includes('NOT_ORGANIZER')) {
-                    errorMessage += '**Issue:** You don\'t have the Organizer role configured for this server.\n\n';
-                    errorMessage += '**What to do:**\n';
-                    errorMessage += '• Ask a server admin to use `/setroles` to set up the Organizer role\n';
-                    errorMessage += '• Make sure you have the Discord role that\'s mapped to Organizer\n';
-                    errorMessage += '• Once roles are configured, try creating your run again';
-                } else {
-                    errorMessage += `**Error:** ${err.message}\n\n`;
-                    errorMessage += 'Please try again or contact an administrator if the problem persists.';
-                }
-            } else {
-                errorMessage += 'An unexpected error occurred. Please try again or contact an administrator.';
-            }
-            
+            const errorMessage = formatErrorMessage({
+                error: err,
+                baseMessage: 'Failed to create run',
+                errorHandlers: {
+                    'NOT_ORGANIZER': '**Issue:** You don\'t have the Organizer role configured for this server.\n\n**What to do:**\n• Ask a server admin to use `/setroles` to set up the Organizer role\n• Make sure you have the Discord role that\'s mapped to Organizer\n• Once roles are configured, try creating your run again',
+                },
+            });
             await interaction.editReply(errorMessage);
         }
     },
 
     // Autocomplete handler
     async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
-        const focused = interaction.options.getFocused(true);
-        if (focused.name !== 'dungeon') {
-            await interaction.respond([]);
-            return;
-        }
-
-        const query = (focused.value ?? '').trim();
-
-        let results;
-        if (!query && interaction.guildId) {
-            // Empty query: show recently used dungeons for this guild
-            const recentCodes = getRecentDungeons(interaction.guildId, 25);
-            results = recentCodes
-                .map(code => dungeonByCode[code])
-                .filter(d => d) // Filter out any undefined
-                .map(d => ({
-                    name: d.dungeonName,
-                    value: d.codeName
-                }));
-            
-            // If no recent dungeons, fall back to search behavior
-            if (results.length === 0) {
-                results = searchDungeons('', 25).map(d => ({
-                    name: d.dungeonName,
-                    value: d.codeName
-                }));
-            }
-        } else {
-            // Non-empty query: perform normal search
-            results = searchDungeons(query, 25).map(d => ({
-                name: d.dungeonName,
-                value: d.codeName
-            }));
-        }
-
-        await interaction.respond(results);
+        await handleDungeonAutocomplete(interaction);
     }
 };

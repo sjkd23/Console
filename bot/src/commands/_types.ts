@@ -6,7 +6,7 @@ import type {
     SlashCommandSubcommandsOnlyBuilder,
     SlashCommandOptionsOnlyBuilder,
 } from 'discord.js';
-import type { RoleKey } from '../lib/permissions.js';
+import type { RoleKey } from '../lib/permissions/permissions.js';
 
 export type SlashCommand = {
     data:

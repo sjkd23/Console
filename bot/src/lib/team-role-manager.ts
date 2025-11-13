@@ -1,6 +1,9 @@
 // bot/src/lib/team-role-manager.ts
 import { GuildMember, Client } from 'discord.js';
 import { getGuildRoles } from './http.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('TeamRoleManager');
 
 /**
  * Staff roles that qualify a member for the Team role
@@ -35,7 +38,12 @@ async function shouldHaveTeamRole(member: GuildMember): Promise<boolean> {
         
         return false;
     } catch (error) {
-        console.error(`[TeamRoleManager] Error checking staff roles for ${member.user.tag}:`, error);
+        logger.error('Error checking staff roles for member', { 
+            guildId: member.guild.id, 
+            userId: member.id, 
+            userTag: member.user.tag, 
+            error 
+        });
         return false;
     }
 }
@@ -57,7 +65,10 @@ export async function syncTeamRoleForMember(member: GuildMember): Promise<void> 
         // Get the Team role object
         const teamRole = member.guild.roles.cache.get(teamRoleId);
         if (!teamRole) {
-            console.error(`[TeamRoleManager] Team role ${teamRoleId} not found in guild ${member.guild.id}`);
+            logger.error('Team role not found in guild', { 
+                guildId: member.guild.id, 
+                teamRoleId 
+            });
             return;
         }
         
@@ -68,15 +79,30 @@ export async function syncTeamRoleForMember(member: GuildMember): Promise<void> 
         // Add team role if they should have it but don't
         if (shouldHave && !currentlyHas) {
             await member.roles.add(teamRole, 'Auto-assigned: Member has staff role');
-            console.log(`[TeamRoleManager] Added Team role to ${member.user.tag} (${member.id}) in guild ${member.guild.name}`);
+            logger.info('Added Team role to member', { 
+                guildId: member.guild.id, 
+                guildName: member.guild.name, 
+                userId: member.id, 
+                userTag: member.user.tag 
+            });
         }
         // Remove team role if they shouldn't have it but do
         else if (!shouldHave && currentlyHas) {
             await member.roles.remove(teamRole, 'Auto-removed: Member has no staff roles');
-            console.log(`[TeamRoleManager] Removed Team role from ${member.user.tag} (${member.id}) in guild ${member.guild.name}`);
+            logger.info('Removed Team role from member', { 
+                guildId: member.guild.id, 
+                guildName: member.guild.name, 
+                userId: member.id, 
+                userTag: member.user.tag 
+            });
         }
     } catch (error) {
-        console.error(`[TeamRoleManager] Error syncing team role for ${member.user.tag}:`, error);
+        logger.error('Error syncing team role for member', { 
+            guildId: member.guild.id, 
+            userId: member.id, 
+            userTag: member.user.tag, 
+            error 
+        });
     }
 }
 
@@ -87,11 +113,11 @@ export async function syncTeamRoleForGuild(guildId: string, client: Client): Pro
     try {
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-            console.error(`[TeamRoleManager] Guild ${guildId} not found`);
+            logger.error('Guild not found', { guildId });
             return;
         }
         
-        console.log(`[TeamRoleManager] Starting Team role sync for guild ${guild.name}`);
+        logger.info('Starting Team role sync for guild', { guildId, guildName: guild.name });
         
         // Fetch all members
         await guild.members.fetch();
@@ -103,8 +129,8 @@ export async function syncTeamRoleForGuild(guildId: string, client: Client): Pro
             syncCount++;
         }
         
-        console.log(`[TeamRoleManager] Completed Team role sync for ${syncCount} members in guild ${guild.name}`);
+        logger.info('Completed Team role sync for guild', { guildId, guildName: guild.name, syncCount });
     } catch (error) {
-        console.error(`[TeamRoleManager] Error syncing team role for guild ${guildId}:`, error);
+        logger.error('Error syncing team role for guild', { guildId, error });
     }
 }

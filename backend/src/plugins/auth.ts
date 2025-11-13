@@ -1,4 +1,5 @@
 import fp from 'fastify-plugin';
+import { backendConfig } from '../config.js';
 import { Errors } from '../lib/errors';
 declare module 'fastify' {
     interface FastifyRequest {
@@ -18,8 +19,7 @@ export default fp(async (fastify) => {
         if (isPublic) return;
 
         const headerKey = req.headers['x-api-key'];
-        const expected = process.env.BACKEND_API_KEY;
-        if (!expected || headerKey !== expected) {
+        if (!headerKey || headerKey !== backendConfig.BACKEND_API_KEY) {
             return Errors.unauthorized(reply);
         }
         req.apiKeyValid = true;

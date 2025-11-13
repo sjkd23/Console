@@ -1,14 +1,57 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, MessageFlags } from 'discord.js';
+import {
+    SlashCommandBuilder,
+    ChatInputCommandInteraction,
+    EmbedBuilder,
+} from 'discord.js';
 import type { SlashCommand } from './_types.js';
 
+/**
+ * /ping - Check the bot's latency and response time
+ * Verified Raider+ command
+ */
 export const ping: SlashCommand = {
+    requiredRole: 'verified_raider',
     data: new SlashCommandBuilder()
         .setName('ping')
-        .setDescription('Replies with pong and latency.'),
+        .setDescription('Check the bot\'s latency and response time (Verified Raider+)'),
+
     async run(interaction: ChatInputCommandInteraction) {
+        // Get the timestamp when the command was created
         const sent = Date.now();
-        await interaction.reply({ content: 'Pong!', flags: MessageFlags.Ephemeral });
-        const latency = Date.now() - sent;
-        await interaction.followUp({ content: `Latency: ~${latency} ms`, flags: MessageFlags.Ephemeral });
-    }
+
+        // Reply to the interaction first
+        await interaction.reply({ 
+            content: 'Pinging...', 
+            fetchReply: true 
+        });
+
+        // Calculate latencies
+        const roundTripLatency = Date.now() - sent;
+        const websocketLatency = interaction.client.ws.ping;
+
+        // Create an embed with the latency information
+        const embed = new EmbedBuilder()
+            .setTitle('🏓 Pong!')
+            .setColor(websocketLatency < 200 ? 0x57F287 : websocketLatency < 400 ? 0xFEE75C : 0xED4245)
+            .addFields(
+                {
+                    name: '📡 Roundtrip Latency',
+                    value: `${roundTripLatency}ms`,
+                    inline: true
+                },
+                {
+                    name: '💓 WebSocket Latency',
+                    value: `${websocketLatency}ms`,
+                    inline: true
+                }
+            )
+            .setTimestamp()
+            .setFooter({ text: 'Bot Status' });
+
+        // Edit the original reply with the embed
+        await interaction.editReply({
+            content: '',
+            embeds: [embed]
+        });
+    },
 };

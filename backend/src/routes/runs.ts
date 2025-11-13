@@ -5,7 +5,11 @@ import { query } from '../db/pool.js';
 import { zSnowflake, zReactionState } from '../lib/constants';
 import { Errors } from '../lib/errors';
 import { hasInternalRole } from '../lib/authorization.js';
-import { logQuotaEvent } from '../lib/quota.js';
+import { logQuotaEvent, getPointsForDungeon, awardRaiderPoints } from '../lib/quota.js';
+import { ensureGuildExists, ensureMemberExists } from '../lib/database-helpers.js';
+import { createLogger } from '../lib/logger.js';
+
+const logger = createLogger('Runs');
 
 /**
  * Body schema for creating a run.
@@ -55,7 +59,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Authorization: Check if user has organizer role
         const hasOrganizerRole = await hasInternalRole(guildId, organizerId, 'organizer', organizerRoles);
         if (!hasOrganizerRole) {
-            console.log(`[Run Creation] User ${organizerId} in guild ${guildId} denied - no organizer role. User roles: ${organizerRoles?.join(', ') || 'none'}`);
+            logger.warn({ 
+                guildId, 
+                organizerId, 
+                userRoles: organizerRoles || [] 
+            }, 'Run creation denied - no organizer role');
             return reply.code(403).send({
                 error: {
                     code: 'NOT_ORGANIZER',
@@ -65,16 +73,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         // Upsert guild & member snapshots
-        await query(
-            `INSERT INTO guild (id, name) VALUES ($1::bigint, $2)
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
-            [guildId, guildName]
-        );
-        await query(
-            `INSERT INTO member (id, username) VALUES ($1::bigint, $2)
-        ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username`,
-            [organizerId, organizerUsername]
-        );
+        await ensureGuildExists(guildId, guildName);
+        await ensureMemberExists(organizerId, organizerUsername);
 
         // Insert run (status=open)
         const res = await query<{ id: number }>(
@@ -89,18 +89,17 @@ export default async function runsRoutes(app: FastifyInstance) {
 
     /**
    * POST /runs/:id/reactions
-   * Body: { userId: Snowflake, state: 'join' | 'bench' | 'leave' }
+   * Body: { userId: Snowflake, state: 'join' }
    * Behavior:
-   *  - 'leave'  -> delete (run_id, user_id)
-   *  - 'join'/'bench' -> upsert state
+   *  - 'join' -> upsert state
    * Blocks if run is ended/cancelled.
-   * Returns { joinCount, benchCount }.
+   * Returns { joinCount }.
    */
     app.post('/runs/:id/reactions', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             userId: zSnowflake,
-            state: zReactionState, // 'join' | 'bench' | 'leave'
+            state: zReactionState, // 'join'
         });
 
         const p = Params.safeParse(req.params);
@@ -125,48 +124,27 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         // Ensure member exists
-        await query(
-            `INSERT INTO member (id, username) VALUES ($1::bigint, NULL)
-        ON CONFLICT (id) DO NOTHING`,
-            [userId]
-        );
+        await ensureMemberExists(userId);
 
-        if (state === 'leave') {
-            // Delete the user’s reaction row (idempotent)
-            await query(
-                `DELETE FROM reaction WHERE run_id = $1::bigint AND user_id = $2::bigint`,
-                [runId, userId]
-            );
-        } else {
-            // Upsert to the selected state
-            await query(
-                `INSERT INTO reaction (run_id, user_id, state)
+        // Upsert join state
+        await query(
+            `INSERT INTO reaction (run_id, user_id, state)
         VALUES ($1::bigint, $2::bigint, $3)
         ON CONFLICT (run_id, user_id)
         DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
-                [runId, userId, state]
-            );
-        }
+            [runId, userId, state]
+        );
 
-        // Return counts for quick UI updates
-        const [joinRes, benchRes] = await Promise.all([
-            query<{ count: string }>(
-                `SELECT COUNT(*)::text AS count
+        // Return count for quick UI updates
+        const joinRes = await query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
          FROM reaction
         WHERE run_id = $1::bigint AND state = 'join'`,
-                [runId]
-            ),
-            query<{ count: string }>(
-                `SELECT COUNT(*)::text AS count
-         FROM reaction
-        WHERE run_id = $1::bigint AND state = 'bench'`,
-                [runId]
-            ),
-        ]);
+            [runId]
+        );
 
         return reply.send({
             joinCount: Number(joinRes.rows[0].count),
-            benchCount: Number(benchRes.rows[0].count),
         });
     });
 
@@ -206,11 +184,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         // Ensure member exists
-        await query(
-            `INSERT INTO member (id, username) VALUES ($1::bigint, NULL)
-        ON CONFLICT (id) DO NOTHING`,
-            [userId]
-        );
+        await ensureMemberExists(userId);
 
         // Upsert reaction with class (default to 'join' if new)
         await query(
@@ -325,17 +299,28 @@ export default async function runsRoutes(app: FastifyInstance) {
 
             // Log quota event for organizer when run ends
             try {
+                // Get the correct point value for this dungeon based on guild config
+                const points = await getPointsForDungeon(guildId, dungeonKey, actorRoles);
+                
                 await logQuotaEvent(
                     guildId,
                     organizerId,
                     'run_completed',
                     `run:${runId}`,
                     dungeonKey, // Track dungeon for per-dungeon stats
-                    1 // Default: 1 point per run
+                    points // Use calculated points based on dungeon overrides
                 );
             } catch (err) {
                 // Log error but don't fail the request
-                console.error(`[Runs] Failed to log quota event for run ${runId}:`, err);
+                logger.error({ err, runId, guildId, organizerId }, 'Failed to log quota event for run');
+            }
+
+            // Award points to raiders who joined the run
+            try {
+                await awardRaiderPoints(guildId, runId, dungeonKey);
+            } catch (err) {
+                // Log error but don't fail the request
+                logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award raider points for run');
             }
         }
 
@@ -377,6 +362,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             id: number;
             channel_id: string | null;
             post_message_id: string | null;
+            dungeon_key: string;
             dungeon_label: string;
             status: string;
             organizer_id: string;
@@ -387,7 +373,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             location: string | null;
             description: string | null;
         }>(
-            `SELECT id, channel_id, post_message_id, dungeon_label, status, organizer_id,
+            `SELECT id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
                     started_at, ended_at, key_window_ends_at, party, location, description
          FROM run
         WHERE id = $1::bigint`,
@@ -401,6 +387,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             id: r.id,
             channelId: r.channel_id,
             postMessageId: r.post_message_id,
+            dungeonKey: r.dungeon_key,
             dungeonLabel: r.dungeon_label,
             status: r.status,
             organizerId: r.organizer_id,
@@ -683,6 +670,151 @@ export default async function runsRoutes(app: FastifyInstance) {
         );
 
         return reply.send({ ok: true, location });
+    });
+
+    /**
+     * POST /runs/:id/key-reactions
+     * Body: { userId: Snowflake, keyType: string }
+     * Toggles a user's key reaction for a run.
+     * If the user has already reacted with this key, it removes it.
+     * If the user hasn't reacted with this key, it adds it.
+     * Returns { keyCounts: Record<string, number> }.
+     */
+    app.post('/runs/:id/key-reactions', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            userId: zSnowflake,
+            keyType: z.string().trim().min(1).max(50),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) {
+            return Errors.validation(reply);
+        }
+        const runId = Number(p.data.id);
+        const { userId, keyType } = b.data;
+
+        // Block edits for closed runs
+        const statusRes = await query<{ status: string }>(
+            `SELECT status FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (statusRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const currentStatus = statusRes.rows[0].status;
+        if (currentStatus === 'ended') {
+            return Errors.runClosed(reply);
+        }
+
+        // Ensure member exists
+        await ensureMemberExists(userId);
+
+        // Check if the user has already reacted with this key
+        const existingRes = await query<{ key_type: string }>(
+            `SELECT key_type FROM key_reaction
+             WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3`,
+            [runId, userId, keyType]
+        );
+
+        let added = false; // Track whether we added or removed
+
+        if (existingRes.rowCount && existingRes.rowCount > 0) {
+            // Remove the key reaction (toggle off)
+            await query(
+                `DELETE FROM key_reaction
+                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3`,
+                [runId, userId, keyType]
+            );
+            added = false;
+        } else {
+            // Add the key reaction (toggle on)
+            await query(
+                `INSERT INTO key_reaction (run_id, user_id, key_type)
+                 VALUES ($1::bigint, $2::bigint, $3)`,
+                [runId, userId, keyType]
+            );
+            added = true;
+        }
+
+        // Get updated key counts
+        const keyRes = await query<{ key_type: string; count: string }>(
+            `SELECT key_type, COUNT(*)::text AS count
+             FROM key_reaction
+             WHERE run_id = $1::bigint
+             GROUP BY key_type`,
+            [runId]
+        );
+
+        const keyCounts: Record<string, number> = {};
+        for (const row of keyRes.rows) {
+            keyCounts[row.key_type] = Number(row.count);
+        }
+
+        return reply.send({ keyCounts, added });
+    });
+
+    /**
+     * GET /runs/:id/key-reactions
+     * Get key counts for a run.
+     * Returns { keyCounts: Record<string, number> }.
+     */
+    app.get('/runs/:id/key-reactions', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const p = Params.safeParse(req.params);
+        if (!p.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+
+        // Get key counts
+        const keyRes = await query<{ key_type: string; count: string }>(
+            `SELECT key_type, COUNT(*)::text AS count
+             FROM key_reaction
+             WHERE run_id = $1::bigint
+             GROUP BY key_type`,
+            [runId]
+        );
+
+        const keyCounts: Record<string, number> = {};
+        for (const row of keyRes.rows) {
+            keyCounts[row.key_type] = Number(row.count);
+        }
+
+        return reply.send({ keyCounts });
+    });
+
+    /**
+     * GET /runs/:id/key-reaction-users
+     * Get key reaction users grouped by key type for a run.
+     * Returns { keyUsers: Record<string, string[]> } where each key type maps to an array of user IDs.
+     */
+    app.get('/runs/:id/key-reaction-users', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const p = Params.safeParse(req.params);
+        if (!p.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+
+        // Get all key reactions with user IDs
+        const keyRes = await query<{ key_type: string; user_id: string }>(
+            `SELECT key_type, user_id
+             FROM key_reaction
+             WHERE run_id = $1::bigint
+             ORDER BY key_type, user_id`,
+            [runId]
+        );
+
+        // Group users by key type
+        const keyUsers: Record<string, string[]> = {};
+        for (const row of keyRes.rows) {
+            if (!keyUsers[row.key_type]) {
+                keyUsers[row.key_type] = [];
+            }
+            keyUsers[row.key_type].push(row.user_id);
+        }
+
+        return reply.send({ keyUsers });
     });
 }
 

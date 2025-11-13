@@ -3,6 +3,7 @@ import { config } from 'dotenv';
 import { resolve } from 'node:path';
 config({ path: resolve(process.cwd(), '.env') });
 
+import { botConfig } from './config.js';
 import {
     Client,
     Events,
@@ -13,30 +14,57 @@ import {
     ButtonInteraction
 } from 'discord.js';
 import { commands } from './commands/index.js';
-import { handleOrganizerPanel } from './interactions/buttons/organizer-panel.js';
-import { handleJoin } from './interactions/buttons/join.js';
-import { handleStatus } from './interactions/buttons/run-status.js';
-import { handleClassSelection } from './interactions/buttons/class-selection.js';
-import { handleKeyWindow } from './interactions/buttons/key-window.js';
-import { handleSetParty, handleSetLocation } from './interactions/buttons/party-location.js';
+import { handleOrganizerPanel } from './interactions/buttons/raids/organizer-panel.js';
+import { handleJoin } from './interactions/buttons/raids/join.js';
+import { handleStatus } from './interactions/buttons/raids/run-status.js';
+import { handleClassSelection } from './interactions/buttons/raids/class-selection.js';
+import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
+import { handleSetParty, handleSetLocation } from './interactions/buttons/raids/party-location.js';
+import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
+import { handleHeadcountJoin } from './interactions/buttons/raids/headcount-join.js';
+import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.js';
+import { handleHeadcountOrganizerPanel } from './interactions/buttons/raids/headcount-organizer-panel.js';
+import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.js';
+import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-convert.js';
 import { 
     handleQuotaConfigBasic, 
     handleQuotaConfigDungeons, 
     handleQuotaRefreshPanel,
     handleQuotaResetPanel,
+    handleQuotaConfigStop,
     handleQuotaBasicModal,
     handleQuotaDungeonModal,
     handleQuotaSelectDungeon,
-} from './interactions/buttons/quota-config.js';
+} from './interactions/buttons/config/quota-config.js';
+import {
+    handlePointsConfigDungeons,
+    handlePointsConfigStop,
+    handlePointsSelectDungeon,
+    handlePointsDungeonModal,
+} from './interactions/buttons/config/points-config.js';
+import {
+    handlePointsConfigKeys,
+    handleKeyPopPointsSelectDungeon,
+    handleKeyPopPointsDungeonModal,
+} from './interactions/buttons/config/key-pop-points-config.js';
+import {
+    handleGetVerified,
+    handleVerificationDone,
+    handleVerificationCancel,
+} from './interactions/buttons/verification/get-verified.js';
 import { startSuspensionCleanup } from './lib/suspension-cleanup.js';
 import { startRunAutoEnd } from './lib/run-auto-end.js';
 import { syncTeamRoleForMember } from './lib/team-role-manager.js';
+import { logCommandExecution, createSuccessResult, createErrorResult } from './lib/command-logging.js';
+import { BackendError } from './lib/http.js';
 
-const token = process.env.SECRET_KEY!;
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers, // Required for guildMemberUpdate event
+        GatewayIntentBits.GuildEmojisAndStickers, // Required for emoji cache
+        GatewayIntentBits.DirectMessages, // Required for DM-based verification
+        GatewayIntentBits.MessageContent, // Required to read message content in DMs
     ],
     partials: [Partials.Channel, Partials.GuildMember, Partials.User]
 });
@@ -79,11 +107,66 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.isChatInputCommand()) {
             const cmd = commands.find(c => c.data.name === interaction.commandName);
-            if (cmd) await cmd.run(interaction);
+            if (cmd) {
+                const startTime = Date.now();
+                let commandSuccess = true;
+                let errorCode: string | undefined;
+
+                try {
+                    await cmd.run(interaction);
+                } catch (err) {
+                    commandSuccess = false;
+                    
+                    // Categorize the error
+                    if (err instanceof BackendError) {
+                        errorCode = err.code || 'BACKEND_ERROR';
+                    } else if (err instanceof Error) {
+                        // Try to infer error type from message
+                        const msg = err.message.toLowerCase();
+                        if (msg.includes('permission')) {
+                            errorCode = 'MISSING_PERMISSIONS';
+                        } else if (msg.includes('timeout')) {
+                            errorCode = 'TIMEOUT';
+                        } else {
+                            errorCode = 'UNKNOWN_ERROR';
+                        }
+                    } else {
+                        errorCode = 'UNKNOWN_ERROR';
+                    }
+                    
+                    // Re-throw to preserve existing error handling
+                    throw err;
+                } finally {
+                    // Log command execution (success or failure)
+                    const latencyMs = Date.now() - startTime;
+                    const result = commandSuccess 
+                        ? createSuccessResult(latencyMs)
+                        : createErrorResult(errorCode!, latencyMs);
+                    
+                    // Non-blocking log - won't affect command execution
+                    logCommandExecution(interaction, result).catch(logErr => {
+                        console.warn('[CommandLogging] Failed to log command:', logErr);
+                    });
+                }
+            }
             return;
         }
 
         if (interaction.isButton()) {
+            // Handle verification buttons
+            if (interaction.customId === 'verification:get_verified') {
+                await handleGetVerified(interaction);
+                return;
+            }
+            if (interaction.customId === 'verification:done') {
+                await handleVerificationDone(interaction);
+                return;
+            }
+            if (interaction.customId === 'verification:cancel') {
+                await handleVerificationCancel(interaction);
+                return;
+            }
+
             // Handle quota config buttons
             if (interaction.customId.startsWith('quota_config_basic:')) {
                 await handleQuotaConfigBasic(interaction);
@@ -101,9 +184,54 @@ client.on('interactionCreate', async (interaction) => {
                 await handleQuotaResetPanel(interaction);
                 return;
             }
+            if (interaction.customId.startsWith('quota_config_stop:')) {
+                await handleQuotaConfigStop(interaction);
+                return;
+            }
+
+            // Handle points config buttons
+            if (interaction.customId === 'points_config_dungeons' || interaction.customId.startsWith('points_config_dungeons:')) {
+                await handlePointsConfigDungeons(interaction);
+                return;
+            }
+            if (interaction.customId === 'points_config_keys' || interaction.customId.startsWith('points_config_keys:')) {
+                await handlePointsConfigKeys(interaction);
+                return;
+            }
+            if (interaction.customId === 'points_config_stop' || interaction.customId.startsWith('points_config_stop:')) {
+                await handlePointsConfigStop(interaction);
+                return;
+            }
+
+            // Handle headcount buttons
+            if (interaction.customId.startsWith('headcount:join:')) {
+                const panelTimestamp = interaction.customId.split(':')[2];
+                await handleHeadcountJoin(interaction, panelTimestamp);
+                return;
+            }
+            if (interaction.customId.startsWith('headcount:key:')) {
+                const [, , panelTimestamp, dungeonCode] = interaction.customId.split(':');
+                await handleHeadcountKey(interaction, panelTimestamp, dungeonCode);
+                return;
+            }
+            if (interaction.customId.startsWith('headcount:org:')) {
+                const panelTimestamp = interaction.customId.split(':')[2];
+                await handleHeadcountOrganizerPanel(interaction, panelTimestamp);
+                return;
+            }
+            if (interaction.customId.startsWith('headcount:end:')) {
+                const publicMessageId = interaction.customId.split(':')[2];
+                await handleHeadcountEnd(interaction, publicMessageId);
+                return;
+            }
+            if (interaction.customId.startsWith('headcount:convert:')) {
+                const publicMessageId = interaction.customId.split(':')[2];
+                await handleHeadcountConvert(interaction, publicMessageId);
+                return;
+            }
 
             // Handle run management buttons
-            const [ns, action, runId] = interaction.customId.split(':');
+            const [ns, action, runId, ...rest] = interaction.customId.split(':');
             if (ns !== 'run' || !runId) return;
 
             if (action === 'org' || action === 'panel') {
@@ -116,6 +244,12 @@ client.on('interactionCreate', async (interaction) => {
             }
             if (action === 'class') {
                 await handleClassSelection(interaction, runId);
+                return;
+            }
+            if (action === 'key') {
+                // Key reaction: run:key:runId:keyType
+                const keyType = rest.join(':'); // In case keyType contains colons
+                await handleKeyReaction(interaction, runId, keyType);
                 return;
             }
             if (action === 'start') {
@@ -157,6 +291,14 @@ client.on('interactionCreate', async (interaction) => {
                 await handleQuotaDungeonModal(interaction);
                 return;
             }
+            if (interaction.customId.startsWith('points_dungeon_modal:')) {
+                await handlePointsDungeonModal(interaction);
+                return;
+            }
+            if (interaction.customId.startsWith('key_pop_points_dungeon_modal:')) {
+                await handleKeyPopPointsDungeonModal(interaction);
+                return;
+            }
         }
 
         // Handle select menu interactions
@@ -165,6 +307,18 @@ client.on('interactionCreate', async (interaction) => {
                 interaction.customId.startsWith('quota_select_dungeon_misc1:') ||
                 interaction.customId.startsWith('quota_select_dungeon_misc2:')) {
                 await handleQuotaSelectDungeon(interaction);
+                return;
+            }
+            if (interaction.customId.startsWith('points_select_dungeon_exalt') ||
+                interaction.customId.startsWith('points_select_dungeon_misc1') ||
+                interaction.customId.startsWith('points_select_dungeon_misc2')) {
+                await handlePointsSelectDungeon(interaction);
+                return;
+            }
+            if (interaction.customId.startsWith('key_pop_points_select_dungeon_exalt') ||
+                interaction.customId.startsWith('key_pop_points_select_dungeon_misc1') ||
+                interaction.customId.startsWith('key_pop_points_select_dungeon_misc2')) {
+                await handleKeyPopPointsSelectDungeon(interaction);
                 return;
             }
         }
@@ -179,4 +333,4 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 
-await client.login(token);
+await client.login(botConfig.SECRET_KEY);

@@ -1,7 +1,8 @@
 // bot/src/lib/http.ts
+import { botConfig } from '../config.js';
 
-const BASE = process.env.BACKEND_URL!;
-const API_KEY = process.env.BACKEND_API_KEY!;
+const BASE = botConfig.BACKEND_URL;
+const API_KEY = botConfig.BACKEND_API_KEY;
 
 function headers() {
     return {
@@ -286,9 +287,11 @@ export async function getQuotaStats(
     userId: string
 ): Promise<{
     total_points: number;
+    total_quota_points: number;
     total_runs_organized: number;
     total_verifications: number;
-    dungeons: Array<{ dungeon_key: string; count: number; points: number }>;
+    total_keys_popped: number;
+    dungeons: Array<{ dungeon_key: string; completed: number; organized: number; keys_popped: number }>;
 }> {
     return getJSON(`/quota/stats/${guildId}/${userId}`);
 }
@@ -399,4 +402,193 @@ export async function getQuotaLeaderboard(
     leaderboard: Array<{ user_id: string; points: number; runs: number }>;
 }> {
     return postJSON(`/quota/leaderboard/${guildId}/${roleId}`, { member_user_ids: memberUserIds });
+}
+
+/** Get raider points configuration for all dungeons (GET /quota/raider-points/:guild_id) */
+export async function getRaiderPointsConfig(
+    guildId: string
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return getJSON(`/quota/raider-points/${guildId}`);
+}
+
+/** Set raider points for a specific dungeon (PUT /quota/raider-points/:guild_id/:dungeon_key) */
+export async function setRaiderPoints(
+    guildId: string,
+    dungeonKey: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        points: number;
+    }
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return fetch(`${BASE}/quota/raider-points/${guildId}/${dungeonKey}`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Delete raider points for a specific dungeon (DELETE /quota/raider-points/:guild_id/:dungeon_key) */
+export async function deleteRaiderPoints(
+    guildId: string,
+    dungeonKey: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+    }
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return fetch(`${BASE}/quota/raider-points/${guildId}/${dungeonKey}`, {
+        method: 'DELETE',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Get key pop points configuration for all dungeons (GET /quota/key-pop-points/:guild_id) */
+export async function getKeyPopPointsConfig(
+    guildId: string
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return getJSON(`/quota/key-pop-points/${guildId}`);
+}
+
+/** Set key pop points for a specific dungeon (PUT /quota/key-pop-points/:guild_id/:dungeon_key) */
+export async function setKeyPopPoints(
+    guildId: string,
+    dungeonKey: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        points: number;
+    }
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return fetch(`${BASE}/quota/key-pop-points/${guildId}/${dungeonKey}`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Delete key pop points for a specific dungeon (DELETE /quota/key-pop-points/:guild_id/:dungeon_key) */
+export async function deleteKeyPopPoints(
+    guildId: string,
+    dungeonKey: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+    }
+): Promise<{
+    dungeon_points: Record<string, number>;
+}> {
+    return fetch(`${BASE}/quota/key-pop-points/${guildId}/${dungeonKey}`, {
+        method: 'DELETE',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Manually adjust quota points for a user (POST /quota/adjust-quota-points/:guild_id/:user_id) */
+export async function adjustQuotaPoints(
+    guildId: string,
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        amount: number;
+    }
+): Promise<{
+    success: boolean;
+    amount_adjusted: number;
+    new_total: number;
+}> {
+    return fetch(`${BASE}/quota/adjust-quota-points/${guildId}/${userId}`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Manually adjust regular (raider) points for a user (POST /quota/adjust-points/:guild_id/:user_id) */
+export async function adjustPoints(
+    guildId: string,
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        amount: number;
+    }
+): Promise<{
+    success: boolean;
+    amount_adjusted: number;
+    new_total: number;
+}> {
+    return fetch(`${BASE}/quota/adjust-points/${guildId}/${userId}`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
+/** Create a note (POST /notes) */
+export async function createNote(payload: {
+    actor_user_id: string;
+    guild_id: string;
+    user_id: string;
+    note_text: string;
+    actor_roles?: string[];
+}): Promise<{
+    id: string;
+    guild_id: string;
+    user_id: string;
+    moderator_id: string;
+    note_text: string;
+    created_at: string;
+}> {
+    return postJSON('/notes', payload);
+}
+
+/** Get a note by ID (GET /notes/:id) */
+export async function getNote(
+    id: string
+): Promise<{
+    id: string;
+    guild_id: string;
+    user_id: string;
+    moderator_id: string;
+    note_text: string;
+    created_at: string;
+}> {
+    return getJSON(`/notes/${id}`);
+}
+
+/** Get all notes for a user (GET /notes/user/:guild_id/:user_id) */
+export async function getUserNotes(
+    guildId: string,
+    userId: string
+): Promise<{
+    notes: Array<{
+        id: string;
+        guild_id: string;
+        user_id: string;
+        moderator_id: string;
+        note_text: string;
+        created_at: string;
+    }>;
+}> {
+    return getJSON(`/notes/user/${guildId}/${userId}`);
 }

@@ -7,11 +7,14 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
-    "register": "tsx src/register-commands.ts"
+    "register": "tsx src/register-commands.ts",
+    "test-realmeye": "tsx src/scripts/test-realmeye.ts"
   },
   "dependencies": {
+    "cheerio": "^1.1.2",
     "discord.js": "^14.16.3",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",

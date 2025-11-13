@@ -6,6 +6,8 @@ import { zSnowflake } from '../lib/constants.js';
 import { Errors } from '../lib/errors.js';
 import { hasInternalRole } from '../lib/authorization.js';
 import { logQuotaEvent } from '../lib/quota.js';
+import { logAudit } from '../lib/audit.js';
+import { ensureGuildExists, ensureMemberExists } from '../lib/database-helpers.js';
 
 /**
  * Body schema for verifying a raider.
@@ -41,24 +43,6 @@ const UpdateIgnBody = z.object({
         .regex(/^[A-Za-z0-9 _-]+$/, 'IGN can only contain letters, numbers, spaces, - or _')
         .transform(s => s.replace(/\s+/g, ' ')),
 });
-
-/**
- * Helper to log audit events.
- * @param actorId - User ID of the actor, or null for system-initiated actions
- */
-async function logAudit(
-    guildId: string,
-    actorId: string | null,
-    action: string,
-    subject: string,
-    meta?: Record<string, unknown>
-) {
-    await query(
-        `INSERT INTO audit (guild_id, actor_id, action, subject, meta)
-         VALUES ($1::bigint, $2::bigint, $3, $4, $5)`,
-        [guildId, actorId, action, subject, meta ? JSON.stringify(meta) : null]
-    );
-}
 
 export default async function raidersRoutes(app: FastifyInstance) {
     /**
@@ -143,18 +127,10 @@ export default async function raidersRoutes(app: FastifyInstance) {
         }
 
         // Upsert guild
-        await query(
-            `INSERT INTO guild (id, name) VALUES ($1::bigint, 'Unknown')
-             ON CONFLICT (id) DO NOTHING`,
-            [guild_id]
-        );
+        await ensureGuildExists(guild_id);
 
         // Upsert member
-        await query(
-            `INSERT INTO member (id, username) VALUES ($1::bigint, NULL)
-             ON CONFLICT (id) DO NOTHING`,
-            [user_id]
-        );
+        await ensureMemberExists(user_id);
 
         // Check if this IGN is already in use by a different user in this guild
         const existingIgn = await query<{ user_id: string; ign: string }>(
@@ -206,6 +182,7 @@ export default async function raidersRoutes(app: FastifyInstance) {
                 actor_user_id,
                 'verify_member',
                 `verify:${user_id}`,
+                undefined, // No dungeon for verifications
                 1 // Default: 1 point per verification
             );
         } catch (err) {

@@ -1,5 +1,6 @@
 // backend/src/lib/authorization.ts
 import { query } from '../db/pool.js';
+import { getGuildRoles as getGuildRoleMappings } from './database-helpers.js';
 
 /**
  * Internal role keys (must match role_catalog entries)
@@ -12,23 +13,6 @@ export type RoleKey =
     | 'security'
     | 'organizer'
     | 'verified_raider';
-
-/**
- * Get all guild role mappings from DB.
- * Returns Record<role_key, discord_role_id | null>
- */
-async function getGuildRoles(guildId: string): Promise<Record<string, string | null>> {
-    const res = await query<{ role_key: string; discord_role_id: string }>(
-        `SELECT role_key, discord_role_id FROM guild_role WHERE guild_id = $1::bigint`,
-        [guildId]
-    );
-
-    const mapping: Record<string, string | null> = {};
-    for (const row of res.rows) {
-        mapping[row.role_key] = row.discord_role_id;
-    }
-    return mapping;
-}
 
 /**
  * Check if a user has a specific internal role in a guild.
@@ -54,7 +38,7 @@ export async function hasInternalRole(
     }
 
     // Get guild's role mapping
-    const mapping = await getGuildRoles(guildId);
+    const mapping = await getGuildRoleMappings(guildId);
     const discordRoleId = mapping[roleKey];
 
     if (!discordRoleId) {
@@ -88,7 +72,7 @@ export async function hasAnyInternalRole(
     }
 
     // Get guild's role mapping
-    const mapping = await getGuildRoles(guildId);
+    const mapping = await getGuildRoleMappings(guildId);
 
     // Check if user has any of the mapped Discord roles
     for (const roleKey of roleKeys) {

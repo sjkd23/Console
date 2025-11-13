@@ -5,6 +5,8 @@ import { query } from '../db/pool.js';
 import { zSnowflake } from '../lib/constants.js';
 import { Errors } from '../lib/errors.js';
 import { canManageGuildRoles } from '../lib/authorization.js';
+import { logAudit } from '../lib/audit.js';
+import { ensureGuildExists, getGuildRoles, getGuildChannels } from '../lib/database-helpers.js';
 
 /**
  * Internal role keys (must match role_catalog entries)
@@ -78,58 +80,6 @@ const PutChannelsBody = z.object({
     actor_has_admin_permission: z.boolean().optional(),
 });
 
-/**
- * Helper to log audit events.
- * @param actorId - User ID of the actor, or null for system-initiated actions
- */
-async function logAudit(
-    guildId: string,
-    actorId: string | null,
-    action: string,
-    subject: string,
-    meta?: Record<string, unknown>
-) {
-    await query(
-        `INSERT INTO audit (guild_id, actor_id, action, subject, meta)
-         VALUES ($1::bigint, $2::bigint, $3, $4, $5)`,
-        [guildId, actorId, action, subject, meta ? JSON.stringify(meta) : null]
-    );
-}
-
-/**
- * Get all guild role mappings from DB.
- * Returns Record<role_key, discord_role_id | null>
- */
-async function getGuildRoles(guildId: string): Promise<Record<string, string | null>> {
-    const res = await query<{ role_key: string; discord_role_id: string }>(
-        `SELECT role_key, discord_role_id FROM guild_role WHERE guild_id = $1::bigint`,
-        [guildId]
-    );
-
-    const mapping: Record<string, string | null> = {};
-    for (const row of res.rows) {
-        mapping[row.role_key] = row.discord_role_id;
-    }
-    return mapping;
-}
-
-/**
- * Get all guild channel mappings from DB.
- * Returns Record<channel_key, discord_channel_id | null>
- */
-async function getGuildChannels(guildId: string): Promise<Record<string, string | null>> {
-    const res = await query<{ channel_key: string; discord_channel_id: string }>(
-        `SELECT channel_key, discord_channel_id FROM guild_channel WHERE guild_id = $1::bigint`,
-        [guildId]
-    );
-
-    const mapping: Record<string, string | null> = {};
-    for (const row of res.rows) {
-        mapping[row.channel_key] = row.discord_channel_id;
-    }
-    return mapping;
-}
-
 export default async function guildsRoutes(app: FastifyInstance) {
     /**
      * GET /guilds/:guild_id/roles
@@ -199,11 +149,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
         const previousMapping = await getGuildRoles(guild_id);
 
         // Ensure guild exists
-        await query(
-            `INSERT INTO guild (id, name) VALUES ($1::bigint, 'Unknown')
-             ON CONFLICT (id) DO NOTHING`,
-            [guild_id]
-        );
+        await ensureGuildExists(guild_id);
 
         const warnings: string[] = [];
         const updates: Record<string, string | null> = {};
@@ -324,11 +270,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
         const previousMapping = await getGuildChannels(guild_id);
 
         // Ensure guild exists
-        await query(
-            `INSERT INTO guild (id, name) VALUES ($1::bigint, 'Unknown')
-             ON CONFLICT (id) DO NOTHING`,
-            [guild_id]
-        );
+        await ensureGuildExists(guild_id);
 
         const warnings: string[] = [];
         const updates: Record<string, string | null> = {};

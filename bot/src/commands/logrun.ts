@@ -7,11 +7,14 @@ import {
     EmbedBuilder,
 } from 'discord.js';
 import type { SlashCommand } from './_types.js';
-import { getMemberRoleIds } from '../lib/permissions.js';
-import { postJSON, BackendError, getJSON } from '../lib/http.js';
-import { dungeonByCode, searchDungeons } from '../constants/dungeon-helpers.js';
-import { addRecentDungeon, getRecentDungeons } from '../lib/dungeon-cache.js';
+import { getMemberRoleIds } from '../lib/permissions/permissions.js';
+import { postJSON } from '../lib/http.js';
+import { dungeonByCode } from '../constants/dungeon-helpers.js';
+import { addRecentDungeon } from '../lib/dungeon-cache.js';
 import { updateQuotaPanelsForUser } from '../lib/quota-panel.js';
+import { ensureGuildContext, fetchGuildMember } from '../lib/interaction-helpers.js';
+import { formatErrorMessage } from '../lib/error-handler.js';
+import { handleDungeonAutocomplete } from '../lib/dungeon-autocomplete.js';
 
 /**
  * /logrun - Manually log run completion quota for organizers.
@@ -39,17 +42,18 @@ export const logrun: SlashCommand = {
         ),
 
     async run(interaction: ChatInputCommandInteraction) {
-        // Must be in a guild
-        if (!interaction.guild || !interaction.guildId) {
+        const guild = await ensureGuildContext(interaction);
+        if (!guild) return;
+
+        // Fetch invoker member (permission check done by middleware)
+        const invokerMember = await fetchGuildMember(guild, interaction.user.id);
+        if (!invokerMember) {
             await interaction.reply({
-                content: 'This command can only be used in a server.',
+                content: 'Could not fetch your member information.',
                 flags: MessageFlags.Ephemeral,
             });
             return;
         }
-
-        // Fetch invoker member (permission check done by middleware)
-        const invokerMember = await interaction.guild.members.fetch(interaction.user.id);
 
         // Get options
         const dungeonCode = interaction.options.getString('dungeon', true);
@@ -66,11 +70,11 @@ export const logrun: SlashCommand = {
         }
 
         // Defer reply (backend call may take a moment)
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply();
 
         try {
             // Track this dungeon as recently used for this guild
-            addRecentDungeon(interaction.guildId, dungeonCode);
+            addRecentDungeon(guild.id, dungeonCode);
 
             // Get actor's role IDs for authorization
             const actorRoles = getMemberRoleIds(invokerMember);
@@ -84,7 +88,7 @@ export const logrun: SlashCommand = {
             }>('/quota/log-run', {
                 actorId: interaction.user.id,
                 actorRoles,
-                guildId: interaction.guildId,
+                guildId: guild.id,
                 dungeonKey: dungeonCode, // Backend will find most recent run
                 amount,
             });
@@ -125,10 +129,10 @@ export const logrun: SlashCommand = {
 
             // Auto-update quota panels for this user's roles
             // Run asynchronously to not block the response
-            console.log(`[Logrun] Triggering auto-update for user ${result.organizer_id} in guild ${interaction.guildId}`);
+            console.log(`[Logrun] Triggering auto-update for user ${result.organizer_id} in guild ${guild.id}`);
             updateQuotaPanelsForUser(
                 interaction.client,
-                interaction.guildId,
+                guild.id,
                 result.organizer_id
             ).then(() => {
                 console.log(`[Logrun] Successfully triggered quota panel auto-update`);
@@ -136,78 +140,19 @@ export const logrun: SlashCommand = {
                 console.error('[Logrun] Failed to auto-update quota panels:', err);
             });
         } catch (err) {
-            // Map backend errors to user-friendly messages
-            let errorMessage = '❌ **Failed to log run quota**\n\n';
-            
-            if (err instanceof BackendError) {
-                switch (err.code) {
-                    case 'NOT_AUTHORIZED':
-                    case 'NOT_ORGANIZER':
-                        errorMessage += '**Issue:** You don\'t have the Organizer role configured for this server.\n\n';
-                        errorMessage += '**What to do:**\n';
-                        errorMessage += '• Ask a server admin to use `/setroles` to set up the Organizer role\n';
-                        errorMessage += '• Make sure you have the Discord role that\'s mapped to Organizer';
-                        break;
-                    case 'RUN_NOT_FOUND':
-                        errorMessage += `**Issue:** The selected **${dungeon.dungeonName}** run was not found.\n\n`;
-                        errorMessage += '**What to do:**\n';
-                        errorMessage += '• Try selecting a different dungeon\n';
-                        errorMessage += '• Create a new run with `/run` first';
-                        break;
-                    case 'VALIDATION_ERROR':
-                        errorMessage += `**Issue:** ${err.message}\n\n`;
-                        errorMessage += 'Please check your input and try again.';
-                        break;
-                    default:
-                        errorMessage += `**Error:** ${err.message}\n\n`;
-                        errorMessage += 'Please try again or contact an administrator if the problem persists.';
-                }
-            } else {
-                console.error('Logrun command error:', err);
-                errorMessage += 'An unexpected error occurred. Please try again later.';
-            }
-
+            const errorMessage = formatErrorMessage({
+                error: err,
+                baseMessage: 'Failed to log run quota',
+                errorHandlers: {
+                    'RUN_NOT_FOUND': `**Issue:** The selected **${dungeon.dungeonName}** run was not found.\n\n**What to do:**\n• Try selecting a different dungeon\n• Create a new run with \`/run\` first`,
+                },
+            });
             await interaction.editReply(errorMessage);
         }
     },
 
     // Autocomplete handler (same as /run)
     async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
-        const focused = interaction.options.getFocused(true);
-        if (focused.name !== 'dungeon') {
-            await interaction.respond([]);
-            return;
-        }
-
-        const query = (focused.value ?? '').trim();
-
-        let results;
-        if (!query && interaction.guildId) {
-            // Empty query: show recently used dungeons for this guild
-            const recentCodes = getRecentDungeons(interaction.guildId, 25);
-            results = recentCodes
-                .map(code => dungeonByCode[code])
-                .filter(d => d) // Filter out any undefined
-                .map(d => ({
-                    name: d.dungeonName,
-                    value: d.codeName
-                }));
-            
-            // If no recent dungeons, fall back to search behavior
-            if (results.length === 0) {
-                results = searchDungeons('', 25).map(d => ({
-                    name: d.dungeonName,
-                    value: d.codeName
-                }));
-            }
-        } else {
-            // Non-empty query: perform normal search
-            results = searchDungeons(query, 25).map(d => ({
-                name: d.dungeonName,
-                value: d.codeName
-            }));
-        }
-
-        await interaction.respond(results);
+        await handleDungeonAutocomplete(interaction);
     }
 };

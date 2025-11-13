@@ -5,6 +5,8 @@ import { randomBytes } from 'crypto';
 import { query } from '../db/pool.js';
 import { zSnowflake } from '../lib/constants.js';
 import { Errors } from '../lib/errors.js';
+import { logAudit } from '../lib/audit.js';
+import { hasModerator } from '../lib/permissions.js';
 
 /**
  * Schema for creating a punishment
@@ -27,41 +29,6 @@ const RemovePunishmentBody = z.object({
     removal_reason: z.string().min(1).max(500),
     actor_roles: z.array(zSnowflake).optional(),
 });
-
-/**
- * Helper to check if actor has moderator permission
- */
-async function hasModerator(guildId: string, actorRoles?: string[]): Promise<boolean> {
-    if (!actorRoles || actorRoles.length === 0) return false;
-
-    const res = await query<{ role_key: string }>(
-        `SELECT role_key FROM guild_role 
-         WHERE guild_id = $1::bigint 
-         AND discord_role_id = ANY($2::bigint[])
-         AND role_key IN ('administrator', 'moderator')`,
-        [guildId, actorRoles]
-    );
-
-    return res.rows.length > 0;
-}
-
-/**
- * Helper to log audit events
- * @param actorId - User ID of the actor, or null for system-initiated actions
- */
-async function logAudit(
-    guildId: string,
-    actorId: string | null,
-    action: string,
-    subject: string,
-    meta?: Record<string, unknown>
-) {
-    await query(
-        `INSERT INTO audit (guild_id, actor_id, action, subject, meta)
-         VALUES ($1::bigint, $2::bigint, $3, $4, $5)`,
-        [guildId, actorId, action, subject, meta ? JSON.stringify(meta) : null]
-    );
-}
 
 /**
  * Helper to deactivate expired suspensions

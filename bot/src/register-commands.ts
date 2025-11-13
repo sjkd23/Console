@@ -2,17 +2,14 @@ import { config } from 'dotenv';
 import { resolve } from 'node:path';
 config({ path: resolve(process.cwd(), '.env') });
 
+import { botConfig } from './config.js';
 import { REST } from 'discord.js';
 import { registerAll } from './commands/index.js';
 
-const token = process.env.SECRET_KEY!;
-const appId = process.env.APPLICATION_ID!;
-const guildId = process.env.DISCORD_DEV_GUILD_ID!;
-
-const rest = new REST({ version: '10' }).setToken(token);
+const rest = new REST({ version: '10' }).setToken(botConfig.SECRET_KEY);
 
 async function main() {
-    const names = await registerAll(rest, appId, guildId);
+    const names = await registerAll(rest, botConfig.APPLICATION_ID, botConfig.DISCORD_DEV_GUILD_ID);
     console.log('Registered dev guild commands:', names.join(', '));
 }
 

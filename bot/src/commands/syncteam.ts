@@ -14,9 +14,10 @@ import { syncTeamRoleForGuild } from '../lib/team-role-manager.js';
  * or when you want to ensure all members have the correct Team role status
  */
 export const syncteam: SlashCommand = {
+    requiredRole: 'administrator',
     data: new SlashCommandBuilder()
         .setName('syncteam')
-        .setDescription('Sync Team role for all members in this server (Admin only)')
+        .setDescription('Sync Team role for all members in this server (Administrator)')
         .setDMPermission(false),
 
     async run(interaction: ChatInputCommandInteraction) {
@@ -29,19 +30,10 @@ export const syncteam: SlashCommand = {
             return;
         }
 
-        // Defer reply immediately
-        await interaction.deferReply({ ephemeral: true });
+        // Defer reply immediately (permission check done by middleware)
+        await interaction.deferReply();
 
         try {
-            // Fetch member to check permissions
-            const member = await interaction.guild.members.fetch(interaction.user.id);
-            
-            // Check if user has Discord Administrator permission
-            if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-                await interaction.editReply('❌ You must have Discord Administrator permission to use this command.');
-                return;
-            }
-
             // Start sync
             await interaction.editReply('⏳ Starting Team role sync for all members...\n\nThis may take a moment depending on server size.');
             

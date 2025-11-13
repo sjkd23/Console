@@ -2,6 +2,38 @@ import { DungeonInfo } from "./dungeon-types";
 
 export const DUNGEON_DATA: readonly DungeonInfo[] = [
     {
+        codeName: "WETLANDS_KEY",
+        dungeonName: "Sulfurous Wetlands",
+        portalEmojiId: "1051564126637391872",
+        keyReactions: [
+            {
+                mapKey: "WETLANDS_KEY",
+                maxEarlyLocation: 5
+            }
+        ],
+        otherReactions: [],
+        portalLink: {
+            url: "https://i.imgur.com/s2mWQQq.png",
+            name: "Sulfurous Wetlands Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/9reqR1p.png",
+                name: "Heart of the Wetlands"
+            },
+            {
+                url: "https://i.imgur.com/kopUOQw.png",
+                name: "Warped Ent Ancient"
+            }
+        ],
+        dungeonColors: [
+            0x008000,
+            0x800000
+        ],
+        dungeonCategory: "Godland Dungeons",
+        isBuiltIn: true
+    },
+    {
         codeName: "SNAKE_PIT",
         dungeonName: "Snake Pit",
         portalEmojiId: "561248700291088386",
@@ -1089,6 +1121,266 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
         isBuiltIn: true
     },
     {
+        codeName: "HIDDEN_INTERREGNUM",
+        dungeonName: "Hidden Interregnum",
+        portalEmojiId: "1016739853913829426",
+        keyReactions: [
+            {
+                mapKey: "HIDDEN_INTERREGUM_KEY",
+                maxEarlyLocation: 3
+            }
+        ],
+        otherReactions: [],
+        portalLink: {
+            url: "https://i.imgur.com/vTtkvcA.png",
+            name: "Hidden Interregnum Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/dse9vAy.png",
+                name: "Pirate Queen Ramm"
+            },
+            {
+                url: "https://i.imgur.com/kTQHzyu.png",
+                name: "Izel the Grand Shaman"
+            },
+            {
+                url: "https://i.imgur.com/8tpVkAk.png",
+                name: "Nefret the Pharaoh"
+            },
+            {
+                url: "https://i.imgur.com/8D4cdlg.png",
+                name: "Black Blade Ozuchi"
+            },
+            {
+                url: "https://i.imgur.com/8WVZSV1.png",
+                name: "The Wanderer"
+            }
+        ],
+        dungeonColors: [
+            0xBD6592,
+            0x943B71,
+            0xD99BB2
+        ],
+        dungeonCategory: "Mini Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "MOONLIGHT VILLAGE",
+        dungeonName: "Moonlight Village",
+        portalEmojiId: "1089896886963556352",
+        keyReactions: [
+            {
+                mapKey: "MOONLIGHT_VILLAGE_KEY",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "MSEAL",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "CURSE",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/CHV8p21.png",
+            name: "Moonlight Village Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/yzWZCCK.png",
+                name: "Drummer Kaguya"
+            },
+            {
+                url: "https://i.imgur.com/ewZTQvE.png",
+                name: "Dancer Miko"
+            },
+            {
+                url: "https://i.imgur.com/eEbuDYs.png",
+                name: "Sage Genji"
+            },
+            {
+                url: "https://i.imgur.com/0CyBlB8.png",
+                name: "Kitsune Umi"
+            }
+        ],
+        dungeonColors: [
+            0xF39D43,
+            0xE00003,
+            0x4B91EC,
+            0xf19ab0
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "STEAMWORKS",
+        dungeonName: "Steamworks",
+        portalEmojiId: "1051549087574544404",
+        keyReactions: [
+            {
+                mapKey: "STEAMWORKS_KEY",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "CURSE",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "MSEAL",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "KNIGHT",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "TRICKSTER",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "MYSTIC",
+                maxEarlyLocation: 0
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/ItKUC5A.png",
+            name: "Steamworks Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/mK2gN3p.png",
+                name: "Core Form"
+            },
+            {
+                url: "https://i.imgur.com/Bvc5thY.png",
+                name: "Enforcer Form"
+            },
+            {
+                url: "https://i.imgur.com/a6SxEBx.png",
+                name: "Dragon Form"
+            }
+        ],
+        dungeonColors: [
+            0xC0C0C0,
+            0x808080,
+            0xFF00FF
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "ADVANCED STEAMWORKS",
+        dungeonName: "Advanced Steamworks",
+        portalEmojiId: "1158160675105935440",
+        keyReactions: [
+            {
+                mapKey: "ADVANCED_STEAMWORKS_KEY",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "CURSE",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "MSEAL",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "KNIGHT",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "TRICKSTER",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "MYSTIC",
+                maxEarlyLocation: 0
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/8WyDft8.png",
+            name: "Advanced Steamworks Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/mK2gN3p.png",
+                name: "Core Form"
+            },
+            {
+                url: "https://i.imgur.com/Bvc5thY.png",
+                name: "Enforcer Form"
+            },
+            {
+                url: "https://i.imgur.com/a6SxEBx.png",
+                name: "Dragon Form"
+            }
+        ],
+        dungeonColors: [
+            0xC0C0C0,
+            0x808080,
+            0xFF00FF
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
         codeName: "SHATTERS",
         dungeonName: "Shatters",
         portalEmojiId: "561744041532719115",
@@ -1112,20 +1404,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
-                maxEarlyLocation: 1
-            },
-            {
                 mapKey: "SLOW",
                 maxEarlyLocation: 1
             },
             {
                 mapKey: "CURSE",
                 maxEarlyLocation: 1
-            },
-            {
-                mapKey: "CRYSTAL_SHIELD",
-                maxEarlyLocation: 2
             }
         ],
         portalLink: {
@@ -1197,12 +1481,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
+                mapKey: "ARMOR_BREAK",
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "ARMOR_BREAK",
-                maxEarlyLocation: 1
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",
@@ -1242,6 +1526,73 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 url: "https://i.imgur.com/Hn5Ugix.png",
                 name: "The Beekeeper"
             }
+        ],
+        dungeonColors: [
+            0xed9121,
+            0x18c7db,
+            0xe3e019,
+            0xbd0d30
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "ADVANCED_NEST",
+        dungeonName: "Advanced Nest",
+        portalEmojiId: "1158159293657399356",
+        keyReactions: [
+            {
+                mapKey: "ADVANCED_NEST_KEY",
+                maxEarlyLocation: 3
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "QUIVER_THUNDER",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "KNIGHT",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PRIEST",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "MYSTIC",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "SLOW",
+                maxEarlyLocation: 0
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/oieOJGo.png",
+            name: "Advanced Nest Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/PKYrWvX.png",
+                name: "Green Beehemoth"
+            },
         ],
         dungeonColors: [
             0xed9121,
@@ -1311,12 +1662,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
+                mapKey: "ARMOR_BREAK",
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "ARMOR_BREAK",
-                maxEarlyLocation: 1
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",
@@ -1380,8 +1731,8 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
         isBuiltIn: true
     },
     {
-        codeName: "FULL_SKIP_VOID",
-        dungeonName: "Full-Skip Void",
+        codeName: "THE_VOID",
+        dungeonName: "Void",
         portalEmojiId: "612336193761443900",
         keyReactions: [
             {
@@ -1403,20 +1754,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
-                maxEarlyLocation: 1
-            },
-            {
-                mapKey: "T2_ORB",
-                maxEarlyLocation: 2
-            },
-            {
-                mapKey: "BRAIN_PRISM",
-                maxEarlyLocation: 2
-            },
-            {
                 mapKey: "ARMOR_BREAK",
                 maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",
@@ -1464,17 +1807,21 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
         isBuiltIn: true
     },
     {
-        codeName: "THE_VOID",
-        dungeonName: "Void",
-        portalEmojiId: "612336193761443900",
+        codeName: "LOST_HALLS",
+        dungeonName: "Lost Halls",
+        portalEmojiId: "1001196975200407623",
         keyReactions: [
             {
-                mapKey: "LOST_HALLS_KEY",
+                mapKey: "CULT_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "VOID_KEY",
                 maxEarlyLocation: 2
             },
             {
                 mapKey: "VIAL_OF_PURE_DARKNESS",
-                maxEarlyLocation: 3
+                maxEarlyLocation: 2
             }
         ],
         otherReactions: [
@@ -1487,12 +1834,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
+                mapKey: "ARMOR_BREAK",
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "ARMOR_BREAK",
-                maxEarlyLocation: 1
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",
@@ -1529,12 +1876,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
         },
         bossLinks: [
             {
-                url: "https://i.imgur.com/kbzthE4.png",
-                name: "Void Entity"
+                url: "https://i.imgur.com/uhDj0M5.png",
+                name: "Lost Halls Portal"
             }
         ],
         dungeonColors: [
-            0x0810ff
+            0xCCCCCC
         ],
         dungeonCategory: "Exaltation Dungeons",
         isBuiltIn: true
@@ -1563,16 +1910,16 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
-                maxEarlyLocation: 1
-            },
-            {
                 mapKey: "MSEAL",
                 maxEarlyLocation: 1
             },
             {
                 mapKey: "ARMOR_BREAK",
                 maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",
@@ -1593,7 +1940,7 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
             {
                 mapKey: "MYSTIC",
                 maxEarlyLocation: 0
-            },
+            }
         ],
         portalLink: {
             url: "https://i.imgur.com/CLzxdEM.png",
@@ -1639,6 +1986,156 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
         isBuiltIn: true
     },
     {
+        codeName: "SPECTRAL_PENITENTIARY",
+        dungeonName: "Spectral Penitentiary",
+        portalEmojiId: "1290096126850105426",
+        keyReactions: [
+            {
+                mapKey: "SPECTRAL_KEY",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "QUIVER_THUNDER",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "SLOW",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "CURSE",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "MSEAL",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "KNIGHT",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "TRICKSTER",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "MYSTIC",
+                maxEarlyLocation: 0
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/RVWq9ua.png",
+            name: "Spectral Penitentiary Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/jrcY9jC.png",
+                name: "Soulwarden Murcian"
+            }
+        ],
+        dungeonColors: [
+            0x001e28,
+            0x58dd85,
+            0x30b2aa,
+            0x124a69
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "ICE_CITADEL",
+        dungeonName: "Ice Citadel",
+        portalEmojiId: "1394830571431137362",
+        keyReactions: [
+            {
+                mapKey: "CITADEL_KEY",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "QUIVER_THUNDER",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "SLOW",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "CURSE",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "MSEAL",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "ARMOR_BREAK",
+                maxEarlyLocation: 1
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "WARRIOR",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "KNIGHT",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "PALADIN",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "TRICKSTER",
+                maxEarlyLocation: 0
+            },
+            {
+                mapKey: "MYSTIC",
+                maxEarlyLocation: 0
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/Ma5cQyB.png",
+            name: "Ice Citadel Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/cbOogNc.png",
+                name: "Esben the Neurotic"
+            }
+        ],
+        dungeonColors: [
+            0x1b5a74,
+            0xb7e1f6,
+            0xbab294,
+            0xffffff
+        ],
+        dungeonCategory: "Exaltation Dungeons",
+        isBuiltIn: true
+    },
+    {
         codeName: "MISCELLANEOUS_DUNGEON",
         dungeonName: "Miscellaneous Dungeon",
         portalEmojiId: "574080648000569353",
@@ -1663,6 +2160,138 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
             0x1dbfaa
         ],
         dungeonCategory: "Basic Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "REALM_CLEARING",
+        dungeonName: "Realm Clearing",
+        portalEmojiId: "1111077858803200144",
+        keyReactions: [
+            {
+                mapKey: "SHIELD_RUNE",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "SWORD_RUNE",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "HELM_RUNE",
+                maxEarlyLocation: 2
+            }
+        ],
+        otherReactions: [
+            {
+                mapKey: "TRICKSTER",
+                maxEarlyLocation: 3
+            },
+            {
+                mapKey: "SPEEDY",
+                maxEarlyLocation: 3
+            }
+        ],
+        portalLink: {
+            url: "https://i.imgur.com/oR1wqQ3.png",
+            name: "Realm Portal"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/HGmFZAA.png",
+                name: "Skull Shrine"
+            },
+            {
+                url: "https://i.imgur.com/NERHSHK.png",
+                name: "Hermit God"
+            },
+            {
+                url: "https://i.imgur.com/TLZfnSb.png",
+                name: "Cube God"
+            }
+        ],
+        dungeonColors: [
+            0x1dbfaa
+        ],
+        dungeonCategory: "Basic Dungeons",
+        isBuiltIn: true
+    },
+    {
+        codeName: "EXALT_DUNGEON",
+        dungeonName: "Exalt Dungeon",
+        portalEmojiId: "1110284783541559347",
+        keyReactions: [
+            {
+                mapKey: "SHIELD_RUNE",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "SWORD_RUNE",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "HELM_RUNE",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "CULT_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "VOID_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "SHATTERS_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "MOONLIGHT_VILLAGE_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "STEAMWORKS_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "ADVANCED_STEAMWORKS_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "FUNGAL_CAVERN_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "NEST_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "ADVANCED_NEST_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "SPECTRAL_KEY",
+                maxEarlyLocation: 2
+            },
+            {
+                mapKey: "CITADEL_KEY",
+                maxEarlyLocation: 2
+            }
+
+        ],
+        otherReactions: [],
+        portalLink: {
+            url: "https://i.imgur.com/8eDjmCe.png",
+            name: "Oryx the Mad Beachcake"
+        },
+        bossLinks: [
+            {
+                url: "https://i.imgur.com/8eDjmCe.png",
+                name: "Oryx the Mad Beachcake"
+            }
+        ],
+        dungeonColors: [
+            0x1dbfaa
+        ],
+        dungeonCategory: "Exaltation Dungeons",
         isBuiltIn: true
     },
     {
@@ -1697,15 +2326,7 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "FUNGAL_TOME",
-                maxEarlyLocation: 2
-            },
-            {
                 mapKey: "ARMOR_BREAK",
-                maxEarlyLocation: 2
-            },
-            {
-                mapKey: "CRYSTAL_SHIELD",
                 maxEarlyLocation: 2
             },
             {
@@ -1713,8 +2334,12 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
                 maxEarlyLocation: 1
             },
             {
-                mapKey: "DPS_WIZARD",
+                mapKey: "DPS_RANGED",
                 maxEarlyLocation: 10
+            },
+            {
+                mapKey: "FUNGAL_TOME",
+                maxEarlyLocation: 0
             },
             {
                 mapKey: "WARRIOR",

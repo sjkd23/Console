@@ -1,0 +1,129 @@
+// bot/src/commands/setchannels.ts
+import {
+    SlashCommandBuilder,
+    ChatInputCommandInteraction,
+    EmbedBuilder,
+    MessageFlags,
+    PermissionFlagsBits,
+    GuildMember,
+    ChannelType,
+} from 'discord.js';
+import type { SlashCommand } from '../_types.js';
+import { setGuildChannels, BackendError } from '../../lib/http.js';
+import { hasInternalRole, getMemberRoleIds } from '../../lib/permissions/permissions.js';
+
+const CHANNEL_OPTIONS = [
+    { key: 'raid', label: 'Raid', description: 'Main channel for raid announcements and coordination' },
+    { key: 'veri_log', label: 'Verification Log', description: 'Log channel for verification events' },
+    { key: 'manual_verification', label: 'Manual Verification', description: 'Channel for manual verification requests' },
+    { key: 'getverified', label: 'Get Verified', description: 'Channel where users initiate verification' },
+    { key: 'punishment_log', label: 'Punishment Log', description: 'Log channel for moderation actions' },
+    { key: 'raid_log', label: 'Raid Log', description: 'Log channel for raid-related events' },
+    { key: 'quota', label: 'Quota', description: 'Channel for quota leaderboard panels and tracking' },
+] as const;
+
+export const setchannels: SlashCommand = {
+    requiredRole: 'moderator',
+    data: new SlashCommandBuilder()
+        .setName('setchannels')
+        .setDescription('Configure internal channel mappings for this server (Moderator+)')
+        .addChannelOption(o => o.setName('raid').setDescription('Raid channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('veri_log').setDescription('Verification log channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('manual_verification').setDescription('Manual verification channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('getverified').setDescription('Get verified channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('punishment_log').setDescription('Punishment log channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('raid_log').setDescription('Raid log channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('quota').setDescription('Quota leaderboard channel').addChannelTypes(ChannelType.GuildText))
+        .setDMPermission(false),
+
+    async run(interaction: ChatInputCommandInteraction): Promise<void> {
+        try {
+            // 1) Guild-only check (reply immediately if invalid)
+            if (!interaction.inGuild() || !interaction.guild) {
+                await interaction.reply({
+                    content: 'This command can only be used in a server.',
+                    flags: MessageFlags.Ephemeral,
+                });
+                return;
+            }
+
+            // 2) ACK ASAP to avoid 3s timeout (permission check done by middleware)
+            await interaction.deferReply();
+
+            // 3) Fetch member safely (needed for actor_roles)
+            let member: GuildMember;
+            try {
+                member = await interaction.guild.members.fetch(interaction.user.id);
+            } catch {
+                await interaction.editReply('❌ Could not fetch your member record. Try again in a moment.');
+                return;
+            }
+
+            // 4) Collect provided channel updates (partial)
+            const updates: Record<string, string | null> = {};
+            for (const { key } of CHANNEL_OPTIONS) {
+                // getChannel returns Channel | null when option omitted; only include if provided
+                const channel = interaction.options.getChannel(key);
+                if (channel !== null) {
+                    updates[key] = channel ? channel.id : null;
+                }
+            }
+
+            if (Object.keys(updates).length === 0) {
+                await interaction.editReply('⚠️ No channel updates provided. Pick at least one option.');
+                return;
+            }
+
+            // 5) Backend call
+            try {
+                const { channels, warnings } = await setGuildChannels(interaction.guildId!, {
+                    actor_user_id: interaction.user.id,
+                    channels: updates,
+                    actor_roles: getMemberRoleIds(member),
+                });
+
+                // 6) Build response
+                const embed = new EmbedBuilder()
+                    .setTitle('✅ Channel configuration updated')
+                    .setDescription('Current channel mappings for this server:')
+                    .setColor(0x00ff00)
+                    .setTimestamp();
+
+                for (const { key, label } of CHANNEL_OPTIONS) {
+                    const discordChannelId = channels[key];
+                    const value = discordChannelId ? `<#${discordChannelId}>` : '—';
+                    embed.addFields({ name: label, value, inline: true });
+                }
+
+                const warningText =
+                    warnings && warnings.length > 0 ? `⚠️ **Warnings:**\n${warnings.map(w => `• ${w}`).join('\n')}` : undefined;
+
+                await interaction.editReply({
+                    content: warningText,
+                    embeds: [embed],
+                });
+            } catch (err) {
+                let msg = '❌ Failed to update channels. Please try again later.';
+                if (err instanceof BackendError) {
+                    if (err.code === 'NOT_AUTHORIZED') {
+                        msg = '❌ **Access Denied**\n\nYou must have Discord **Administrator** permission to configure bot channels.\n\nMake sure you have the Administrator permission in this server\'s role settings.';
+                    } else if (err.code === 'VALIDATION_ERROR') {
+                        msg = `❌ Validation error: ${err.message}`;
+                    }
+                }
+                await interaction.editReply(msg);
+            }
+        } catch (unhandled) {
+            // Catch any unexpected throw so the interaction is always answered
+            try {
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.editReply('❌ Something went wrong while handling this command.');
+                } else {
+                    await interaction.reply({ content: '❌ Something went wrong.', ephemeral: true });
+                }
+            } catch { }
+            // Optional: log unhandled
+            console.error('setchannels unhandled error:', unhandled);
+        }
+    },
+};

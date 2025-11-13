@@ -1,6 +1,9 @@
 // bot/src/lib/suspension-cleanup.ts
 import { Client, EmbedBuilder, type TextChannel } from 'discord.js';
 import { getJSON, postJSON } from './http.js';
+import { createLogger } from './logger.js';
+
+const logger = createLogger('SuspensionCleanup');
 
 interface ExpiredSuspension {
     guild_id: string;
@@ -14,18 +17,27 @@ interface ExpiredSuspension {
 /**
  * Check all guilds for expired suspensions and remove the suspended role
  * This runs periodically to ensure users don't keep the role after expiration
+ * 
+ * Note: This function is wrapped in try/catch to ensure the scheduler never crashes.
+ * Individual suspension processing failures are logged but don't stop the task.
  */
 async function checkExpiredSuspensions(client: Client): Promise<void> {
     try {
+        logger.debug('Starting expired suspensions check');
+        
         // Get list of expired suspensions that still need role removal
         const response = await getJSON<{ expired: ExpiredSuspension[] }>('/punishments/expired');
         const { expired } = response;
 
         if (expired.length === 0) {
+            logger.debug('No expired suspensions found');
             return; // Nothing to do
         }
 
-        console.log(`[SuspensionCleanup] Found ${expired.length} expired suspensions to process`);
+        logger.info(`Found ${expired.length} expired suspensions to process`);
+
+        let successCount = 0;
+        let failureCount = 0;
 
         // Process each expired suspension
         for (const suspension of expired) {
@@ -33,7 +45,11 @@ async function checkExpiredSuspensions(client: Client): Promise<void> {
                 // Get the guild
                 const guild = client.guilds.cache.get(suspension.guild_id);
                 if (!guild) {
-                    console.warn(`[SuspensionCleanup] Guild ${suspension.guild_id} not found`);
+                    logger.warn(`Guild not found`, { 
+                        guildId: suspension.guild_id,
+                        suspensionId: suspension.id 
+                    });
+                    failureCount++;
                     continue;
                 }
 
@@ -44,18 +60,27 @@ async function checkExpiredSuspensions(client: Client): Promise<void> {
                 const suspendedRoleId = rolesResponse.roles.suspended;
 
                 if (!suspendedRoleId) {
-                    console.warn(`[SuspensionCleanup] No suspended role configured for guild ${suspension.guild_id}`);
+                    logger.warn(`No suspended role configured`, { 
+                        guildId: suspension.guild_id,
+                        suspensionId: suspension.id 
+                    });
+                    failureCount++;
                     continue;
                 }
 
                 // Get the member
                 const member = await guild.members.fetch(suspension.user_id).catch(() => null);
                 if (!member) {
-                    console.warn(`[SuspensionCleanup] Member ${suspension.user_id} not found in guild ${suspension.guild_id}`);
+                    logger.warn(`Member not found in guild (may have left)`, { 
+                        userId: suspension.user_id,
+                        guildId: suspension.guild_id,
+                        suspensionId: suspension.id 
+                    });
                     // Still mark as processed even if member left
                     await postJSON(`/punishments/${suspension.id}/expire`, {
                         processed_by: client.user!.id
                     });
+                    successCount++;
                     continue;
                 }
 
@@ -63,16 +88,28 @@ async function checkExpiredSuspensions(client: Client): Promise<void> {
                 let roleRemoved = false;
                 if (member.roles.cache.has(suspendedRoleId)) {
                     await member.roles.remove(suspendedRoleId, `Suspension expired - ${suspension.id}`);
-                    console.log(`[SuspensionCleanup] Removed suspended role from ${member.user.tag} in ${guild.name}`);
+                    logger.info(`Removed suspended role`, {
+                        userId: suspension.user_id,
+                        userTag: member.user.tag,
+                        guildId: suspension.guild_id,
+                        guildName: guild.name,
+                        suspensionId: suspension.id
+                    });
                     roleRemoved = true;
                 } else {
-                    console.log(`[SuspensionCleanup] Member ${member.user.tag} already doesn't have suspended role in ${guild.name}`);
+                    logger.debug(`Member already doesn't have suspended role`, {
+                        userId: suspension.user_id,
+                        userTag: member.user.tag,
+                        guildId: suspension.guild_id
+                    });
                 }
 
                 // Mark the suspension as expired/processed in the backend
                 await postJSON(`/punishments/${suspension.id}/expire`, {
                     processed_by: client.user!.id
                 });
+
+                successCount++;
 
                 // Log to punishment_log channel if configured
                 try {
@@ -101,18 +138,35 @@ async function checkExpiredSuspensions(client: Client): Promise<void> {
                                 .setTimestamp();
 
                             await (logChannel as TextChannel).send({ embeds: [logEmbed] });
-                            console.log(`[SuspensionCleanup] Logged expiration to punishment_log channel for guild ${guild.name}`);
+                            logger.debug(`Logged expiration to punishment_log channel`, {
+                                guildId: suspension.guild_id,
+                                suspensionId: suspension.id
+                            });
                         }
                     }
                 } catch (logErr) {
-                    console.warn(`[SuspensionCleanup] Failed to log expiration to punishment_log channel:`, logErr);
+                    logger.warn(`Failed to log expiration to punishment_log channel`, { 
+                        suspensionId: suspension.id,
+                        error: logErr instanceof Error ? logErr.message : String(logErr)
+                    });
                 }
             } catch (err) {
-                console.error(`[SuspensionCleanup] Failed to process suspension ${suspension.id}:`, err);
+                failureCount++;
+                logger.error(`Failed to process suspension`, { 
+                    suspensionId: suspension.id,
+                    err 
+                });
             }
         }
+
+        logger.info(`Completed expired suspensions check`, {
+            total: expired.length,
+            succeeded: successCount,
+            failed: failureCount
+        });
     } catch (err) {
-        console.error('[SuspensionCleanup] Failed to check expired suspensions:', err);
+        // Ensure this task never crashes the scheduler
+        logger.error('Critical error in expired suspensions check', { err });
     }
 }
 
@@ -121,19 +175,23 @@ async function checkExpiredSuspensions(client: Client): Promise<void> {
  * Runs every 2 minutes to check for and process expired suspensions
  */
 export function startSuspensionCleanup(client: Client): () => void {
-    console.log('[SuspensionCleanup] Starting automatic suspension cleanup task');
+    logger.info('Starting automatic suspension cleanup task');
 
     // Run immediately on startup
-    checkExpiredSuspensions(client);
+    checkExpiredSuspensions(client).catch(err => {
+        logger.error('Initial expired suspensions check failed', { err });
+    });
 
     // Then run every 2 minutes
     const intervalId = setInterval(() => {
-        checkExpiredSuspensions(client);
+        checkExpiredSuspensions(client).catch(err => {
+            logger.error('Scheduled expired suspensions check failed', { err });
+        });
     }, 2 * 60 * 1000); // 2 minutes
 
     // Return cleanup function
     return () => {
-        console.log('[SuspensionCleanup] Stopping automatic suspension cleanup task');
+        logger.info('Stopping automatic suspension cleanup task');
         clearInterval(intervalId);
     };
 }

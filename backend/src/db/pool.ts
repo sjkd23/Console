@@ -1,11 +1,9 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
-
-const url = process.env.DATABASE_URL;
-if (!url) throw new Error('Missing DATABASE_URL');
+import { backendConfig } from '../config.js';
 
 export const pool = new Pool({
-    connectionString: url,
+    connectionString: backendConfig.DATABASE_URL,
     // optional: ssl: { rejectUnauthorized: false }
 });
 
