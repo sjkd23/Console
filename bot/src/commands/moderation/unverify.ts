@@ -11,6 +11,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../lib/permissions/permissions.js';
 import { updateRaiderStatus, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../lib/http.js';
+import { logCommandExecution, logVerificationAction } from '../../lib/bot-logger.js';
 
 /**
  * /unverify - Remove verification status from a raider.
@@ -186,6 +187,18 @@ export const unverify: SlashCommand = {
                 embeds: [embed],
             });
 
+            // Log to bot-log (brief since detailed log goes to veri_log)
+            await logVerificationAction(
+                interaction.client,
+                interaction.guildId,
+                'unverified',
+                interaction.user.id,
+                targetUser.id,
+                existingRaider.ign,
+                reason
+            );
+            await logCommandExecution(interaction.client, interaction, { success: true });
+
             // Log to veri_log channel if configured
             try {
                 const { channels } = await getGuildChannels(interaction.guildId);
@@ -247,6 +260,10 @@ export const unverify: SlashCommand = {
             }
 
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: err instanceof BackendError ? err.code : 'Unknown error'
+            });
         }
     },
 };

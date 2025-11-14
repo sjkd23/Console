@@ -4,6 +4,7 @@ import {
     EmbedBuilder,
 } from 'discord.js';
 import type { SlashCommand } from './_types.js';
+import { logCommandExecution } from '../lib/bot-logger.js';
 
 /**
  * /ping - Check the bot's latency and response time
@@ -52,6 +53,15 @@ export const ping: SlashCommand = {
         await interaction.editReply({
             content: '',
             embeds: [embed]
+        });
+
+        // Log to bot-log
+        await logCommandExecution(interaction.client, interaction, {
+            success: true,
+            details: {
+                'Roundtrip Latency': `${roundTripLatency}ms`,
+                'WebSocket Latency': `${websocketLatency}ms`,
+            }
         });
     },
 };

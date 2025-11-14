@@ -15,6 +15,7 @@ import { ensureGuildContext, fetchGuildMember } from '../lib/interaction-helpers
 import { formatErrorMessage } from '../lib/error-handler.js';
 import { handleDungeonAutocomplete } from '../lib/dungeon-autocomplete.js';
 import { formatPoints } from '../lib/format-helpers.js';
+import { logCommandExecution } from '../lib/bot-logger.js';
 
 /**
  * /logkey - Manually log key pops for raiders.
@@ -147,12 +148,27 @@ export const logkey: SlashCommand = {
                 embeds: [embed],
             });
 
+            // Log to bot-log
+            await logCommandExecution(interaction.client, interaction, {
+                success: true,
+                details: {
+                    'Dungeon': dungeon.dungeonName,
+                    'Keys': `${amount}`,
+                    'Raider': `<@${result.user_id}>`,
+                    'New Total': `${result.new_total}`
+                }
+            });
+
         } catch (err) {
             const errorMessage = formatErrorMessage({
                 error: err,
                 baseMessage: 'Failed to log key pops',
             });
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: 'Failed to log key pops'
+            });
         }
     },
 

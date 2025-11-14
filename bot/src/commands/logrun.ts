@@ -16,6 +16,7 @@ import { ensureGuildContext, fetchGuildMember } from '../lib/interaction-helpers
 import { formatErrorMessage } from '../lib/error-handler.js';
 import { handleDungeonAutocomplete } from '../lib/dungeon-autocomplete.js';
 import { formatPoints } from '../lib/format-helpers.js';
+import { logCommandExecution } from '../lib/bot-logger.js';
 
 /**
  * /logrun - Manually log run completion quota for organizers.
@@ -128,6 +129,17 @@ export const logrun: SlashCommand = {
                 embeds: [embed],
             });
 
+            // Log to bot-log
+            await logCommandExecution(interaction.client, interaction, {
+                success: true,
+                details: {
+                    'Dungeon': dungeon.dungeonName,
+                    'Runs': `${amount}`,
+                    'Organizer': `<@${result.organizer_id}>`,
+                    'Points': formatPoints(result.total_points)
+                }
+            });
+
             // Auto-update quota panels for this user's roles
             // Run asynchronously to not block the response
             console.log(`[Logrun] Triggering auto-update for user ${result.organizer_id} in guild ${guild.id}`);
@@ -149,6 +161,10 @@ export const logrun: SlashCommand = {
                 },
             });
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: 'Failed to log run quota'
+            });
         }
     },
 

@@ -11,6 +11,7 @@ import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
 import { adjustQuotaPoints } from '../../lib/http.js';
 import { ensureGuildContext, validateGuildMember, fetchGuildMember } from '../../lib/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/error-handler.js';
+import { logCommandExecution, logQuotaAction } from '../../lib/bot-logger.js';
 
 /**
  * /addquotapoints - Manually adjust quota points for a member.
@@ -98,12 +99,27 @@ export const addquotapoints: SlashCommand = {
             await interaction.editReply({
                 embeds: [embed],
             });
+
+            // Log to bot-log
+            await logQuotaAction(
+                interaction.client,
+                guild.id,
+                'Manual Adjustment',
+                interaction.user.id,
+                targetUser.id,
+                amount
+            );
+            await logCommandExecution(interaction.client, interaction, { success: true });
         } catch (err) {
             const errorMessage = formatErrorMessage({
                 error: err,
                 baseMessage: 'Failed to adjust quota points',
             });
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: 'Failed to adjust quota points'
+            });
         }
     },
 };

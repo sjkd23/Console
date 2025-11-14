@@ -11,6 +11,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { setGuildChannels, BackendError } from '../../lib/http.js';
 import { hasInternalRole, getMemberRoleIds } from '../../lib/permissions/permissions.js';
+import { logCommandExecution, logConfigChange } from '../../lib/bot-logger.js';
 
 const CHANNEL_OPTIONS = [
     { key: 'raid', label: 'Raid', description: 'Main channel for raid announcements and coordination' },
@@ -20,6 +21,7 @@ const CHANNEL_OPTIONS = [
     { key: 'punishment_log', label: 'Punishment Log', description: 'Log channel for moderation actions' },
     { key: 'raid_log', label: 'Raid Log', description: 'Log channel for raid-related events' },
     { key: 'quota', label: 'Quota', description: 'Channel for quota leaderboard panels and tracking' },
+    { key: 'bot_log', label: 'Bot Log', description: 'General bot activity and command execution logs' },
 ] as const;
 
 export const setchannels: SlashCommand = {
@@ -34,6 +36,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('punishment_log').setDescription('Punishment log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('raid_log').setDescription('Raid log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('quota').setDescription('Quota leaderboard channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('bot_log').setDescription('Bot activity log channel').addChannelTypes(ChannelType.GuildText))
         .setDMPermission(false),
 
     async run(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -102,6 +105,17 @@ export const setchannels: SlashCommand = {
                     content: warningText,
                     embeds: [embed],
                 });
+
+                // Log to bot-log
+                const changes: Record<string, { old?: string; new?: string }> = {};
+                for (const [key, newChannelId] of Object.entries(updates)) {
+                    const label = CHANNEL_OPTIONS.find(c => c.key === key)?.label || key;
+                    changes[label] = {
+                        new: newChannelId ? `<#${newChannelId}>` : 'Removed'
+                    };
+                }
+                await logConfigChange(interaction.client, interaction.guildId!, 'Channel Mappings', interaction.user.id, changes);
+                await logCommandExecution(interaction.client, interaction, { success: true });
             } catch (err) {
                 let msg = '❌ Failed to update channels. Please try again later.';
                 if (err instanceof BackendError) {
@@ -112,6 +126,10 @@ export const setchannels: SlashCommand = {
                     }
                 }
                 await interaction.editReply(msg);
+                await logCommandExecution(interaction.client, interaction, {
+                    success: false,
+                    errorMessage: msg
+                });
             }
         } catch (unhandled) {
             // Catch any unexpected throw so the interaction is always answered

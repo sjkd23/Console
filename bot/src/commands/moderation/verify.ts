@@ -11,6 +11,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../lib/permissions/permissions.js';
 import { verifyRaider, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../lib/http.js';
+import { logCommandExecution, logVerificationAction } from '../../lib/bot-logger.js';
 
 /**
  * /verify - Manually verify a Discord member with their ROTMG IGN.
@@ -237,6 +238,17 @@ export const verify: SlashCommand = {
                 embeds: [embed],
             });
 
+            // Log to bot-log (brief since detailed log goes to veri_log)
+            await logVerificationAction(
+                interaction.client,
+                interaction.guildId,
+                'verified',
+                interaction.user.id,
+                targetUser.id,
+                ign
+            );
+            await logCommandExecution(interaction.client, interaction, { success: true });
+
             // Log to veri_log channel if configured
             try {
                 const { channels } = await getGuildChannels(interaction.guildId);
@@ -306,6 +318,10 @@ export const verify: SlashCommand = {
             }
 
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: err instanceof BackendError ? err.code : 'Unknown error'
+            });
         }
     },
 };

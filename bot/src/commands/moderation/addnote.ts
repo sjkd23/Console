@@ -10,6 +10,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { canActorTargetMember, getMemberRoleIds } from '../../lib/permissions/permissions.js';
 import { createNote, BackendError } from '../../lib/http.js';
+import { logCommandExecution } from '../../lib/bot-logger.js';
 
 /**
  * /addnote - Add a silent staff note to a member
@@ -110,6 +111,15 @@ export const addnote: SlashCommand = {
                     .setTimestamp();
 
                 await interaction.editReply({ embeds: [responseEmbed] });
+
+                // Log to bot-log
+                await logCommandExecution(interaction.client, interaction, {
+                    success: true,
+                    details: {
+                        'Target': `<@${targetUser.id}>`,
+                        'Note ID': note.id.toString()
+                    }
+                });
             } catch (err) {
                 let errorMessage = '❌ **Failed to add note**\n\n';
 
@@ -137,6 +147,10 @@ export const addnote: SlashCommand = {
                 }
 
                 await interaction.editReply(errorMessage);
+                await logCommandExecution(interaction.client, interaction, {
+                    success: false,
+                    errorMessage: err instanceof BackendError ? err.code : 'Unknown error'
+                });
             }
         } catch (unhandled) {
             try {

@@ -10,6 +10,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { setGuildRoles, BackendError } from '../../lib/http.js';
 import { hasInternalRole, getMemberRoleIds, invalidateRoleCache } from '../../lib/permissions/permissions.js';
+import { logCommandExecution, logConfigChange } from '../../lib/bot-logger.js';
 
 const ROLE_OPTIONS = [
     { key: 'administrator', label: 'Administrator', description: 'Full admin for bot actions' },
@@ -108,6 +109,17 @@ export const setroles: SlashCommand = {
                     content: warningText,
                     embeds: [embed],
                 });
+
+                // Log to bot-log
+                const changes: Record<string, { old?: string; new?: string }> = {};
+                for (const [key, newRoleId] of Object.entries(updates)) {
+                    const label = ROLE_OPTIONS.find(r => r.key === key)?.label || key;
+                    changes[label] = {
+                        new: newRoleId ? `<@&${newRoleId}>` : 'Removed'
+                    };
+                }
+                await logConfigChange(interaction.client, interaction.guildId!, 'Role Mappings', interaction.user.id, changes);
+                await logCommandExecution(interaction.client, interaction, { success: true });
             } catch (err) {
                 let msg = '❌ Failed to update roles. Please try again later.';
                 if (err instanceof BackendError) {
@@ -118,6 +130,10 @@ export const setroles: SlashCommand = {
                     }
                 }
                 await interaction.editReply(msg);
+                await logCommandExecution(interaction.client, interaction, {
+                    success: false,
+                    errorMessage: msg
+                });
             }
         } catch (unhandled) {
             // Catch any unexpected throw so the interaction is always answered

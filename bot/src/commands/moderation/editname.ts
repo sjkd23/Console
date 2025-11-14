@@ -11,6 +11,7 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { hasInternalRole, getMemberRoleIds, hasHigherRole } from '../../lib/permissions/permissions.js';
 import { updateRaiderIGN, BackendError, getGuildChannels } from '../../lib/http.js';
+import { logCommandExecution } from '../../lib/bot-logger.js';
 
 /**
  * /editname - Update a verified raider's IGN and nickname.
@@ -180,6 +181,16 @@ export const editname: SlashCommand = {
                 embeds: [embed],
             });
 
+            // Log to bot-log (brief since detailed log goes to veri_log)
+            await logCommandExecution(interaction.client, interaction, {
+                success: true,
+                details: {
+                    'Target': `<@${targetUser.id}>`,
+                    'Old IGN': result.old_ign,
+                    'New IGN': result.ign
+                }
+            });
+
             // Log to veri_log channel if configured
             try {
                 const { channels } = await getGuildChannels(interaction.guildId);
@@ -254,6 +265,10 @@ export const editname: SlashCommand = {
             }
 
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: err instanceof BackendError ? err.code : 'Unknown error'
+            });
         }
     },
 };

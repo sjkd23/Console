@@ -7,6 +7,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from './_types.js';
 import { syncTeamRoleForGuild } from '../lib/team-role-manager.js';
+import { logCommandExecution } from '../lib/bot-logger.js';
 
 /**
  * /syncteam - Manually sync Team role for all members in the guild
@@ -41,9 +42,21 @@ export const syncteam: SlashCommand = {
             await syncTeamRoleForGuild(interaction.guildId, interaction.client);
             
             await interaction.editReply('✅ Team role sync completed!\n\nAll members have been checked and the Team role has been assigned or removed as needed.');
+            
+            // Log to bot-log
+            await logCommandExecution(interaction.client, interaction, {
+                success: true,
+                details: { 'Action': 'Team role sync completed for all members' }
+            });
         } catch (error) {
             console.error('syncteam command error:', error);
             await interaction.editReply('❌ An error occurred while syncing Team roles. Check the logs for details.');
+            
+            // Log error to bot-log
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: 'Failed to sync team roles',
+            });
         }
     },
 };

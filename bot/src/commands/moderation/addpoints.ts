@@ -11,6 +11,7 @@ import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
 import { adjustPoints } from '../../lib/http.js';
 import { ensureGuildContext, validateGuildMember, fetchGuildMember } from '../../lib/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/error-handler.js';
+import { logCommandExecution } from '../../lib/bot-logger.js';
 
 /**
  * /addpoints - Manually adjust regular (raider) points for a member.
@@ -98,12 +99,26 @@ export const addpoints: SlashCommand = {
             await interaction.editReply({
                 embeds: [embed],
             });
+
+            // Log to bot-log
+            await logCommandExecution(interaction.client, interaction, {
+                success: true,
+                details: {
+                    'Target': `<@${targetUser.id}>`,
+                    'Amount': `${amount > 0 ? '+' : ''}${amount}`,
+                    'New Total': `${result.new_total}`
+                }
+            });
         } catch (err) {
             const errorMessage = formatErrorMessage({
                 error: err,
                 baseMessage: 'Failed to adjust raider points',
             });
             await interaction.editReply(errorMessage);
+            await logCommandExecution(interaction.client, interaction, {
+                success: false,
+                errorMessage: 'Failed to adjust raider points'
+            });
         }
     },
 };

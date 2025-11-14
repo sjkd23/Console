@@ -37,6 +37,7 @@ const CHANNEL_KEYS = [
     'punishment_log',
     'raid_log',
     'quota',
+    'bot_log',
 ] as const;
 
 const zChannelKey = z.enum(CHANNEL_KEYS);
