@@ -89,6 +89,13 @@ export const help: SlashCommand = {
                     '**`/addquotapoints`** - Manually adjust quota points (Officer+)\n',
                 inline: false
             });
+            embed.addFields({
+                name: '🛡️ Moderation - Roles',
+                value:
+                    '**`/addrole`** - Promote member by adding staff role (Officer+)\n' +
+                    '**`/addnote`** - Add moderation note to member (Security+)\n',
+                inline: false
+            });
         }
 
         // Configuration Commands
