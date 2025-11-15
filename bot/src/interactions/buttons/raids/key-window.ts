@@ -2,6 +2,7 @@ import { ButtonInteraction, ChannelType, EmbedBuilder } from 'discord.js';
 import { setKeyWindow, getJSON, BackendError } from '../../../lib/utilities/http.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyWindow } from '../../../lib/logging/raid-logger.js';
+import { sendKeyPoppedPing } from '../../../lib/utilities/run-ping.js';
 
 /**
  * Handle "Key popped" button press.
@@ -59,6 +60,11 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
         const updatedEmbed = buildLiveEmbed(embeds[0], run, key_window_ends_at, btn);
 
         await pubMsg.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
+
+        // Send key popped ping message
+        if (btn.guild) {
+            await sendKeyPoppedPing(btn.client, parseInt(runId), btn.guild, key_window_ends_at);
+        }
 
         // Get the dungeon-specific key emoji
         const keyEmoji = getDungeonKeyEmoji(run.dungeonKey);

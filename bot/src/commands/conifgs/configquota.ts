@@ -52,7 +52,7 @@ export const configquota: SlashCommand = {
 
             await interaction.editReply({
                 embeds: [embed],
-                components: [buttons],
+                components: buttons,
             });
 
         } catch (err) {

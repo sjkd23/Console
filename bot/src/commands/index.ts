@@ -20,12 +20,15 @@ import { syncteam } from './moderation/moderator/syncteam.js';
 import { configquota } from './conifgs/configquota.js';
 import { configpoints } from './conifgs/configpoints.js';
 import { configverification } from './conifgs/configverification.js';
+import { configrolepings } from './conifgs/configrolepings.js';
 import { help } from './help.js';
 import { ping } from './ping.js';
 import { addquotapoints } from './moderation/officer/addquotapoints.js';
 import { addpoints } from './moderation/officer/addpoints.js';
 import { addrole } from './moderation/officer/addrole.js';
 import { headcount } from './organizer/headcount.js';
+import { leaderboard } from './leaderboard.js';
+import { purge } from './moderation/moderator/purge.js';
 
 // Apply permission middleware to all commands
 export const commands: SlashCommand[] = [
@@ -49,11 +52,14 @@ export const commands: SlashCommand[] = [
     withPermissionCheck(configquota),
     withPermissionCheck(configpoints),
     withPermissionCheck(configverification),
+    withPermissionCheck(configrolepings),
     withPermissionCheck(help),
     withPermissionCheck(ping),
     withPermissionCheck(addquotapoints),
     withPermissionCheck(addpoints),
     withPermissionCheck(addrole),
+    withPermissionCheck(leaderboard),
+    withPermissionCheck(purge),
 ];
 
 export function toJSON() {

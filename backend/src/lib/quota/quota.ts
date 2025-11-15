@@ -35,6 +35,7 @@ export interface QuotaRoleConfig {
     reset_at: string; // ISO timestamp
     panel_message_id: string | null;
     created_at: string; // ISO timestamp - when this config was created
+    moderation_points: number; // Points awarded for verification activities
 }
 
 /**
@@ -59,8 +60,9 @@ export async function getQuotaRoleConfig(
         reset_at: string;
         panel_message_id: string | null;
         created_at: string;
+        moderation_points: string; // DECIMAL comes as string from pg
     }>(
-        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at
+        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at, moderation_points
          FROM quota_role_config
          WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
         [guildId, discordRoleId]
@@ -76,6 +78,7 @@ export async function getQuotaRoleConfig(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         created_at: row.created_at,
+        moderation_points: Number(row.moderation_points),
     };
 }
 
@@ -92,8 +95,9 @@ export async function getAllQuotaRoleConfigs(
         reset_at: string;
         panel_message_id: string | null;
         created_at: string;
+        moderation_points: string; // DECIMAL comes as string from pg
     }>(
-        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at
+        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at, moderation_points
          FROM quota_role_config
          WHERE guild_id = $1::bigint
          ORDER BY discord_role_id`,
@@ -107,6 +111,7 @@ export async function getAllQuotaRoleConfigs(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         created_at: row.created_at,
+        moderation_points: Number(row.moderation_points),
     }));
 }
 
@@ -121,6 +126,7 @@ export async function upsertQuotaRoleConfig(
         reset_at?: string; // ISO timestamp
         panel_message_id?: string | null;
         created_at?: string; // ISO timestamp - for resetting quota periods
+        moderation_points?: number; // Points awarded for verification activities
     }
 ): Promise<QuotaRoleConfig> {
     const fields: string[] = [];
@@ -131,27 +137,34 @@ export async function upsertQuotaRoleConfig(
     const requiredPoints = config.required_points ?? 0;
     const resetAt = config.reset_at ?? null; // Will use COALESCE in query
     const createdAt = config.created_at ?? null; // Will use COALESCE in query
-    
+    const moderationPoints = config.moderation_points ?? 0;
+
     values.push(requiredPoints); // $3
     values.push(resetAt); // $4
     values.push(createdAt); // $5
+    values.push(moderationPoints); // $6
 
     // Build UPDATE fields
     if (config.required_points !== undefined) {
         fields.push(`required_points = $${idx}`);
     }
     idx++; // Move past $3
-    
+
     if (config.reset_at !== undefined) {
         fields.push(`reset_at = $${idx}::timestamptz`);
     }
     idx++; // Move past $4
-    
+
     if (config.created_at !== undefined) {
         fields.push(`created_at = $${idx}::timestamptz`);
     }
     idx++; // Move past $5
-    
+
+    if (config.moderation_points !== undefined) {
+        fields.push(`moderation_points = $${idx}`);
+    }
+    idx++; // Move past $6
+
     if (config.panel_message_id !== undefined) {
         fields.push(`panel_message_id = $${idx++}::bigint`);
         values.push(config.panel_message_id);
@@ -166,16 +179,18 @@ export async function upsertQuotaRoleConfig(
         reset_at: string;
         panel_message_id: string | null;
         created_at: string;
+        moderation_points: string; // DECIMAL comes as string from pg
     }>(
-        `INSERT INTO quota_role_config (guild_id, discord_role_id, required_points, reset_at, created_at, updated_at)
+        `INSERT INTO quota_role_config (guild_id, discord_role_id, required_points, reset_at, created_at, moderation_points, updated_at)
          VALUES ($1::bigint, $2::bigint, 
                  $3, 
                  COALESCE($4::timestamptz, NOW() + INTERVAL '7 days'),
                  COALESCE($5::timestamptz, NOW()),
+                 $6,
                  NOW())
          ON CONFLICT (guild_id, discord_role_id)
          DO UPDATE SET updated_at = NOW() ${updateClause}
-         RETURNING guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at`,
+         RETURNING guild_id, discord_role_id, required_points, reset_at, panel_message_id, created_at, moderation_points`,
         values
     );
 
@@ -187,6 +202,7 @@ export async function upsertQuotaRoleConfig(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         created_at: row.created_at,
+        moderation_points: Number(row.moderation_points),
     };
 }
 
@@ -551,7 +567,7 @@ export async function logQuotaEvent(
         }
 
         logger.info({ guildId, actorUserId, actionType, subjectId, dungeonKey, quotaPoints: effectiveQuotaPoints }, 'Logged quota event');
-        
+
         // Convert DB numeric fields to numbers (PostgreSQL returns them as strings)
         const row = res.rows[0];
         return {
@@ -581,7 +597,7 @@ export async function awardRaiderPoints(
 ): Promise<number> {
     // Get raider points configuration for this dungeon
     const raiderPoints = await getRaiderPointsForDungeon(guildId, dungeonKey);
-    
+
     // If points are 0 (default/not configured), skip awarding points
     if (raiderPoints === 0) {
         logger.debug({ runId, dungeonKey, guildId }, 'Skipping raider points - dungeon has 0 points configured');
@@ -770,12 +786,12 @@ export async function getQuotaLeaderboard(
         return [];
     }
 
-    logger.debug({ 
-        guildId, 
-        discordRoleId, 
-        memberCount: memberUserIds.length, 
-        periodStart: periodStart.toISOString(), 
-        periodEnd: periodEnd.toISOString() 
+    logger.debug({
+        guildId,
+        discordRoleId,
+        memberCount: memberUserIds.length,
+        periodStart: periodStart.toISOString(),
+        periodEnd: periodEnd.toISOString()
     }, 'Querying quota leaderboard');
 
     const res = await query<{ actor_user_id: string; total_points: string; run_count: string }>(
@@ -794,7 +810,7 @@ export async function getQuotaLeaderboard(
     );
 
     logger.debug({ guildId, rowCount: res.rowCount }, 'Quota leaderboard query completed');
-    
+
     if (res.rowCount === 0) {
         logger.debug({ guildId }, 'No quota events found in period - checking all-time events');
         const checkRes = await query(
@@ -847,4 +863,274 @@ export async function getQuotaStatsForRole(
     }
 
     return statsMap;
+}
+
+/**
+ * Create a snapshot of all joined raiders at a key pop.
+ * This records who was present during this key pop for later completion awarding.
+ * 
+ * @param runId - The run ID
+ * @param keyPopNumber - The key pop number (1 for first pop, 2 for second, etc.)
+ * @returns The number of raiders snapshotted
+ */
+export async function snapshotRaidersAtKeyPop(
+    runId: number,
+    keyPopNumber: number
+): Promise<number> {
+    // Get all raiders currently joined (state='join')
+    const raiders = await query<{ user_id: string; class: string | null }>(
+        `SELECT user_id, class
+         FROM reaction
+         WHERE run_id = $1::bigint AND state = 'join'`,
+        [runId]
+    );
+
+    if (raiders.rowCount === 0) {
+        logger.debug({ runId, keyPopNumber }, 'No raiders to snapshot at key pop');
+        return 0;
+    }
+
+    // Insert snapshot for each raider
+    for (const raider of raiders.rows) {
+        try {
+            await query(
+                `INSERT INTO key_pop_snapshot (run_id, key_pop_number, user_id, class)
+                 VALUES ($1::bigint, $2, $3::bigint, $4)
+                 ON CONFLICT (run_id, key_pop_number, user_id) DO NOTHING`,
+                [runId, keyPopNumber, raider.user_id, raider.class]
+            );
+        } catch (err) {
+            logger.error({ err, runId, keyPopNumber, userId: raider.user_id }, 'Failed to snapshot raider at key pop');
+        }
+    }
+
+    const snapshotCount = raiders.rowCount ?? 0;
+    logger.info({ runId, keyPopNumber, raiderCount: snapshotCount }, 'Snapshotted raiders at key pop');
+    return snapshotCount;
+}
+
+/**
+ * Award completion points to raiders from a specific key pop snapshot.
+ * This should be called when the next key pops OR when the run ends (for the last snapshot).
+ * 
+ * @param guildId - The guild ID
+ * @param runId - The run ID
+ * @param keyPopNumber - The key pop number whose raiders should get completions
+ * @param dungeonKey - The dungeon key for points calculation
+ * @returns The number of raiders awarded completions
+ */
+export async function awardCompletionsToKeyPopSnapshot(
+    guildId: string,
+    runId: number,
+    keyPopNumber: number,
+    dungeonKey: string
+): Promise<number> {
+    // Get raider points configuration for this dungeon
+    const raiderPoints = await getRaiderPointsForDungeon(guildId, dungeonKey);
+
+    // If points are 0 (default/not configured), skip awarding points
+    if (raiderPoints === 0) {
+        logger.debug({ runId, keyPopNumber, dungeonKey, guildId }, 'Skipping raider points - dungeon has 0 points configured');
+        return 0;
+    }
+
+    // Get all raiders from this snapshot who haven't been awarded yet
+    const raiders = await query<{ user_id: string }>(
+        `SELECT user_id
+         FROM key_pop_snapshot
+         WHERE run_id = $1::bigint 
+           AND key_pop_number = $2
+           AND awarded_completion = FALSE`,
+        [runId, keyPopNumber]
+    );
+
+    if (raiders.rowCount === 0) {
+        logger.debug({ runId, keyPopNumber, guildId }, 'No raiders to award points from snapshot');
+        return 0;
+    }
+
+    // Award points to each raider
+    let awardedCount = 0;
+    for (const raider of raiders.rows) {
+        try {
+            // Log quota event for the raider (using subject_id for idempotency)
+            // This prevents double-awarding if processed multiple times
+            const event = await query<{ id: number }>(
+                `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
+                 VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
+                 ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
+                 DO NOTHING
+                 RETURNING id`,
+                [guildId, raider.user_id, `raider:${runId}:${keyPopNumber}:${raider.user_id}`, dungeonKey, raiderPoints]
+            );
+
+            if (event.rowCount && event.rowCount > 0) {
+                // Mark as awarded in snapshot
+                await query(
+                    `UPDATE key_pop_snapshot
+                     SET awarded_completion = TRUE, awarded_at = NOW()
+                     WHERE run_id = $1::bigint AND key_pop_number = $2 AND user_id = $3::bigint`,
+                    [runId, keyPopNumber, raider.user_id]
+                );
+                awardedCount++;
+            }
+        } catch (err) {
+            logger.error({ err, userId: raider.user_id, runId, keyPopNumber, guildId }, 'Failed to award completion to raider from snapshot');
+        }
+    }
+
+    logger.info({ runId, keyPopNumber, dungeonKey, guildId, raiderPoints, awardedCount, totalRaiders: raiders.rowCount }, 'Awarded completions to key pop snapshot');
+    return awardedCount;
+}
+
+/**
+ * Get leaderboard for a specific category (runs organized, keys popped, dungeon completions, points, or quota points)
+ * Optionally filtered by dungeon key and/or date range
+ * 
+ * @param guildId - Discord guild ID
+ * @param category - Category type
+ * @param dungeonKey - Optional dungeon key filter (or 'all' for all dungeons)
+ * @param since - Optional start date (inclusive) for filtering
+ * @param until - Optional end date (inclusive) for filtering
+ * @returns Array of leaderboard entries with user_id and count, sorted descending
+ */
+export async function getLeaderboard(
+    guildId: string,
+    category: 'runs_organized' | 'keys_popped' | 'dungeon_completions' | 'points' | 'quota_points',
+    dungeonKey?: string,
+    since?: Date,
+    until?: Date
+): Promise<Array<{ user_id: string; count: number }>> {
+    let queryStr: string;
+    let params: any[];
+
+    // Helper to build dynamic WHERE clause and params
+    const buildQuery = (baseConditions: string[], baseParams: any[]): { whereClause: string; params: any[] } => {
+        const conditions = [...baseConditions];
+        const allParams = [...baseParams];
+        let paramIndex = baseParams.length + 1;
+        
+        if (dungeonKey && dungeonKey !== 'all') {
+            conditions.push(`dungeon_key = $${paramIndex}`);
+            allParams.push(dungeonKey);
+            paramIndex++;
+        }
+        if (since) {
+            conditions.push(`created_at >= $${paramIndex}`);
+            allParams.push(since.toISOString());
+            paramIndex++;
+        }
+        if (until) {
+            conditions.push(`created_at <= $${paramIndex}`);
+            allParams.push(until.toISOString());
+        }
+        
+        return {
+            whereClause: conditions.join(' AND '),
+            params: allParams
+        };
+    };
+
+    if (category === 'runs_organized') {
+        // Count runs where user earned quota points (organizer activity)
+        const { whereClause, params: queryParams } = buildQuery(
+            ['guild_id = $1::bigint', 'action_type = \'run_completed\'', 'quota_points > 0'],
+            [guildId]
+        );
+        
+        queryStr = `
+            SELECT actor_user_id AS user_id, COUNT(*)::text AS count
+            FROM quota_event
+            WHERE ${whereClause}
+            GROUP BY actor_user_id
+            HAVING COUNT(*) > 0
+            ORDER BY COUNT(*) DESC, actor_user_id ASC
+        `;
+        params = queryParams;
+    } else if (category === 'keys_popped') {
+        // Count keys popped from key_pop table
+        // Note: key_pop table doesn't have created_at, so date filtering not applicable
+        if (dungeonKey && dungeonKey !== 'all') {
+            queryStr = `
+                SELECT user_id, SUM(count)::text AS count
+                FROM key_pop
+                WHERE guild_id = $1::bigint 
+                  AND dungeon_key = $2
+                GROUP BY user_id
+                HAVING SUM(count) > 0
+                ORDER BY SUM(count) DESC, user_id ASC
+            `;
+            params = [guildId, dungeonKey];
+        } else {
+            queryStr = `
+                SELECT user_id, SUM(count)::text AS count
+                FROM key_pop
+                WHERE guild_id = $1::bigint
+                GROUP BY user_id
+                HAVING SUM(count) > 0
+                ORDER BY SUM(count) DESC, user_id ASC
+            `;
+            params = [guildId];
+        }
+        
+        // Log warning if date filters were provided for keys_popped
+        if (since || until) {
+            logger.warn({ guildId, category }, 'Date filtering not supported for keys_popped category - ignoring since/until parameters');
+        }
+    } else if (category === 'dungeon_completions') {
+        // Count completions where user earned points (raider activity)
+        const { whereClause, params: queryParams } = buildQuery(
+            ['guild_id = $1::bigint', 'action_type = \'run_completed\'', 'points > 0'],
+            [guildId]
+        );
+        
+        queryStr = `
+            SELECT actor_user_id AS user_id, COUNT(*)::text AS count
+            FROM quota_event
+            WHERE ${whereClause}
+            GROUP BY actor_user_id
+            HAVING COUNT(*) > 0
+            ORDER BY COUNT(*) DESC, actor_user_id ASC
+        `;
+        params = queryParams;
+    } else if (category === 'points') {
+        // Sum total points (raider activity)
+        const { whereClause, params: queryParams } = buildQuery(
+            ['guild_id = $1::bigint', 'points > 0'],
+            [guildId]
+        );
+        
+        queryStr = `
+            SELECT actor_user_id AS user_id, SUM(points)::text AS count
+            FROM quota_event
+            WHERE ${whereClause}
+            GROUP BY actor_user_id
+            HAVING SUM(points) > 0
+            ORDER BY SUM(points) DESC, actor_user_id ASC
+        `;
+        params = queryParams;
+    } else { // quota_points
+        // Sum total quota points (organizer/verifier activity)
+        const { whereClause, params: queryParams } = buildQuery(
+            ['guild_id = $1::bigint', 'quota_points > 0'],
+            [guildId]
+        );
+        
+        queryStr = `
+            SELECT actor_user_id AS user_id, SUM(quota_points)::text AS count
+            FROM quota_event
+            WHERE ${whereClause}
+            GROUP BY actor_user_id
+            HAVING SUM(quota_points) > 0
+            ORDER BY SUM(quota_points) DESC, actor_user_id ASC
+        `;
+        params = queryParams;
+    }
+
+    const res = await query<{ user_id: string; count: string }>(queryStr, params);
+
+    return res.rows.map(row => ({
+        user_id: row.user_id,
+        count: Number(row.count),
+    }));
 }

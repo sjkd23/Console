@@ -1,14 +1,23 @@
+/**
+ * Handles leave button interactions for run panels.
+ * Allows users to leave a run and removes the run role.
+ * 
+ * IMPORTANT: Setting state='leave' also removes the raider from earning run completion.
+ * Raiders who leave will not be included in future key pop snapshots and will not receive
+ * completion points even if they were present during earlier key pops.
+ */
+
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import { postJSON, getJSON } from '../../../lib/utilities/http.js';
 import { logRaidJoin } from '../../../lib/logging/raid-logger.js';
-import { assignRunRole } from '../../../lib/utilities/run-role-manager.js';
+import { removeRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { updateRunParticipation } from '../../../lib/utilities/run-embed-helpers.js';
 
-export async function handleJoin(btn: ButtonInteraction, runId: string) {
+export async function handleLeave(btn: ButtonInteraction, runId: string) {
     // Defer the reply so we can send a follow-up message
     await btn.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Fetch run details for logging and role assignment
+    // Fetch run details for logging and role removal
     const run = await getJSON<{ 
         dungeonKey: string; 
         dungeonLabel: string; 
@@ -22,36 +31,36 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
         return;
     }
 
-    // Check if run is still joinable
+    // Check if run is still active
     if (run.status === 'ended' || run.status === 'cancelled') {
-        await btn.editReply({ content: '❌ This run has ended. You cannot join it anymore.' });
+        await btn.editReply({ content: '❌ This run has ended.' });
         return;
     }
 
-    // Check if user is already in the run
+    // Check if user is actually in the run
     const existingReaction = await getJSON<{ state: string | null }>(
         `/runs/${runId}/reactions/${btn.user.id}`
     ).catch(() => ({ state: null }));
 
-    if (existingReaction.state === 'join') {
+    if (existingReaction.state !== 'join') {
         await btn.editReply({
-            content: '⚠️ **You have already joined this raid.**\n\n' +
-                'If you want to opt out and remove the raid role, click the **Leave** button instead.'
+            content: '⚠️ **You are not in this raid.**\n\n' +
+                'You can only leave a raid if you have joined it first.'
         });
         return;
     }
 
-    // Add user to the run
-    const result = await postJSON<{ joinCount: number; joined: boolean }>(`/runs/${runId}/reactions`, {
+    // Remove user from the run
+    const result = await postJSON<{ joinCount: number }>(`/runs/${runId}/reactions`, {
         userId: btn.user.id,
-        state: 'join'
+        state: 'leave'
     });
 
-    // Assign the run role
+    // Remove the run role
     if (run.roleId && btn.guild) {
         const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
         if (member) {
-            await assignRunRole(member, run.roleId);
+            await removeRunRole(member, run.roleId);
         }
     }
 
@@ -83,16 +92,16 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
                     runId: parseInt(runId)
                 },
                 btn.user.id,
-                'joined',
+                'left',
                 result.joinCount
             );
         } catch (e) {
-            console.error('Failed to log join to raid-log:', e);
+            console.error('Failed to log leave to raid-log:', e);
         }
     }
 
     // Send ephemeral confirmation message
     await btn.editReply({
-        content: '✅ **You have joined the raid!**\n\nCheck above the raid panel for the **Party** and **Location** of the run!'
+        content: '✅ **You have left the raid.**\n\nThe raid role has been removed from you.'
     });
 }

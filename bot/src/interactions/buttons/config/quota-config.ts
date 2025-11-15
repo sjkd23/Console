@@ -250,7 +250,7 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
                 
                 await interaction.webhook.editMessage(mainPanelMessageId, {
                     embeds: [mainEmbed],
-                    components: [mainButtons],
+                    components: mainButtons,
                 });
             } catch (err) {
                 console.error('Failed to refresh main quota config panel:', err);
@@ -259,6 +259,132 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
         }
     } catch (err) {
         console.error('Failed to update quota config:', err);
+        const msg = err instanceof BackendError ? err.message : 'Unknown error';
+        await interaction.editReply(`❌ Failed to update configuration: ${msg}`);
+    }
+}
+
+/**
+ * Handle quota_config_moderation button
+ * Opens a modal to set moderation points (verification points)
+ */
+export async function handleQuotaConfigModeration(interaction: ButtonInteraction) {
+    const customIdParts = interaction.customId.split(':');
+    const roleId = customIdParts[1];
+    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+
+    if (!roleId) {
+        await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // Check if only the command user can interact (only if user ID is specified)
+    if (authorizedUserId && interaction.user.id !== authorizedUserId) {
+        await interaction.reply({ 
+            content: '❌ Only the user who ran the command can use these buttons.', 
+            flags: MessageFlags.Ephemeral 
+        });
+        return;
+    }
+
+    // Check permissions (required even if no specific user restriction)
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: '❌ Administrator permission required', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // Fetch current config to pre-fill
+    let config: any = null;
+    try {
+        const result = await getQuotaRoleConfig(interaction.guildId!, roleId);
+        config = result.config;
+    } catch { }
+
+    const modal = new ModalBuilder()
+        .setCustomId(`quota_moderation_modal:${roleId}:${interaction.message.id}`)
+        .setTitle('Configure Moderation Points');
+
+    const moderationPointsInput = new TextInputBuilder()
+        .setCustomId('moderation_points')
+        .setLabel('Points Per Verification')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 1 or 0.5')
+        .setRequired(true)
+        .setValue(config?.moderation_points?.toFixed(2) || '0.00');
+
+    modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(moderationPointsInput)
+    );
+
+    await interaction.showModal(modal);
+}
+
+/**
+ * Handle quota_moderation_modal submission
+ */
+export async function handleQuotaModerationModal(interaction: ModalSubmitInteraction) {
+    const parts = interaction.customId.split(':');
+    const roleId = parts[1];
+    const mainPanelMessageId = parts[2];
+    
+    if (!roleId) {
+        await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // Parse input
+    const moderationPoints = parseFloat(interaction.fields.getTextInputValue('moderation_points'));
+
+    // Validate moderation points (allow decimals up to 2 decimal places)
+    if (isNaN(moderationPoints) || moderationPoints < 0) {
+        await interaction.editReply('❌ Moderation points must be a non-negative number.');
+        return;
+    }
+
+    // Check decimal places (max 2)
+    if (Math.round(moderationPoints * 100) !== moderationPoints * 100) {
+        await interaction.editReply('❌ Moderation points can have at most 2 decimal places (e.g., 1.25).');
+        return;
+    }
+
+    // Check permissions
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    const hasAdminPerm = member?.permissions.has(PermissionFlagsBits.Administrator);
+
+    try {
+        await updateQuotaRoleConfig(interaction.guildId!, roleId, {
+            actor_user_id: interaction.user.id,
+            actor_has_admin_permission: hasAdminPerm,
+            moderation_points: moderationPoints,
+        });
+
+        await interaction.editReply(
+            `✅ **Moderation points updated!**\n\n` +
+            `Staff members will now earn **${formatPoints(moderationPoints)} point${moderationPoints === 1 ? '' : 's'}** for each verification.\n\n` +
+            `This applies to:\n` +
+            `• Running \`/verify\` command\n` +
+            `• Approving manual verification tickets`
+        );
+
+        // Refresh the original /configquota panel using webhook
+        if (mainPanelMessageId) {
+            try {
+                const { embed: mainEmbed, buttons: mainButtons } = await buildQuotaConfigPanel(interaction.guildId!, roleId);
+                
+                await interaction.webhook.editMessage(mainPanelMessageId, {
+                    embeds: [mainEmbed],
+                    components: mainButtons,
+                });
+            } catch (err) {
+                console.error('Failed to refresh main quota config panel:', err);
+                // Non-critical, continue
+            }
+        }
+    } catch (err) {
+        console.error('Failed to update moderation points:', err);
         const msg = err instanceof BackendError ? err.message : 'Unknown error';
         await interaction.editReply(`❌ Failed to update configuration: ${msg}`);
     }
@@ -460,7 +586,7 @@ export async function handleQuotaDungeonModal(interaction: ModalSubmitInteractio
                 
                 await interaction.webhook.editMessage(mainPanelMessageId, {
                     embeds: [mainEmbed],
-                    components: [mainButtons],
+                    components: mainButtons,
                 });
             } catch (err) {
                 console.error('Failed to refresh main quota config panel:', err);

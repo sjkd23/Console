@@ -5,7 +5,7 @@ import { query } from '../../db/pool.js';
 import { zSnowflake, zReactionState } from '../../lib/constants/constants';
 import { Errors } from '../../lib/errors/errors';
 import { hasInternalRole } from '../../lib/auth/authorization.js';
-import { logQuotaEvent, getPointsForDungeon, awardRaiderPoints } from '../../lib/quota/quota.js';
+import { logQuotaEvent, getPointsForDungeon, awardRaiderPoints, snapshotRaidersAtKeyPop, awardCompletionsToKeyPopSnapshot } from '../../lib/quota/quota.js';
 import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
 
@@ -28,6 +28,7 @@ const CreateRun = z.object({
     party: z.string().optional(),
     location: z.string().optional(),
     autoEndMinutes: z.number().int().positive().max(1440).default(120), // default 2 hours, max 24 hours
+    roleId: zSnowflake.optional(), // Optional Discord role ID for the run
 });
 
 export default async function runsRoutes(app: FastifyInstance) {
@@ -54,6 +55,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             party,
             location,
             autoEndMinutes,
+            roleId,
         } = parsed.data;
 
         // Authorization: Check if user has organizer role
@@ -78,23 +80,23 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         // Insert run (status=open)
         const res = await query<{ id: number }>(
-            `INSERT INTO run (guild_id, organizer_id, dungeon_key, dungeon_label, channel_id, status, description, party, location, auto_end_minutes)
-        VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9)
+            `INSERT INTO run (guild_id, organizer_id, dungeon_key, dungeon_label, channel_id, status, description, party, location, auto_end_minutes, role_id)
+        VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9, $10::bigint)
         RETURNING id`,
-            [guildId, organizerId, dungeonKey, dungeonLabel, channelId, description, party, location, autoEndMinutes]
+            [guildId, organizerId, dungeonKey, dungeonLabel, channelId, description, party, location, autoEndMinutes, roleId]
         );
 
         return reply.code(201).send({ runId: res.rows[0].id });
     });
 
     /**
-   * POST /runs/:id/reactions
-   * Body: { userId: Snowflake, state: 'join' }
-   * Behavior:
-   *  - 'join' -> upsert state
-   * Blocks if run is ended/cancelled.
-   * Returns { joinCount }.
-   */
+     * POST /runs/:id/reactions
+     * Body: { userId: Snowflake, state: 'join' }
+     * Behavior:
+     *  - 'join' -> upsert state
+     * Blocks if run is ended/cancelled.
+     * Returns { joinCount }.
+     */
     app.post('/runs/:id/reactions', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
@@ -149,6 +151,34 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * GET /runs/:id/reactions/:userId
+     * Get a specific user's reaction state for a run.
+     * Returns { state: 'join' | 'leave' | 'bench' | null, class: string | null }.
+     */
+    app.get('/runs/:id/reactions/:userId', async (req, reply) => {
+        const Params = z.object({ 
+            id: z.string().regex(/^\d+$/),
+            userId: zSnowflake
+        });
+
+        const p = Params.safeParse(req.params);
+        if (!p.success) {
+            return Errors.validation(reply);
+        }
+        const runId = Number(p.data.id);
+        const { userId } = p.data;
+
+        const reactionRes = await query<{ state: string; class: string | null }>(
+            `SELECT state, class FROM reaction WHERE run_id = $1::bigint AND user_id = $2::bigint`,
+            [runId, userId]
+        );
+
+        if (reactionRes.rowCount === 0) {
+            return reply.send({ state: null, class: null });
+        }
+
+        return reply.send(reactionRes.rows[0]);
+    });    /**
      * PATCH /runs/:id/reactions
      * Body: { userId: Snowflake, class: string }
      * Updates the user's class selection for a run.
@@ -289,6 +319,14 @@ export default async function runsRoutes(app: FastifyInstance) {
             if (!isAutoEnd && from !== 'live') {
                 return Errors.invalidStatusTransition(reply, from, status);
             }
+            
+            // Get key_pop_count to determine if we need to award completions
+            const keyPopRes = await query<{ key_pop_count: number }>(
+                `SELECT key_pop_count FROM run WHERE id = $1::bigint`,
+                [runId]
+            );
+            const keyPopCount = keyPopRes.rows[0]?.key_pop_count ?? 0;
+            
             await query(
                 `UPDATE run
             SET status='ended',
@@ -315,12 +353,24 @@ export default async function runsRoutes(app: FastifyInstance) {
                 logger.error({ err, runId, guildId, organizerId }, 'Failed to log quota event for run');
             }
 
-            // Award points to raiders who joined the run
-            try {
-                await awardRaiderPoints(guildId, runId, dungeonKey);
-            } catch (err) {
-                // Log error but don't fail the request
-                logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award raider points for run');
+            // Award completions to raiders from the last key pop snapshot (if any key pops occurred)
+            if (keyPopCount > 0) {
+                try {
+                    const awardedCount = await awardCompletionsToKeyPopSnapshot(guildId, runId, keyPopCount, dungeonKey);
+                    logger.info({ runId, keyPopCount, awardedCount }, 'Awarded completions to final key pop snapshot on run end');
+                } catch (err) {
+                    // Log error but don't fail the request
+                    logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award completions from final key pop snapshot');
+                }
+            } else {
+                // No key pops occurred - fall back to old behavior (award to all joined raiders)
+                // This maintains backward compatibility for runs that end without any key pops
+                try {
+                    await awardRaiderPoints(guildId, runId, dungeonKey);
+                } catch (err) {
+                    // Log error but don't fail the request
+                    logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award raider points for run');
+                }
             }
         }
 
@@ -343,6 +393,27 @@ export default async function runsRoutes(app: FastifyInstance) {
         await query(
             `UPDATE run SET post_message_id = $2::bigint WHERE id = $1::bigint`,
             [runId, b.data.postMessageId]
+        );
+
+        return reply.send({ ok: true });
+    });
+
+    /**
+     * POST /runs/:id/ping-message
+     * Update the ping message id for a run (for tracking the latest ping to delete it when sending a new one).
+     */
+    app.post('/runs/:id/ping-message', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({ pingMessageId: zSnowflake });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+        await query(
+            `UPDATE run SET ping_message_id = $2::bigint WHERE id = $1::bigint`,
+            [runId, b.data.pingMessageId]
         );
 
         return reply.send({ ok: true });
@@ -372,9 +443,14 @@ export default async function runsRoutes(app: FastifyInstance) {
             party: string | null;
             location: string | null;
             description: string | null;
+            role_id: string | null;
+            ping_message_id: string | null;
+            key_pop_count: number;
+            chain_amount: number | null;
         }>(
             `SELECT id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
-                    started_at, ended_at, key_window_ends_at, party, location, description
+                    started_at, ended_at, key_window_ends_at, party, location, description, role_id, ping_message_id,
+                    key_pop_count, chain_amount
          FROM run
         WHERE id = $1::bigint`,
             [runId]
@@ -397,6 +473,10 @@ export default async function runsRoutes(app: FastifyInstance) {
             party: r.party,
             location: r.location,
             description: r.description,
+            roleId: r.role_id,
+            pingMessageId: r.ping_message_id,
+            keyPopCount: r.key_pop_count,
+            chainAmount: r.chain_amount,
         });
     });
 
@@ -445,8 +525,10 @@ export default async function runsRoutes(app: FastifyInstance) {
             organizer_id: string;
             created_at: string;
             auto_end_minutes: number;
+            role_id: string | null;
+            ping_message_id: string | null;
         }>(
-            `SELECT id, guild_id, channel_id, post_message_id, dungeon_label, organizer_id, created_at, auto_end_minutes
+            `SELECT id, guild_id, channel_id, post_message_id, dungeon_label, organizer_id, created_at, auto_end_minutes, role_id, ping_message_id
              FROM run
              WHERE status != 'ended'
                AND created_at + (auto_end_minutes || ' minutes')::interval < NOW()
@@ -514,7 +596,8 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Body: { actor_user_id: Snowflake, seconds?: number }
      * Sets key_window_ends_at to now() + seconds (default 30).
      * Requires status='live' and actor must be organizer.
-     * Returns { key_window_ends_at: ISO string }.
+     * Increments key_pop_count, snapshots current raiders, and awards completions to previous snapshot.
+     * Returns { key_window_ends_at: ISO string, key_pop_count: number }.
      */
     app.patch('/runs/:id/key-window', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -531,13 +614,13 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { actor_user_id, seconds } = b.data;
 
-        // Read current status AND organizer_id
-        const cur = await query<{ status: string; organizer_id: string }>(
-            `SELECT status, organizer_id FROM run WHERE id = $1::bigint`,
+        // Read current status, organizer_id, guild_id, dungeon_key, and key_pop_count
+        const cur = await query<{ status: string; organizer_id: string; guild_id: string; dungeon_key: string; key_pop_count: number }>(
+            `SELECT status, organizer_id, guild_id, dungeon_key, key_pop_count FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const { status, organizer_id } = cur.rows[0];
+        const { status, organizer_id, guild_id, dungeon_key, key_pop_count } = cur.rows[0];
 
         // Authorization: actor must be the organizer
         if (actor_user_id !== organizer_id) {
@@ -554,16 +637,41 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
-        // Set key_window_ends_at = now() + seconds
+        // Increment key_pop_count and set key_window_ends_at
+        const newKeyPopCount = key_pop_count + 1;
         const res = await query<{ key_window_ends_at: string }>(
             `UPDATE run
-             SET key_window_ends_at = now() + ($2 || ' seconds')::interval
+             SET key_window_ends_at = now() + ($2 || ' seconds')::interval,
+                 key_pop_count = $3
              WHERE id = $1::bigint
              RETURNING key_window_ends_at`,
-            [runId, seconds]
+            [runId, seconds, newKeyPopCount]
         );
 
-        return reply.send({ key_window_ends_at: res.rows[0].key_window_ends_at });
+        // If this is not the first key pop, award completions to the previous snapshot
+        if (key_pop_count > 0) {
+            try {
+                await awardCompletionsToKeyPopSnapshot(guild_id, runId, key_pop_count, dungeon_key);
+                logger.info({ runId, previousKeyPop: key_pop_count, newKeyPop: newKeyPopCount }, 'Awarded completions to previous key pop snapshot');
+            } catch (err) {
+                logger.error({ err, runId, keyPopNumber: key_pop_count }, 'Failed to award completions to previous key pop snapshot');
+                // Don't fail the request - key pop should still work even if awarding fails
+            }
+        }
+
+        // Snapshot current joined raiders for this new key pop
+        try {
+            const snapshotCount = await snapshotRaidersAtKeyPop(runId, newKeyPopCount);
+            logger.info({ runId, keyPopNumber: newKeyPopCount, snapshotCount }, 'Created key pop snapshot');
+        } catch (err) {
+            logger.error({ err, runId, keyPopNumber: newKeyPopCount }, 'Failed to create key pop snapshot');
+            // Don't fail the request - key pop should still work even if snapshot fails
+        }
+
+        return reply.send({ 
+            key_window_ends_at: res.rows[0].key_window_ends_at,
+            key_pop_count: newKeyPopCount
+        });
     });
 
     /**
@@ -670,6 +778,59 @@ export default async function runsRoutes(app: FastifyInstance) {
         );
 
         return reply.send({ ok: true, location });
+    });
+
+    /**
+     * PATCH /runs/:id/chain-amount
+     * Body: { actorId: Snowflake, actorRoles?: string[], chainAmount: number }
+     * Updates the chain amount for a run (e.g., 5 for a 5-chain).
+     * Authorization: actorId must match run.organizer_id OR have organizer role.
+     * Returns { ok: true, chainAmount: number }.
+     */
+    app.patch('/runs/:id/chain-amount', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            actorId: zSnowflake,
+            actorRoles: z.array(zSnowflake).optional(),
+            chainAmount: z.number().int().positive().max(99),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) {
+            return Errors.validation(reply);
+        }
+        const runId = Number(p.data.id);
+        const { actorId, actorRoles, chainAmount } = b.data;
+
+        // Read current status AND organizer_id AND guild_id
+        const cur = await query<{ status: string; organizer_id: string; guild_id: string }>(
+            `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
+        const { status, organizer_id, guild_id } = cur.rows[0];
+
+        // Authorization: actor must be the organizer OR have organizer role
+        const isOrganizer = actorId === organizer_id;
+        const hasOrganizerRole = await hasInternalRole(guild_id, actorId, 'organizer', actorRoles);
+        
+        if (!isOrganizer && !hasOrganizerRole) {
+            return Errors.notOrganizer(reply);
+        }
+
+        // Don't allow updating ended runs
+        if (status === 'ended') {
+            return Errors.runClosed(reply);
+        }
+
+        // Update chain amount
+        await query(
+            `UPDATE run SET chain_amount = $2 WHERE id = $1::bigint`,
+            [runId, chainAmount]
+        );
+
+        return reply.send({ ok: true, chainAmount });
     });
 
     /**

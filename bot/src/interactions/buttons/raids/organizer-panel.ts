@@ -60,7 +60,7 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
     let controls: ActionRowBuilder<ButtonBuilder>[];
 
     if (run.status === 'open') {
-        // Starting phase: Start, Cancel (row 1) + Set Party, Set Location (row 2)
+        // Starting phase: Start, Cancel (row 1) + Set Party, Set Location, Chain Amount (row 2)
         const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
                 .setCustomId(`run:start:${runId}`)
@@ -79,6 +79,10 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
             new ButtonBuilder()
                 .setCustomId(`run:setlocation:${runId}`)
                 .setLabel('Set Location')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`run:setchain:${runId}`)
+                .setLabel('Chain Amount')
                 .setStyle(ButtonStyle.Secondary)
         );
         controls = [row1, row2];
@@ -105,8 +109,7 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
             new ButtonBuilder()
                 .setCustomId(`run:ping:${runId}`)
                 .setLabel('Ping Raiders')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(true), // Placeholder for future implementation
+                .setStyle(ButtonStyle.Primary),
             new ButtonBuilder()
                 .setCustomId(`run:note:${runId}`)
                 .setLabel('Update Note')
@@ -122,6 +125,10 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
             new ButtonBuilder()
                 .setCustomId(`run:setlocation:${runId}`)
                 .setLabel('Set Location')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`run:setchain:${runId}`)
+                .setLabel('Chain Amount')
                 .setStyle(ButtonStyle.Secondary)
         );
         controls = [row1, row2];

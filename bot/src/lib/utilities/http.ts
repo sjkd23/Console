@@ -188,6 +188,34 @@ export async function setGuildChannels(
     }).then(handle);
 }
 
+/** Get guild dungeon role ping mappings (GET /guilds/:guild_id/dungeon-role-pings) */
+export async function getDungeonRolePings(
+    guildId: string
+): Promise<{ dungeon_role_pings: Record<string, string> }> {
+    return getJSON(`/guilds/${guildId}/dungeon-role-pings`);
+}
+
+/** Update guild dungeon role ping mapping (PUT /guilds/:guild_id/dungeon-role-pings) */
+export async function setDungeonRolePing(
+    guildId: string,
+    payload: {
+        actor_user_id: string;
+        dungeon_key: string;
+        discord_role_id: string | null;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+    }
+): Promise<{ 
+    dungeon_role_pings: Record<string, string>;
+    updated: { dungeon_key: string; discord_role_id: string | null };
+}> {
+    return fetch(`${BASE}/guilds/${guildId}/dungeon-role-pings`, {
+        method: 'PUT',
+        headers: headers(),
+        body: JSON.stringify(payload),
+    }).then(handle);
+}
+
 /** Create a punishment (POST /punishments) */
 export async function createPunishment(payload: {
     actor_user_id: string;
@@ -325,6 +353,7 @@ export async function updateQuotaRoleConfig(
         reset_at?: string;
         created_at?: string;
         panel_message_id?: string | null;
+        moderation_points?: number;
     }
 ): Promise<{
     config: {
@@ -333,6 +362,7 @@ export async function updateQuotaRoleConfig(
         required_points: number;
         reset_at: string;
         panel_message_id: string | null;
+        moderation_points: number;
     };
     dungeon_overrides: Record<string, number>;
 }> {
@@ -402,6 +432,22 @@ export async function getQuotaLeaderboard(
     leaderboard: Array<{ user_id: string; points: number; runs: number }>;
 }> {
     return postJSON(`/quota/leaderboard/${guildId}/${roleId}`, { member_user_ids: memberUserIds });
+}
+
+/** Award moderation points for verification activities (POST /quota/award-moderation-points/:guild_id/:user_id) */
+export async function awardModerationPoints(
+    guildId: string,
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+    }
+): Promise<{
+    points_awarded: number;
+    roles_awarded?: number;
+    message?: string;
+}> {
+    return postJSON(`/quota/award-moderation-points/${guildId}/${userId}`, payload);
 }
 
 /** Get raider points configuration for all dungeons (GET /quota/raider-points/:guild_id) */
@@ -633,4 +679,35 @@ export async function updateGuildVerificationConfig(
         body: JSON.stringify(config),
     });
     return handle(res);
+}
+
+/** Get leaderboard (GET /quota/leaderboard/:guild_id) */
+export async function getLeaderboard(
+    guildId: string,
+    category: 'runs_organized' | 'keys_popped' | 'dungeon_completions' | 'points' | 'quota_points',
+    dungeonKey: string = 'all',
+    since?: string,
+    until?: string
+): Promise<{
+    guild_id: string;
+    category: string;
+    dungeon_key: string;
+    since: string | null;
+    until: string | null;
+    leaderboard: Array<{ user_id: string; count: number }>;
+}> {
+    const params = new URLSearchParams({
+        category,
+        dungeon_key: dungeonKey,
+    });
+    
+    if (since) {
+        params.append('since', since);
+    }
+    
+    if (until) {
+        params.append('until', until);
+    }
+    
+    return getJSON(`/quota/leaderboard/${guildId}?${params.toString()}`);
 }

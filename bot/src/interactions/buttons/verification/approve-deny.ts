@@ -22,6 +22,8 @@ import {
     logVerificationEvent,
 } from '../../../lib/verification/verification.js';
 import { hasInternalRole } from '../../../lib/permissions/permissions.js';
+import { awardModerationPoints } from '../../../lib/utilities/http.js';
+import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 
 const DENIAL_REASON_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
@@ -230,6 +232,26 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
             `<@${userId}> has been verified as **${ign}**.\n` +
             `They have been notified via DM.`
         );
+
+        // Award moderation points if configured
+        try {
+            const actorRoles = getMemberRoleIds(actorMember);
+            const moderationPointsResult = await awardModerationPoints(
+                guildId,
+                interaction.user.id,
+                {
+                    actor_user_id: interaction.user.id,
+                    actor_roles: actorRoles,
+                }
+            );
+            
+            if (moderationPointsResult.points_awarded > 0) {
+                console.log(`[VerificationApproveModal] Awarded ${moderationPointsResult.points_awarded} moderation points to ${interaction.user.id}`);
+            }
+        } catch (modPointsErr) {
+            // Non-critical error - log but don't fail the verification
+            console.error('[VerificationApproveModal] Failed to award moderation points:', modPointsErr);
+        }
 
         // Log approval
         await logVerificationEvent(

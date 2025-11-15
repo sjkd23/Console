@@ -69,3 +69,69 @@ export async function getGuildChannels(guildId: string): Promise<Record<string, 
     }
     return mapping;
 }
+
+/**
+ * Get all dungeon role ping mappings from DB.
+ * Returns Record<dungeon_key, discord_role_id>
+ * 
+ * @param guildId - Discord guild ID
+ * @returns Map of dungeon keys to Discord role IDs
+ */
+export async function getDungeonRolePings(guildId: string): Promise<Record<string, string>> {
+    const res = await query<{ dungeon_key: string; discord_role_id: string }>(
+        `SELECT dungeon_key, discord_role_id FROM dungeon_role_ping WHERE guild_id = $1::bigint`,
+        [guildId]
+    );
+
+    const mapping: Record<string, string> = {};
+    for (const row of res.rows) {
+        mapping[row.dungeon_key] = row.discord_role_id;
+    }
+    return mapping;
+}
+
+/**
+ * Get the role ID for a specific dungeon ping configuration.
+ * 
+ * @param guildId - Discord guild ID
+ * @param dungeonKey - Dungeon key (e.g., 'FUNGAL_CAVERN')
+ * @returns Discord role ID or null if not configured
+ */
+export async function getDungeonRolePing(guildId: string, dungeonKey: string): Promise<string | null> {
+    const res = await query<{ discord_role_id: string }>(
+        `SELECT discord_role_id FROM dungeon_role_ping WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
+    );
+
+    return res.rows.length > 0 ? res.rows[0].discord_role_id : null;
+}
+
+/**
+ * Set or update a dungeon role ping configuration.
+ * 
+ * @param guildId - Discord guild ID
+ * @param dungeonKey - Dungeon key
+ * @param discordRoleId - Discord role ID to ping
+ */
+export async function setDungeonRolePing(guildId: string, dungeonKey: string, discordRoleId: string): Promise<void> {
+    await query(
+        `INSERT INTO dungeon_role_ping (guild_id, dungeon_key, discord_role_id, updated_at)
+         VALUES ($1::bigint, $2, $3::bigint, NOW())
+         ON CONFLICT (guild_id, dungeon_key)
+         DO UPDATE SET discord_role_id = EXCLUDED.discord_role_id, updated_at = NOW()`,
+        [guildId, dungeonKey, discordRoleId]
+    );
+}
+
+/**
+ * Delete a dungeon role ping configuration.
+ * 
+ * @param guildId - Discord guild ID
+ * @param dungeonKey - Dungeon key
+ */
+export async function deleteDungeonRolePing(guildId: string, dungeonKey: string): Promise<void> {
+    await query(
+        `DELETE FROM dungeon_role_ping WHERE guild_id = $1::bigint AND dungeon_key = $2`,
+        [guildId, dungeonKey]
+    );
+}

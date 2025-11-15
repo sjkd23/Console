@@ -16,11 +16,13 @@ import {
 import { commands } from './commands/index.js';
 import { handleOrganizerPanel, handleOrganizerPanelConfirm, handleOrganizerPanelDeny } from './interactions/buttons/raids/organizer-panel.js';
 import { handleJoin } from './interactions/buttons/raids/join.js';
+import { handleLeave } from './interactions/buttons/raids/leave.js';
 import { handleStatus } from './interactions/buttons/raids/run-status.js';
 import { handleClassSelection } from './interactions/buttons/raids/class-selection.js';
 import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
-import { handleSetParty, handleSetLocation } from './interactions/buttons/raids/party-location.js';
+import { handleSetParty, handleSetLocation, handleSetChainAmount } from './interactions/buttons/raids/party-location.js';
 import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
+import { handlePingRaiders } from './interactions/buttons/raids/ping-raiders.js';
 import { handleHeadcountJoin } from './interactions/buttons/raids/headcount-join.js';
 import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.js';
 import { handleHeadcountOrganizerPanel, handleHeadcountOrganizerPanelConfirm, handleHeadcountOrganizerPanelDeny } from './interactions/buttons/raids/headcount-organizer-panel.js';
@@ -28,11 +30,13 @@ import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.j
 import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-convert.js';
 import { 
     handleQuotaConfigBasic, 
+    handleQuotaConfigModeration,
     handleQuotaConfigDungeons, 
     handleQuotaRefreshPanel,
     handleQuotaResetPanel,
     handleQuotaConfigStop,
     handleQuotaBasicModal,
+    handleQuotaModerationModal,
     handleQuotaDungeonModal,
     handleQuotaSelectDungeon,
 } from './interactions/buttons/config/quota-config.js';
@@ -191,6 +195,10 @@ client.on('interactionCreate', async (interaction) => {
                 await handleQuotaConfigBasic(interaction);
                 return;
             }
+            if (interaction.customId.startsWith('quota_config_moderation:')) {
+                await handleQuotaConfigModeration(interaction);
+                return;
+            }
             if (interaction.customId.startsWith('quota_config_dungeons:')) {
                 await handleQuotaConfigDungeons(interaction);
                 return;
@@ -284,6 +292,10 @@ client.on('interactionCreate', async (interaction) => {
                 await handleJoin(interaction, runId);
                 return;
             }
+            if (action === 'leave') {
+                await handleLeave(interaction, runId);
+                return;
+            }
             if (action === 'class') {
                 await handleClassSelection(interaction, runId);
                 return;
@@ -318,6 +330,14 @@ client.on('interactionCreate', async (interaction) => {
                 await handleSetLocation(interaction, runId);
                 return;
             }
+            if (action === 'setchain') {
+                await handleSetChainAmount(interaction, runId);
+                return;
+            }
+            if (action === 'ping') {
+                await handlePingRaiders(interaction, runId);
+                return;
+            }
 
             // fallback
             await interaction.reply({ content: 'Unknown action.', flags: MessageFlags.Ephemeral });
@@ -331,6 +351,10 @@ client.on('interactionCreate', async (interaction) => {
             }
             if (interaction.customId.startsWith('quota_basic_modal:')) {
                 await handleQuotaBasicModal(interaction);
+                return;
+            }
+            if (interaction.customId.startsWith('quota_moderation_modal:')) {
+                await handleQuotaModerationModal(interaction);
                 return;
             }
             if (interaction.customId.startsWith('quota_dungeon_modal:')) {

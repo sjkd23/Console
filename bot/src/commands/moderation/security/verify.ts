@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../../lib/permissions/permissions.js';
-import { verifyRaider, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../../lib/utilities/http.js';
+import { verifyRaider, BackendError, getGuildChannels, getRaider, getGuildRoles, awardModerationPoints } from '../../../lib/utilities/http.js';
 import { logCommandExecution, logVerificationAction } from '../../../lib/logging/bot-logger.js';
 
 /**
@@ -237,6 +237,25 @@ export const verify: SlashCommand = {
             await interaction.editReply({
                 embeds: [embed],
             });
+
+            // Award moderation points if configured
+            try {
+                const moderationPointsResult = await awardModerationPoints(
+                    interaction.guildId,
+                    interaction.user.id,
+                    {
+                        actor_user_id: interaction.user.id,
+                        actor_roles: actorRoles,
+                    }
+                );
+                
+                if (moderationPointsResult.points_awarded > 0) {
+                    console.log(`[Verify] Awarded ${moderationPointsResult.points_awarded} moderation points to ${interaction.user.id}`);
+                }
+            } catch (modPointsErr) {
+                // Non-critical error - log but don't fail the verification
+                console.error('[Verify] Failed to award moderation points:', modPointsErr);
+            }
 
             // Log to bot-log (brief since detailed log goes to veri_log)
             await logVerificationAction(

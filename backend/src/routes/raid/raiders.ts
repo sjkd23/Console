@@ -5,7 +5,6 @@ import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole } from '../../lib/auth/authorization.js';
-import { logQuotaEvent } from '../../lib/quota/quota.js';
 import { logAudit } from '../../lib/logging/audit.js';
 import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
 
@@ -182,20 +181,9 @@ export default async function raidersRoutes(app: FastifyInstance) {
         // Log audit event
         await logAudit(guild_id, actor_user_id, 'raider.verify', user_id, { ign });
 
-        // Log quota event for security member
-        try {
-            await logQuotaEvent(
-                guild_id,
-                actor_user_id,
-                'verify_member',
-                `verify:${user_id}`,
-                undefined, // No dungeon for verifications
-                1 // Default: 1 point per verification
-            );
-        } catch (err) {
-            // Log error but don't fail the request
-            console.error(`[Raiders] Failed to log quota event for verification of user ${user_id}:`, err);
-        }
+        // Note: Quota points for verification are now handled by the bot calling
+        // POST /quota/award-moderation-points after verification succeeds.
+        // This allows for proper role-based moderation_points configuration.
 
         const raider = res.rows[0];
         return reply.code(200).send({

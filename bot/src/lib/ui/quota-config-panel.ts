@@ -14,7 +14,7 @@ import { formatPoints } from '../formatting/format-helpers.js';
  */
 export async function buildQuotaConfigPanel(guildId: string, roleId: string, userId?: string): Promise<{
     embed: EmbedBuilder;
-    buttons: ActionRowBuilder<ButtonBuilder>;
+    buttons: ActionRowBuilder<ButtonBuilder>[];
     config: any | null;
 }> {
     // Fetch current config from backend
@@ -47,7 +47,8 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         
         embed.addFields(
             { name: '🎯 Required Points', value: formatPoints(config.required_points), inline: true },
-            { name: '📅 Resets', value: `<t:${resetTimestamp}:F>\n(<t:${resetTimestamp}:R>)`, inline: true }
+            { name: '📅 Resets', value: `<t:${resetTimestamp}:F>\n(<t:${resetTimestamp}:R>)`, inline: true },
+            { name: '✅ Moderation Points', value: formatPoints(config.moderation_points), inline: true }
         );
 
         // Show dungeon overrides if any
@@ -78,13 +79,18 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
 
     // Build action buttons
     const userIdSuffix = userId ? `:${userId}` : '';
-    const buttons = new ActionRowBuilder<ButtonBuilder>()
+    const buttons1 = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId(`quota_config_basic:${roleId}${userIdSuffix}`)
                 .setLabel('Set Basic Config')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('⚙️'),
+            new ButtonBuilder()
+                .setCustomId(`quota_config_moderation:${roleId}${userIdSuffix}`)
+                .setLabel('Moderation Points')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('✅'),
             new ButtonBuilder()
                 .setCustomId(`quota_config_dungeons:${roleId}${userIdSuffix}`)
                 .setLabel('Configure Dungeons')
@@ -101,7 +107,12 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 .setLabel('Reset Panel')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🔁')
-                .setDisabled(!config), // Only enable if config exists
+                .setDisabled(!config) // Only enable if config exists
+        );
+
+    // Second row with Stop button
+    const buttons2 = new ActionRowBuilder<ButtonBuilder>()
+        .addComponents(
             new ButtonBuilder()
                 .setCustomId(`quota_config_stop:${roleId}${userIdSuffix}`)
                 .setLabel('Stop')
@@ -109,5 +120,5 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 .setEmoji('🛑')
         );
 
-    return { embed, buttons, config };
+    return { embed, buttons: [buttons1, buttons2], config };
 }

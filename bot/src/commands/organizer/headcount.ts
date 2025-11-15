@@ -19,7 +19,7 @@ import { dungeonByCode, searchDungeons } from '../../constants/dungeons/dungeon-
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import { getDungeonKeyEmojiIdentifier } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
-import { getGuildChannels } from '../../lib/utilities/http.js';
+import { getGuildChannels, getDungeonRolePings } from '../../lib/utilities/http.js';
 
 export const headcount: SlashCommand = {
     requiredRole: 'organizer',
@@ -175,8 +175,32 @@ export const headcount: SlashCommand = {
             }
 
             // Post headcount panel to raid channel
+            // Build content with @here and any configured dungeon role pings
+            let content = '@here';
+            
+            // Check if there are configured role pings for any of the selected dungeons
+            try {
+                const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
+                const rolePings = new Set<string>();
+                
+                for (const dungeon of selectedDungeons) {
+                    const roleId = dungeon_role_pings[dungeon.codeName];
+                    if (roleId) {
+                        rolePings.add(roleId);
+                    }
+                }
+                
+                // Add unique role pings to content
+                for (const roleId of rolePings) {
+                    content += ` <@&${roleId}>`;
+                }
+            } catch (e) {
+                console.error('Failed to fetch dungeon role pings:', e);
+                // Continue without custom role pings
+            }
+            
             const sent = await raidChannel.send({
-                content: '@here',
+                content,
                 embeds: [embed],
                 components: [buttonRow, ...keyButtonRows]
             });

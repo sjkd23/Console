@@ -6,7 +6,7 @@ import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { canManageGuildRoles } from '../../lib/auth/authorization.js';
 import { logAudit } from '../../lib/logging/audit.js';
-import { ensureGuildExists, ensureMemberExists, getGuildRoles, getGuildChannels } from '../../lib/database/database-helpers.js';
+import { ensureGuildExists, ensureMemberExists, getGuildRoles, getGuildChannels, getDungeonRolePings, setDungeonRolePing, deleteDungeonRolePing } from '../../lib/database/database-helpers.js';
 
 /**
  * Internal role keys (must match role_catalog entries)
@@ -75,6 +75,19 @@ const PutChannelsBody = z.object({
             obj => Object.keys(obj).length > 0,
             'At least one channel must be provided'
         ),
+    // Optional: bot can send actor's Discord role IDs for backend-side checks
+    actor_roles: z.array(zSnowflake).optional(),
+    // Flag to indicate if actor has Discord Administrator permission
+    actor_has_admin_permission: z.boolean().optional(),
+});
+
+/**
+ * Body schema for PUT /guilds/:guild_id/dungeon-role-pings
+ */
+const PutDungeonRolePingsBody = z.object({
+    actor_user_id: zSnowflake,
+    dungeon_key: z.string(),
+    discord_role_id: zSnowflake.nullable(), // null means delete the mapping
     // Optional: bot can send actor's Discord role IDs for backend-side checks
     actor_roles: z.array(zSnowflake).optional(),
     // Flag to indicate if actor has Discord Administrator permission
@@ -330,5 +343,113 @@ export default async function guildsRoutes(app: FastifyInstance) {
         }
 
         return reply.send(response);
+    });
+
+    /**
+     * GET /guilds/:guild_id/dungeon-role-pings
+     * Returns the current dungeon role ping mappings for a guild.
+     * Response: { dungeon_role_pings: Record<dungeon_key, discord_role_id> }
+     */
+    app.get('/guilds/:guild_id/dungeon-role-pings', async (req, reply) => {
+        const Params = z.object({ guild_id: zSnowflake });
+        const parsed = Params.safeParse(req.params);
+
+        if (!parsed.success) {
+            return Errors.validation(reply, 'Invalid guild_id');
+        }
+
+        const { guild_id } = parsed.data;
+        const dungeonRolePings = await getDungeonRolePings(guild_id);
+
+        return reply.send({ dungeon_role_pings: dungeonRolePings });
+    });
+
+    /**
+     * PUT /guilds/:guild_id/dungeon-role-pings
+     * Updates a dungeon role ping mapping for a guild.
+     * Body: { actor_user_id, dungeon_key, discord_role_id, actor_roles?, actor_has_admin_permission? }
+     * 
+     * Behavior:
+     * - If discord_role_id is provided: upsert mapping
+     * - If discord_role_id is null: delete mapping
+     * 
+     * Authorization: actor must be a moderator or have admin permission
+     */
+    app.put('/guilds/:guild_id/dungeon-role-pings', async (req, reply) => {
+        const Params = z.object({ guild_id: zSnowflake });
+        const paramsCheck = Params.safeParse(req.params);
+
+        if (!paramsCheck.success) {
+            return Errors.validation(reply, 'Invalid guild_id');
+        }
+
+        const { guild_id } = paramsCheck.data;
+
+        const bodyCheck = PutDungeonRolePingsBody.safeParse(req.body);
+        if (!bodyCheck.success) {
+            const msg = bodyCheck.error.issues.map(i => i.message).join('; ');
+            return Errors.validation(reply, msg);
+        }
+
+        const { actor_user_id, dungeon_key, discord_role_id, actor_roles, actor_has_admin_permission } = bodyCheck.data;
+
+        // Authorization check: actor must have moderator role or Discord admin permission
+        let authorized = false;
+
+        // Check Discord Administrator permission first
+        if (actor_has_admin_permission) {
+            console.log(`[Dungeon Role Pings] User ${actor_user_id} authorized via Discord Administrator permission`);
+            authorized = true;
+        }
+
+        // If not admin, check for mapped moderator or administrator role
+        if (!authorized) {
+            authorized = await canManageGuildRoles(guild_id, actor_user_id, actor_roles);
+            if (authorized) {
+                console.log(`[Dungeon Role Pings] User ${actor_user_id} authorized via mapped administrator/moderator role`);
+            }
+        }
+
+        if (!authorized) {
+            console.log(`[Dungeon Role Pings] User ${actor_user_id} in guild ${guild_id} denied - no admin/moderator permission or role`);
+            return Errors.notAuthorized(reply);
+        }
+
+        // Get current mapping for audit diff
+        const previousRoleId = await getDungeonRolePings(guild_id);
+
+        // Ensure guild exists
+        await ensureGuildExists(guild_id);
+
+        // Ensure actor exists in member table before audit logging
+        await ensureMemberExists(actor_user_id);
+
+        if (discord_role_id === null) {
+            // Delete mapping
+            await deleteDungeonRolePing(guild_id, dungeon_key);
+            console.log(`[Dungeon Role Pings] Deleted dungeon role ping: guild=${guild_id}, dungeon=${dungeon_key}`);
+        } else {
+            // Upsert mapping
+            await setDungeonRolePing(guild_id, dungeon_key, discord_role_id);
+            console.log(`[Dungeon Role Pings] Set dungeon role ping: guild=${guild_id}, dungeon=${dungeon_key}, role=${discord_role_id}`);
+        }
+
+        // Get updated mapping
+        const currentMapping = await getDungeonRolePings(guild_id);
+
+        // Log audit event
+        await logAudit(guild_id, actor_user_id, 'guild.dungeon_role_pings.set', guild_id, {
+            dungeon_key,
+            previous_role_id: previousRoleId[dungeon_key] || null,
+            current_role_id: discord_role_id,
+        });
+
+        return reply.send({ 
+            dungeon_role_pings: currentMapping,
+            updated: {
+                dungeon_key,
+                discord_role_id
+            }
+        });
     });
 }

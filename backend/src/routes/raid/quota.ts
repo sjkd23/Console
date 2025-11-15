@@ -28,6 +28,7 @@ import {
     getKeyPopPointsForDungeon,
     setKeyPopPointsForDungeon,
     deleteKeyPopPointsForDungeon,
+    getLeaderboard,
 } from '../../lib/quota/quota.js';
 
 /**
@@ -329,7 +330,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
     /**
      * PUT /quota/config/:guild_id/:role_id
      * Update quota configuration for a specific role
-     * Body: { actor_user_id, actor_roles?, actor_has_admin_permission?, required_points?, reset_at? }
+     * Body: { actor_user_id, actor_roles?, actor_has_admin_permission?, required_points?, reset_at?, moderation_points? }
      */
     app.put('/quota/config/:guild_id/:role_id', async (req, reply) => {
         const Params = z.object({
@@ -348,6 +349,10 @@ export default async function quotaRoutes(app: FastifyInstance) {
             reset_at: z.string().optional(), // ISO timestamp YYYY-MM-DDTHH:MM:SSZ
             created_at: z.string().optional(), // ISO timestamp - for resetting quota periods
             panel_message_id: zSnowflake.nullable().optional(),
+            moderation_points: z.number().min(0).optional().refine(
+                (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
+                { message: 'Moderation points must have at most 2 decimal places' }
+            ),
         });
 
         const p = Params.safeParse(req.params);
@@ -997,4 +1002,171 @@ export default async function quotaRoutes(app: FastifyInstance) {
             return Errors.internal(reply, 'Failed to adjust points');
         }
     });
+
+    /**
+     * GET /quota/leaderboard/:guild_id
+     * Get leaderboard for a category (runs organized, keys popped, dungeon completions, points, or quota points)
+     * Query params: 
+     *   - category (required): runs_organized, keys_popped, dungeon_completions, points, or quota_points
+     *   - dungeon_key (optional): specific dungeon or 'all' (defaults to 'all')
+     *   - since (optional): ISO date string for start date (inclusive)
+     *   - until (optional): ISO date string for end date (inclusive)
+     * 
+     * Returns: { leaderboard: Array<{ user_id: string; count: number }> }
+     */
+    app.get('/quota/leaderboard/:guild_id', async (req, reply) => {
+        const { guild_id } = req.params as { guild_id: string };
+        const { category, dungeon_key, since, until } = req.query as { 
+            category?: string; 
+            dungeon_key?: string; 
+            since?: string;
+            until?: string;
+        };
+
+        // Validate category
+        const validCategories = ['runs_organized', 'keys_popped', 'dungeon_completions', 'points', 'quota_points'];
+        if (!category || !validCategories.includes(category)) {
+            return Errors.validation(reply, `Invalid or missing category. Must be one of: ${validCategories.join(', ')}`);
+        }
+
+        // Parse dates if provided
+        let sinceDate: Date | undefined;
+        let untilDate: Date | undefined;
+
+        if (since) {
+            sinceDate = new Date(since);
+            if (isNaN(sinceDate.getTime())) {
+                return Errors.validation(reply, 'Invalid "since" date format. Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.sssZ)');
+            }
+        }
+
+        if (until) {
+            untilDate = new Date(until);
+            if (isNaN(untilDate.getTime())) {
+                return Errors.validation(reply, 'Invalid "until" date format. Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.sssZ)');
+            }
+        }
+
+        try {
+            const leaderboard = await getLeaderboard(
+                guild_id,
+                category as 'runs_organized' | 'keys_popped' | 'dungeon_completions' | 'points' | 'quota_points',
+                dungeon_key || 'all',
+                sinceDate,
+                untilDate
+            );
+
+            return reply.send({
+                guild_id,
+                category,
+                dungeon_key: dungeon_key || 'all',
+                since: since || null,
+                until: until || null,
+                leaderboard,
+            });
+        } catch (err) {
+            console.error(`[Quota] Failed to get leaderboard:`, err);
+            return Errors.internal(reply, 'Failed to retrieve leaderboard');
+        }
+    });
+
+    /**
+     * POST /quota/award-moderation-points/:guild_id/:user_id
+     * Award moderation points to a user for verification activities
+     * This is called automatically when staff verify members
+     * 
+     * Body: { actor_user_id, actor_roles? }
+     * Returns: { points_awarded: number }
+     */
+    app.post('/quota/award-moderation-points/:guild_id/:user_id', async (req, reply) => {
+        const Params = z.object({
+            guild_id: zSnowflake,
+            user_id: zSnowflake,
+        });
+
+        const Body = z.object({
+            actor_user_id: zSnowflake,
+            actor_roles: z.array(zSnowflake).optional(),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+
+        if (!p.success || !b.success) {
+            return Errors.validation(reply, 'Invalid request');
+        }
+
+        const { guild_id, user_id } = p.data;
+        const { actor_user_id, actor_roles } = b.data;
+
+        // Authorization: actor must have security role or higher
+        const hasSecurityRole = await hasInternalRole(guild_id, actor_user_id, 'security', actor_roles);
+        if (!hasSecurityRole) {
+            console.log(`[Quota] User ${actor_user_id} in guild ${guild_id} denied - no security role`);
+            return reply.code(403).send({
+                error: {
+                    code: 'NOT_SECURITY',
+                    message: 'You must have the Security role to award moderation points',
+                },
+            });
+        }
+
+        // Ensure both actor and target user exist in the member table
+        try {
+            await ensureGuildExists(guild_id);
+            await ensureMemberExists(actor_user_id);
+            await ensureMemberExists(user_id);
+        } catch (err) {
+            console.error(`[Quota] Failed to ensure members exist:`, err);
+            return Errors.internal(reply, 'Failed to process moderation points');
+        }
+
+        try {
+            // Get all quota role configs for this guild to find moderation_points settings
+            const configs = await getAllQuotaRoleConfigs(guild_id);
+            
+            // Filter to only configs where the user has the role AND moderation_points > 0
+            const relevantConfigs = configs.filter(config => {
+                const hasModerationPoints = config.moderation_points > 0;
+                const hasRole = actor_roles?.includes(config.discord_role_id);
+                return hasModerationPoints && hasRole;
+            });
+
+            if (relevantConfigs.length === 0) {
+                // No quota roles with moderation points configured for this user
+                return reply.send({
+                    points_awarded: 0,
+                    message: 'No moderation points configured for your roles',
+                });
+            }
+
+            // Award points for each relevant role
+            let totalPointsAwarded = 0;
+            for (const config of relevantConfigs) {
+                const event = await logQuotaEvent(
+                    guild_id,
+                    user_id,
+                    'verify_member',
+                    `verification:${Date.now()}:${user_id}`, // Unique subject_id per verification
+                    undefined, // No dungeon key for verifications
+                    config.moderation_points // Use the configured moderation_points
+                );
+
+                if (event) {
+                    totalPointsAwarded += Number(event.quota_points);
+                }
+            }
+
+            console.log(`[Quota] Awarded ${totalPointsAwarded} moderation points to ${user_id} in guild ${guild_id} for ${relevantConfigs.length} role(s)`);
+
+            return reply.send({
+                points_awarded: totalPointsAwarded,
+                roles_awarded: relevantConfigs.length,
+            });
+        } catch (err) {
+            console.error(`[Quota] Failed to award moderation points:`, err);
+            return Errors.internal(reply, 'Failed to award moderation points');
+        }
+    });
 }
+

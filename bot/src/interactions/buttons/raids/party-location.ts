@@ -340,3 +340,121 @@ async function updatePublicMessage(
     embed.setFields(fields as any);
     await pubMsg.edit({ embeds: [embed, ...embeds.slice(1)] });
 }
+
+/**
+ * Handle "Chain Amount" button press.
+ * Shows a modal for chain amount input, updates backend, and refreshes the public message.
+ */
+export async function handleSetChainAmount(btn: ButtonInteraction, runId: string) {
+    // Show modal for chain amount input
+    const modal = new ModalBuilder()
+        .setCustomId(`modal:chain:${runId}`)
+        .setTitle('Set Chain Amount');
+
+    const chainInput = new TextInputBuilder()
+        .setCustomId('chain')
+        .setLabel('Total Chains')
+        .setPlaceholder('e.g., 5 for a 5-chain')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(2);
+
+    const row = new ActionRowBuilder<ModalActionRowComponentBuilder>().addComponents(chainInput);
+    modal.addComponents(row);
+
+    await btn.showModal(modal);
+
+    // Wait for modal submission
+    try {
+        const submitted = await btn.awaitModalSubmit({
+            time: 120000, // 2 minutes
+            filter: i => i.customId === `modal:chain:${runId}` && i.user.id === btn.user.id
+        });
+
+        await submitted.deferUpdate();
+
+        const chainStr = submitted.fields.getTextInputValue('chain').trim();
+        const chainAmount = parseInt(chainStr);
+
+        // Validate input
+        if (isNaN(chainAmount) || chainAmount < 1 || chainAmount > 99) {
+            await submitted.followUp({ 
+                content: '❌ Chain amount must be a number between 1 and 99', 
+                ephemeral: true 
+            });
+            return;
+        }
+
+        // Get member for role IDs
+        if (!btn.guild) {
+            await submitted.followUp({ content: 'This command can only be used in a server.', ephemeral: true });
+            return;
+        }
+
+        const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
+
+        // Update backend
+        try {
+            await patchJSON(`/runs/${runId}/chain-amount`, {
+                actorId: btn.user.id,
+                actorRoles: getMemberRoleIds(member),
+                chainAmount
+            });
+        } catch (err) {
+            if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
+                await submitted.followUp({ content: 'Only the organizer can set chain amount.', ephemeral: true });
+                return;
+            }
+            const msg = err instanceof Error ? err.message : 'Unknown error';
+            await submitted.followUp({ content: `Error: ${msg}`, ephemeral: true });
+            return;
+        }
+
+        // Fetch updated run details
+        const run = await getJSON<{
+            channelId: string | null;
+            postMessageId: string | null;
+            status: string;
+            dungeonLabel: string;
+            dungeonKey: string;
+            organizerId: string;
+            keyPopCount: number;
+            chainAmount: number | null;
+            keyWindowEndsAt: string | null;
+        }>(`/runs/${runId}`);
+
+        if (!run.channelId || !run.postMessageId) {
+            await submitted.followUp({ content: 'Run record missing channel/message id.', ephemeral: true });
+            return;
+        }
+
+        // Update public message title to include chain tracking
+        const ch = await btn.client.channels.fetch(run.channelId).catch(() => null);
+        if (ch && ch.type === ChannelType.GuildText) {
+            const pubMsg = await ch.messages.fetch(run.postMessageId).catch(() => null);
+            if (pubMsg) {
+                const embeds = pubMsg.embeds ?? [];
+                if (embeds.length > 0) {
+                    const embed = EmbedBuilder.from(embeds[0]);
+                    
+                    // Build title with chain tracking
+                    const statusEmoji = run.status === 'live' ? '🟢' : '📋';
+                    const statusText = run.status === 'live' ? 'LIVE' : 'Starting';
+                    const chainText = run.chainAmount ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` : '';
+                    embed.setTitle(`${statusEmoji} ${statusText}: ${run.dungeonLabel}${chainText}`);
+                    
+                    await pubMsg.edit({ embeds: [embed, ...embeds.slice(1)] });
+                }
+            }
+        }
+
+        await submitted.followUp({ 
+            content: `✅ Chain amount set to: **${chainAmount}**\n\nThe raid title will now show "Chain 0/${chainAmount}" (updates as you press Key popped)`, 
+            ephemeral: true 
+        });
+    } catch (err) {
+        // Modal timeout or other error - no need to handle, Discord shows timeout message
+    }
+}
+

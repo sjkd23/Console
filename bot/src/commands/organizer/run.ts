@@ -12,7 +12,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
-import { postJSON, getGuildChannels } from '../../lib/utilities/http.js';
+import { postJSON, getGuildChannels, getDungeonRolePings } from '../../lib/utilities/http.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import { addRecentDungeon } from '../../lib/dungeon/dungeon-cache.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
@@ -21,6 +21,7 @@ import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { handleDungeonAutocomplete } from '../../lib/dungeon/dungeon-autocomplete.js';
 import { formatKeyLabel } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
+import { createRunRole } from '../../lib/utilities/run-role-manager.js';
 
 export const runCreate: SlashCommand = {
     requiredRole: 'organizer',
@@ -78,6 +79,15 @@ export const runCreate: SlashCommand = {
         // Track this dungeon as recently used for this guild
         addRecentDungeon(guild.id, codeName);
 
+        // Create the temporary role for this run
+        const role = await createRunRole(guild, interaction.user.username, d.dungeonName);
+        if (!role) {
+            await interaction.editReply(
+                '**Warning:** Failed to create the run role. The run will still be created, but members won\'t be automatically assigned a role.'
+            );
+            // Continue anyway - role creation failure shouldn't block run creation
+        }
+
         // Must be in a guild context
         if (!interaction.inGuild()) {
             await interaction.editReply(
@@ -133,7 +143,8 @@ export const runCreate: SlashCommand = {
                 description: desc,
                 party,
                 location,
-                autoEndMinutes: 120 // Auto-end runs after 2 hours
+                autoEndMinutes: 120, // Auto-end runs after 2 hours
+                roleId: role?.id // Store the created role ID
             });
 
             // Build the public embed (Starting/Lobby phase)
@@ -169,6 +180,10 @@ export const runCreate: SlashCommand = {
                     .setCustomId(`run:join:${runId}`)
                     .setLabel('Join')
                     .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                    .setCustomId(`run:leave:${runId}`)
+                    .setLabel('Leave')
+                    .setStyle(ButtonStyle.Danger),
                 new ButtonBuilder()
                     .setCustomId(`run:class:${runId}`)
                     .setLabel('Class')
@@ -208,6 +223,19 @@ export const runCreate: SlashCommand = {
 
             // Build message content with party/location if provided
             let content = '@here';
+            
+            // Check if there's a configured role ping for this dungeon
+            try {
+                const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
+                const roleId = dungeon_role_pings[codeName];
+                if (roleId) {
+                    content += ` <@&${roleId}>`;
+                }
+            } catch (e) {
+                console.error('Failed to fetch dungeon role pings:', e);
+                // Continue without custom role ping
+            }
+            
             if (party && location) {
                 content += ` Party: **${party}** | Location: **${location}**`;
             } else if (party) {

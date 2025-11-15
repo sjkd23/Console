@@ -282,6 +282,10 @@ async function convertHeadcountToRun(
             .setLabel('Join')
             .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
+            .setCustomId(`run:leave:${runId}`)
+            .setLabel('Leave')
+            .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
             .setCustomId(`run:class:${runId}`)
             .setLabel('Class')
             .setStyle(ButtonStyle.Primary),

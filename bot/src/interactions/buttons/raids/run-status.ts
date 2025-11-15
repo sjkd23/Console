@@ -4,6 +4,8 @@ import { getMemberRoleIds } from '../../../lib//permissions/permissions.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
+import { deleteRunRole } from '../../../lib/utilities/run-role-manager.js';
+import { sendRunPing } from '../../../lib/utilities/run-ping.js';
 
 export async function handleStatus(
     btn: ButtonInteraction,
@@ -27,6 +29,8 @@ export async function handleStatus(
         party: string | null;
         location: string | null;
         description: string | null;
+        roleId: string | null;
+        pingMessageId: string | null;
     }>(`/runs/${runId}`).catch(() => null);
 
     if (!run) {
@@ -119,6 +123,9 @@ export async function handleStatus(
         
         await pubMsg.edit({ content, embeds: [liveEmbed, ...embeds.slice(1)] });
         
+        // Send ping message to notify raiders
+        await sendRunPing(btn.client, parseInt(runId), btn.guild);
+        
         // Log status change to raid-log
         try {
             await logRunStatusChange(
@@ -168,8 +175,7 @@ export async function handleStatus(
             new ButtonBuilder()
                 .setCustomId(`run:ping:${runId}`)
                 .setLabel('Ping Raiders')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(true),
+                .setStyle(ButtonStyle.Primary),
             new ButtonBuilder()
                 .setCustomId(`run:note:${runId}`)
                 .setLabel('Update Note')
@@ -194,6 +200,26 @@ export async function handleStatus(
         // status === 'ended' or 'cancelled'
         const endLabel = status === 'cancelled' ? 'Cancelled' : 'Ended';
         const icon = status === 'cancelled' ? '❌' : '✅';
+        
+        // Delete the run role if it exists
+        if (run.roleId && btn.guild) {
+            await deleteRunRole(btn.guild, run.roleId);
+        }
+        
+        // Delete the ping message if it exists
+        if (run.pingMessageId) {
+            try {
+                const channel = await btn.client.channels.fetch(run.channelId!).catch(() => null);
+                if (channel && channel.isTextBased() && !channel.isDMBased()) {
+                    const pingMessage = await (channel as any).messages.fetch(run.pingMessageId).catch(() => null);
+                    if (pingMessage && pingMessage.deletable) {
+                        await pingMessage.delete();
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to delete ping message on run end:', err);
+            }
+        }
         
         // Build ended embed
         const endedEmbed = buildEndedEmbed(embeds[0], run, endLabel);

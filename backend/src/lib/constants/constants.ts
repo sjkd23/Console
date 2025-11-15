@@ -7,7 +7,7 @@
 export const RUN_STATUS = ['open', 'live', 'ended'] as const;
 export type RunStatus = typeof RUN_STATUS[number];
 
-export const REACTION_STATES = ['join'] as const;
+export const REACTION_STATES = ['join', 'leave', 'bench'] as const;
 export type ReactionState = typeof REACTION_STATES[number];
 
 /**

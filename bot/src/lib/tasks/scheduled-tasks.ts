@@ -2,6 +2,7 @@
 import { Client, EmbedBuilder, type GuildTextBasedChannel, type TextChannel } from 'discord.js';
 import { getJSON, patchJSON, postJSON } from '../utilities/http.js';
 import { createLogger } from '../logging/logger.js';
+import { deleteRunRole } from '../utilities/run-role-manager.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -18,6 +19,8 @@ interface ExpiredRun {
     organizer_id: string;
     created_at: string;
     auto_end_minutes: number;
+    role_id: string | null;
+    ping_message_id: string | null;
 }
 
 interface ExpiredSuspension {
@@ -97,6 +100,28 @@ async function checkExpiredRuns(client: Client): Promise<void> {
             });
 
             successCount++;
+
+            // Delete the run role if it exists
+            if (run.role_id) {
+                await deleteRunRole(guild, run.role_id);
+                logger.debug(`Deleted run role`, { runId: run.id, roleId: run.role_id });
+            }
+
+            // Delete the ping message if it exists
+            if (run.ping_message_id && run.channel_id) {
+                try {
+                    const channel = await guild.channels.fetch(run.channel_id).catch(() => null);
+                    if (channel && channel.isTextBased()) {
+                        const pingMessage = await (channel as any).messages.fetch(run.ping_message_id).catch(() => null);
+                        if (pingMessage && pingMessage.deletable) {
+                            await pingMessage.delete();
+                            logger.debug(`Deleted ping message`, { runId: run.id, pingMessageId: run.ping_message_id });
+                        }
+                    }
+                } catch (err) {
+                    logger.warn(`Failed to delete ping message`, { runId: run.id, error: err });
+                }
+            }
 
             // Update the Discord message if we have the channel and message IDs
             if (run.channel_id && run.post_message_id) {
