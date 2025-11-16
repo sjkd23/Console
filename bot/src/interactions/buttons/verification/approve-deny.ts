@@ -335,6 +335,11 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
 
     try {
         // Check if user has security+ role
+        if (!interaction.guild) {
+            await interaction.editReply('❌ This command can only be used in a server.');
+            return;
+        }
+        
         const member = await interaction.guild.members.fetch(interaction.user.id);
         const hasPermission = await hasInternalRole(member, 'security');
 
@@ -385,7 +390,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
 
         // Collect reason from staff member
         const channel = interaction.channel;
-        if (!channel || !channel.isTextBased()) {
+        if (!channel || !channel.isTextBased() || channel.isDMBased()) {
             await interaction.followUp({
                 content: '❌ Could not set up message collector.',
                 ephemeral: true,
@@ -473,7 +478,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
             }, 60000);
         });
 
-        collector.on('end', async (collected, reason) => {
+        collector.on('end', async (collected: any, reason: string) => {
             if (reason === 'time' && collected.size === 0) {
                 // No reason provided within timeout
                 await updateSession(guildId, userId, {

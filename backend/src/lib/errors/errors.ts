@@ -20,6 +20,7 @@ export type ErrorCode =
     | 'NOT_OFFICER'
     | 'IGN_ALREADY_IN_USE'
     | 'PUNISHMENT_NOT_FOUND'
+    | 'RATE_LIMITED'
     | 'INTERNAL_ERROR';
 
 export interface ApiErrorPayload {
@@ -105,6 +106,9 @@ export const Errors = {
 
     punishmentNotFound: (reply: FastifyReply) =>
         sendError(reply, 404, 'PUNISHMENT_NOT_FOUND', 'punishment not found'),
+
+    rateLimited: (reply: FastifyReply, message = 'too many requests, please slow down') =>
+        sendError(reply, 429, 'RATE_LIMITED', message),
 
     internal: (reply: FastifyReply, message = 'an internal error occurred') =>
         sendError(reply, 500, 'INTERNAL_ERROR', message),

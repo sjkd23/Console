@@ -2,11 +2,11 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { query } from '../db/pool.js';
-import { zSnowflake } from '../lib/constants.js';
-import { Errors } from '../lib/errors.js';
-import { canManageGuildRoles } from '../lib/authorization.js';
-import { logAudit } from '../lib/audit.js';
-import { ensureGuildExists, ensureMemberExists, getGuildRoles, getGuildChannels } from '../lib/database-helpers.js';
+import { zSnowflake } from '../lib/constants/constants.js';
+import { Errors } from '../lib/errors/errors.js';
+import { canManageGuildRoles } from '../lib/auth/authorization.js';
+import { logAudit } from '../lib/logging/audit.js';
+import { ensureGuildExists, ensureMemberExists, getGuildRoles, getGuildChannels } from '../lib/database/database-helpers.js';
 
 /**
  * Internal role keys (must match role_catalog entries)
@@ -162,7 +162,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
         const updates: Record<string, string | null> = {};
 
         // Process each provided role
-        for (const [roleKey, discordRoleId] of Object.entries(roles)) {
+        for (const [roleKey, discordRoleId] of Object.entries(roles as Record<string, string | null>)) {
             // Validate role_key exists in catalog
             const validKey = ROLE_KEYS.includes(roleKey as any);
             if (!validKey) {
@@ -170,7 +170,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
                 continue;
             }
 
-            updates[roleKey] = discordRoleId;
+            updates[roleKey] = discordRoleId as string | null;
 
             if (discordRoleId === null) {
                 // Delete mapping
@@ -287,7 +287,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
         const updates: Record<string, string | null> = {};
 
         // Process each provided channel
-        for (const [channelKey, discordChannelId] of Object.entries(channels)) {
+        for (const [channelKey, discordChannelId] of Object.entries(channels as Record<string, string | null>)) {
             // Validate channel_key exists in catalog
             const validKey = CHANNEL_KEYS.includes(channelKey as any);
             if (!validKey) {
@@ -295,7 +295,7 @@ export default async function guildsRoutes(app: FastifyInstance) {
                 continue;
             }
 
-            updates[channelKey] = discordChannelId;
+            updates[channelKey] = discordChannelId as string | null;
 
             if (discordChannelId === null) {
                 // Delete mapping

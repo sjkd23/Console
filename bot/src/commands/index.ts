@@ -98,8 +98,18 @@ export function toJSON() {
 }
 
 
-export async function registerAll(rest: REST, appId: string, guildId: string) {
+export async function registerAll(rest: REST, appId: string, guildId?: string) {
     const body = toJSON();
-    await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
+    
+    if (guildId) {
+        // Register to specific guild (fast, for development)
+        await rest.put(Routes.applicationGuildCommands(appId, guildId), { body });
+        console.log(`✅ Registered ${body.length} commands to guild ${guildId}`);
+    } else {
+        // Register globally (takes up to 1 hour to propagate)
+        await rest.put(Routes.applicationCommands(appId), { body });
+        console.log(`✅ Registered ${body.length} commands globally (may take up to 1 hour to appear)`);
+    }
+    
     return body.map(c => c.name);
 }

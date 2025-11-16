@@ -3,11 +3,12 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { query } from '../../db/pool.js';
 import { zSnowflake, zReactionState } from '../../lib/constants/constants';
-import { Errors } from '../../lib/errors/errors';
+import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole } from '../../lib/auth/authorization.js';
 import { logQuotaEvent, getPointsForDungeon, awardRaiderPoints, snapshotRaidersAtKeyPop, awardCompletionsToKeyPopSnapshot } from '../../lib/quota/quota.js';
 import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
+import { HIGH_TRAFFIC_LIMIT, MODERATE_TRAFFIC_LIMIT, createRateLimitConfig } from '../../lib/rate-limit/config.js';
 
 const logger = createLogger('Runs');
 
@@ -35,8 +36,14 @@ export default async function runsRoutes(app: FastifyInstance) {
     /**
      * POST /runs
      * Create a new run record (status=open) and upsert guild/member.
+     * 
+     * MODERATE TRAFFIC: Run creation is less frequent than reactions.
      */
-    app.post('/runs', async (req, reply) => {
+    app.post('/runs', {
+        config: {
+            rateLimit: createRateLimitConfig(MODERATE_TRAFFIC_LIMIT)
+        }
+    }, async (req, reply) => {
         const parsed = CreateRun.safeParse(req.body);
         if (!parsed.success) {
             const msg = parsed.error.issues.map(i => i.message).join('; ');
@@ -96,8 +103,14 @@ export default async function runsRoutes(app: FastifyInstance) {
      *  - 'join' -> upsert state
      * Blocks if run is ended/cancelled.
      * Returns { joinCount }.
+     * 
+     * HIGH TRAFFIC: Many users react during active raids.
      */
-    app.post('/runs/:id/reactions', async (req, reply) => {
+    app.post('/runs/:id/reactions', {
+        config: {
+            rateLimit: createRateLimitConfig(HIGH_TRAFFIC_LIMIT)
+        }
+    }, async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             userId: zSnowflake,
@@ -184,8 +197,14 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Updates the user's class selection for a run.
      * Auto-joins the user if they haven't already.
      * Returns { joinCount, classCounts: Record<string, number> }.
+     * 
+     * HIGH TRAFFIC: Many users select classes during active raids.
      */
-    app.patch('/runs/:id/reactions', async (req, reply) => {
+    app.patch('/runs/:id/reactions', {
+        config: {
+            rateLimit: createRateLimitConfig(HIGH_TRAFFIC_LIMIT)
+        }
+    }, async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             userId: zSnowflake,
@@ -840,8 +859,14 @@ export default async function runsRoutes(app: FastifyInstance) {
      * If the user has already reacted with this key, it removes it.
      * If the user hasn't reacted with this key, it adds it.
      * Returns { keyCounts: Record<string, number> }.
+     * 
+     * HIGH TRAFFIC: Users toggle key reactions during run setup.
      */
-    app.post('/runs/:id/key-reactions', async (req, reply) => {
+    app.post('/runs/:id/key-reactions', {
+        config: {
+            rateLimit: createRateLimitConfig(HIGH_TRAFFIC_LIMIT)
+        }
+    }, async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             userId: zSnowflake,
