@@ -26,10 +26,10 @@ const ROLE_OPTIONS = [
 ] as const;
 
 export const setroles: SlashCommand = {
-    requiredRole: 'moderator',
+    requiredRole: undefined, // Uses Discord Administrator permission instead
     data: new SlashCommandBuilder()
         .setName('setroles')
-        .setDescription('Configure internal role mappings for this server (Moderator+)')
+        .setDescription('Configure internal role mappings for this server (Administrator)')
         .addRoleOption(o => o.setName('administrator').setDescription('Administrator role'))
         .addRoleOption(o => o.setName('moderator').setDescription('Moderator role'))
         .addRoleOption(o => o.setName('head_organizer').setDescription('Head Organizer role'))
@@ -40,6 +40,7 @@ export const setroles: SlashCommand = {
         .addRoleOption(o => o.setName('verified_raider').setDescription('Verified Raider role'))
         .addRoleOption(o => o.setName('suspended').setDescription('Suspended role'))
         .addRoleOption(o => o.setName('muted').setDescription('Muted role'))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setDMPermission(false),
 
     async run(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -53,10 +54,19 @@ export const setroles: SlashCommand = {
                 return;
             }
 
-            // 2) ACK ASAP to avoid 3s timeout (permission check done by middleware)
+            // 2) Check Discord Administrator permission
+            if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                await interaction.reply({
+                    content: '❌ **Access Denied**\n\nYou must have Discord **Administrator** permission to configure bot roles.',
+                    flags: MessageFlags.Ephemeral,
+                });
+                return;
+            }
+
+            // 3) ACK ASAP to avoid 3s timeout
             await interaction.deferReply();
 
-            // 3) Fetch member safely (needed for actor_roles)
+            // 4) Fetch member safely (needed for actor_roles)
             let member: GuildMember;
             try {
                 member = await interaction.guild.members.fetch(interaction.user.id);
@@ -65,7 +75,7 @@ export const setroles: SlashCommand = {
                 return;
             }
 
-            // 4) Collect provided role updates (partial)
+            // 5) Collect provided role updates (partial)
             const updates: Record<string, string | null> = {};
             for (const { key } of ROLE_OPTIONS) {
                 // getRole returns Role | null when option omitted; only include if provided
@@ -80,18 +90,19 @@ export const setroles: SlashCommand = {
                 return;
             }
 
-            // 5) Backend call
+            // 6) Backend call
             try {
                 const { roles, warnings } = await setGuildRoles(interaction.guildId!, {
                     actor_user_id: interaction.user.id,
                     roles: updates,
                     actor_roles: getMemberRoleIds(member),
+                    actor_has_admin_permission: interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
                 });
 
                 // Bust cache so future checks see new mapping
                 invalidateRoleCache(interaction.guildId!);
 
-                // 6) Build response
+                // 7) Build response
                 const embed = new EmbedBuilder()
                     .setTitle('✅ Role configuration updated')
                     .setDescription('Current role mappings for this server:')

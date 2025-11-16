@@ -27,10 +27,10 @@ const CHANNEL_OPTIONS = [
 ] as const;
 
 export const setchannels: SlashCommand = {
-    requiredRole: 'moderator',
+    requiredRole: undefined, // Uses Discord Administrator permission instead
     data: new SlashCommandBuilder()
         .setName('setchannels')
-        .setDescription('Configure internal channel mappings for this server (Moderator+)')
+        .setDescription('Configure internal channel mappings for this server (Administrator)')
         .addChannelOption(o => o.setName('raid').setDescription('Raid channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('veri_log').setDescription('Verification log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('manual_verification').setDescription('Manual verification channel').addChannelTypes(ChannelType.GuildText))
@@ -41,6 +41,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('bot_log').setDescription('Bot activity log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('staff_updates').setDescription('Staff promotion announcements channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('modmail').setDescription('Modmail support tickets channel').addChannelTypes(ChannelType.GuildText))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setDMPermission(false),
 
     async run(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -54,10 +55,19 @@ export const setchannels: SlashCommand = {
                 return;
             }
 
-            // 2) ACK ASAP to avoid 3s timeout (permission check done by middleware)
+            // 2) Check Discord Administrator permission
+            if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+                await interaction.reply({
+                    content: '❌ **Access Denied**\n\nYou must have Discord **Administrator** permission to configure bot channels.',
+                    flags: MessageFlags.Ephemeral,
+                });
+                return;
+            }
+
+            // 3) ACK ASAP to avoid 3s timeout
             await interaction.deferReply();
 
-            // 3) Fetch member safely (needed for actor_roles)
+            // 4) Fetch member safely (needed for actor_roles)
             let member: GuildMember;
             try {
                 member = await interaction.guild.members.fetch(interaction.user.id);
@@ -66,7 +76,7 @@ export const setchannels: SlashCommand = {
                 return;
             }
 
-            // 4) Collect provided channel updates (partial)
+            // 5) Collect provided channel updates (partial)
             const updates: Record<string, string | null> = {};
             for (const { key } of CHANNEL_OPTIONS) {
                 // getChannel returns Channel | null when option omitted; only include if provided
@@ -81,15 +91,16 @@ export const setchannels: SlashCommand = {
                 return;
             }
 
-            // 5) Backend call
+            // 6) Backend call
             try {
                 const { channels, warnings } = await setGuildChannels(interaction.guildId!, {
                     actor_user_id: interaction.user.id,
                     channels: updates,
                     actor_roles: getMemberRoleIds(member),
+                    actor_has_admin_permission: interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
                 });
 
-                // 6) Build response
+                // 7) Build response
                 const embed = new EmbedBuilder()
                     .setTitle('✅ Channel configuration updated')
                     .setDescription('Current channel mappings for this server:')
