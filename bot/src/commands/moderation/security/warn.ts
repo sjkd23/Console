@@ -167,10 +167,12 @@ export const warn: SlashCommand = {
                     switch (err.code) {
                         case 'NOT_AUTHORIZED':
                         case 'NOT_SECURITY':
-                            errorMessage += '**Issue:** You need the Security role.\n\n';
+                            // This shouldn't happen since middleware already checked permissions
+                            // But if it does, it's likely a backend configuration issue
+                            errorMessage += '**Issue:** Authorization failed on the backend.\n\n';
                             errorMessage += '**What to do:**\n';
-                            errorMessage += '• Ask an admin to use `/setroles` to set it up\n';
-                            errorMessage += '• Make sure you have the Security Discord role';
+                            errorMessage += '• This is likely a server configuration issue\n';
+                            errorMessage += '• Contact a server administrator if this persists';
                             break;
                         case 'VALIDATION_ERROR':
                             errorMessage += `**Issue:** ${err.message}\n\n`;

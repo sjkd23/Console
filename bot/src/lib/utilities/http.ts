@@ -305,6 +305,7 @@ export async function getRaider(
     guild_id: string;
     user_id: string;
     ign: string;
+    alt_ign: string | null;
     status: string;
     verified_at: string | null;
 } | null> {
@@ -331,6 +332,7 @@ export async function updateRaiderIGN(
     guild_id: string;
     user_id: string;
     ign: string;
+    alt_ign: string | null;
     status: string;
     verified_at: string;
     old_ign: string;
@@ -356,6 +358,47 @@ export async function updateRaiderStatus(
     old_status: string;
 }> {
     return patchJSON(`/raiders/${userId}/status`, payload);
+}
+
+/** Add or update a raider's alt IGN (PATCH /raiders/:user_id/alt) */
+export async function addRaiderAlt(
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        guild_id: string;
+        alt_ign: string;
+    }
+): Promise<{
+    guild_id: string;
+    user_id: string;
+    ign: string;
+    alt_ign: string | null;
+    status: string;
+    verified_at: string;
+    old_alt_ign: string | null;
+}> {
+    return patchJSON(`/raiders/${userId}/alt`, payload);
+}
+
+/** Remove a raider's alt IGN (DELETE /raiders/:user_id/alt) */
+export async function removeRaiderAlt(
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        guild_id: string;
+    }
+): Promise<{
+    guild_id: string;
+    user_id: string;
+    ign: string;
+    alt_ign: string | null;
+    status: string;
+    verified_at: string | null;
+    old_alt_ign: string | null;
+}> {
+    return deleteJSON(`/raiders/${userId}/alt`, payload);
 }
 
 /** Get guild role mappings (GET /guilds/:guild_id/roles) */

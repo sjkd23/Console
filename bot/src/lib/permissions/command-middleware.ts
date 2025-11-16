@@ -2,7 +2,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import { MessageFlags } from 'discord.js';
 import type { SlashCommand } from '../../commands/_types.js';
-import { hasInternalRole, canBotManageMember, type RoleKey } from './permissions.js';
+import { hasInternalRole, hasRequiredRoleOrHigher, canBotManageMember, type RoleKey } from './permissions.js';
 
 /**
  * Permission check result
@@ -15,6 +15,7 @@ interface PermissionCheckResult {
 /**
  * Check if user has required role(s) for a command.
  * Returns detailed result with user-friendly error messages.
+ * Now supports role hierarchy - users with higher roles can use lower-role commands.
  */
 async function checkRequiredRole(
     interaction: ChatInputCommandInteraction,
@@ -31,15 +32,21 @@ async function checkRequiredRole(
         const member = await interaction.guild.members.fetch(interaction.user.id);
         const roles = Array.isArray(requiredRole) ? requiredRole : [requiredRole];
 
-        // Check if user has any of the required roles (OR logic)
-        const hasAnyRole = await Promise.all(
-            roles.map(role => hasInternalRole(member, role))
+        // Check if user has any of the required roles (OR logic) with hierarchy support
+        const roleChecks = await Promise.all(
+            roles.map(role => hasRequiredRoleOrHigher(member, role))
         );
 
-        if (!hasAnyRole.some(has => has)) {
+        // Check if any role check passed
+        const hasAnyRole = roleChecks.some(check => check.hasRole);
+        
+        if (!hasAnyRole) {
+            // Check if all required roles are not configured
+            const allNotConfigured = roleChecks.every(check => !check.isConfigured);
+            
             // Build friendly role list for error message
             const roleNames = roles.map(r => {
-                // Convert role key to friendly name (e.g., 'moderator' -> 'Moderator')
+                // Convert role key to friendly name (e.g., 'moderator' -> 'Moderator', 'head_organizer' -> 'Head Organizer')
                 return r.split('_').map(word =>
                     word.charAt(0).toUpperCase() + word.slice(1)
                 ).join(' ');
@@ -51,10 +58,19 @@ async function checkRequiredRole(
                     ? `**${roleNames[0]}** or **${roleNames[1]}**`
                     : `**${roleNames.slice(0, -1).join('**, **')}**, or **${roleNames[roleNames.length - 1]}**`;
 
-            return {
-                allowed: false,
-                errorMessage: `❌ **Missing Permission**\n\nYou need the ${roleList} role to use this command.\n\n**What to do:**\n• Ask a server admin to use \`/setroles\` to configure roles\n• Make sure you have the Discord role that's mapped to the required internal role`
-            };
+            if (allNotConfigured) {
+                // All required roles are not configured in this guild
+                return {
+                    allowed: false,
+                    errorMessage: `❌ **Role Not Configured**\n\nThe ${roleList} role is not configured for this server.\n\n**What to do:**\n• Ask a server admin to use \`/setroles\` to configure the required role\n• Once configured, make sure you have the Discord role that's mapped to it`
+                };
+            } else {
+                // Roles are configured, but user doesn't have them
+                return {
+                    allowed: false,
+                    errorMessage: `❌ **Missing Permission**\n\nYou need the ${roleList} role (or higher) to use this command.\n\n**What to do:**\n• Ask a server admin for the required role\n• Staff with higher roles (like Officers, Moderators, etc.) can also use this command`
+                };
+            }
         }
 
         return { allowed: true };

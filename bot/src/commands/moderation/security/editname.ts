@@ -138,7 +138,11 @@ export const editname: SlashCommand = {
             let nicknameError = '';
             try {
                 const targetMember = await interaction.guild.members.fetch(targetUser.id);
-                await targetMember.setNickname(result.ign, `IGN updated by ${interaction.user.tag}`);
+                // Preserve alt IGN if it exists
+                const nickname = result.alt_ign 
+                    ? `${result.ign} | ${result.alt_ign}`
+                    : result.ign;
+                await targetMember.setNickname(nickname, `IGN updated by ${interaction.user.tag}`);
             } catch (nickErr: any) {
                 nicknameUpdated = false;
                 if (nickErr?.code === 50013) {
@@ -221,10 +225,12 @@ export const editname: SlashCommand = {
                 switch (err.code) {
                     case 'NOT_AUTHORIZED':
                     case 'NOT_SECURITY':
-                        errorMessage += '**Issue:** You don\'t have the Security role configured for this server.\n\n';
+                        // This shouldn't happen since middleware already checked permissions
+                        // But if it does, it's likely a backend configuration issue
+                        errorMessage += '**Issue:** Authorization failed on the backend.\n\n';
                         errorMessage += '**What to do:**\n';
-                        errorMessage += '• Ask a server admin to use `/setroles` to set up the Security role\n';
-                        errorMessage += '• Make sure you have the Discord role that\'s mapped to Security';
+                        errorMessage += '• This is likely a server configuration issue\n';
+                        errorMessage += '• Contact a server administrator if this persists';
                         break;
                     case 'RAIDER_NOT_FOUND':
                         errorMessage += '**Issue:** This member is not verified in this server.\n\n';

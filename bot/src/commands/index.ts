@@ -8,6 +8,8 @@ import { setroles } from './conifgs/setroles.js';
 import { setchannels } from './conifgs/setchannels.js';
 import { editname } from './moderation/security/editname.js';
 import { unverify } from './moderation/security/unverify.js';
+import { addalt } from './moderation/security/addalt.js';
+import { removealt } from './moderation/security/removealt.js';
 import { warn } from './moderation/security/warn.js';
 import { suspend } from './moderation/security/suspend.js';
 import { unsuspend } from './moderation/security/unsuspend.js';
@@ -36,10 +38,10 @@ import { unmute } from './moderation/security/unmute.js';
 import { headcount } from './organizer/headcount.js';
 import { leaderboard } from './leaderboard.js';
 import { purge } from './moderation/moderator/purge.js';
-import { modmail } from './moderation/modmail.js';
-import { modmailreply } from './moderation/modmailreply.js';
-import { modmailblacklist } from './moderation/modmailblacklist.js';
-import { modmailunblacklist } from './moderation/modmailunblacklist.js';
+import { modmail } from './moderation/security/modmail.js';
+import { modmailreply } from './moderation/security/modmailreply.js';
+import { modmailblacklist } from './moderation/officer/modmailblacklist.js';
+import { modmailunblacklist } from './moderation/officer/modmailunblacklist.js';
 
 /**
  * Helper to apply both permission checks and rate limiting to a command.
@@ -56,6 +58,8 @@ export const commands: SlashCommand[] = [
     withMiddleware(setchannels),
     withMiddleware(editname),
     withMiddleware(unverify),
+    withMiddleware(addalt),
+    withMiddleware(removealt),
     withMiddleware(warn),
     withMiddleware(suspend),
     withMiddleware(unsuspend),

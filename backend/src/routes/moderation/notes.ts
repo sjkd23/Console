@@ -6,7 +6,7 @@ import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { logAudit } from '../../lib/logging/audit.js';
-import { hasSecurity } from '../../lib/permissions/permissions.js';
+import { requireSecurity } from '../../lib/auth/authorization.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 
 /**
@@ -41,10 +41,11 @@ export default async function notesRoutes(app: FastifyInstance) {
         const { actor_user_id, guild_id, user_id, note_text, actor_roles } = parsed.data;
 
         // Authorization check
-        const authorized = await hasSecurity(guild_id, actor_roles);
-        if (!authorized) {
-            console.log(`[Notes] User ${actor_user_id} in guild ${guild_id} denied - not moderator/security`);
-            return Errors.notAuthorized(reply);
+        try {
+            await requireSecurity(guild_id, actor_user_id, actor_roles);
+        } catch (err) {
+            console.log(`[Notes] User ${actor_user_id} in guild ${guild_id} denied - not security`);
+            throw err;
         }
 
         try {
@@ -236,10 +237,11 @@ export default async function notesRoutes(app: FastifyInstance) {
             const note = checkResult.rows[0];
 
             // Authorization check
-            const authorized = await hasSecurity(note.guild_id, actor_roles, actor_has_admin);
-            if (!authorized) {
+            try {
+                await requireSecurity(note.guild_id, actor_user_id, actor_roles);
+            } catch (err) {
                 console.log(`[Notes] User ${actor_user_id} denied note removal - not security`);
-                return Errors.notSecurity(reply);
+                throw err;
             }
 
             // Ensure actor exists in member table before deleting note

@@ -127,10 +127,12 @@ export const addnote: SlashCommand = {
                 if (err instanceof BackendError) {
                     switch (err.code) {
                         case 'NOT_AUTHORIZED':
-                            errorMessage += '**Issue:** You don\'t have the Security role configured for this server.\n\n';
+                            // This shouldn't happen since middleware already checked permissions
+                            // But if it does, it's likely a backend configuration issue
+                            errorMessage += '**Issue:** Authorization failed on the backend.\n\n';
                             errorMessage += '**What to do:**\n';
-                            errorMessage += '• Ask a server admin to use `/setroles` to set up the Security role\n';
-                            errorMessage += '• Make sure you have the Discord role that\'s mapped to Security';
+                            errorMessage += '• This is likely a server configuration issue\n';
+                            errorMessage += '• Contact a server administrator if this persists';
                             break;
                         case 'VALIDATION_ERROR':
                             errorMessage += `**Issue:** ${err.message}\n\n`;

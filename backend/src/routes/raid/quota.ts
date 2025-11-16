@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
-import { hasInternalRole, canManageGuildRoles } from '../../lib/auth/authorization.js';
+import { hasInternalRole, hasRequiredRoleOrHigher, requireSecurity, canManageGuildRoles } from '../../lib/auth/authorization.js';
 import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { 
     logQuotaEvent, 
@@ -1101,13 +1101,14 @@ export default async function quotaRoutes(app: FastifyInstance) {
         const { actor_user_id, actor_roles } = b.data;
 
         // Authorization: actor must have security role or higher
-        const hasSecurityRole = await hasInternalRole(guild_id, actor_user_id, 'security', actor_roles);
-        if (!hasSecurityRole) {
-            console.log(`[Quota] User ${actor_user_id} in guild ${guild_id} denied - no security role`);
+        try {
+            await requireSecurity(guild_id, actor_user_id, actor_roles);
+        } catch (err: any) {
+            console.log(`[Quota] User ${actor_user_id} in guild ${guild_id} denied - insufficient permissions`);
             return reply.code(403).send({
                 error: {
                     code: 'NOT_SECURITY',
-                    message: 'You must have the Security role to award moderation points',
+                    message: err.message || 'You need the Security role or higher to award moderation points',
                 },
             });
         }

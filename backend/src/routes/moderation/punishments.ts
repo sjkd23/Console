@@ -6,7 +6,7 @@ import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { logAudit } from '../../lib/logging/audit.js';
-import { hasSecurity, hasOfficer } from '../../lib/permissions/permissions.js';
+import { requireSecurity } from '../../lib/auth/authorization.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 
 /**
@@ -60,10 +60,11 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
         const { actor_user_id, guild_id, user_id, type, reason, duration_minutes, actor_roles } = parsed.data;
 
         // Authorization check - all punishment types now require security+ permission
-        const authorized = await hasSecurity(guild_id, actor_roles);
-        if (!authorized) {
+        try {
+            await requireSecurity(guild_id, actor_user_id, actor_roles);
+        } catch (err) {
             console.log(`[Punishments] User ${actor_user_id} in guild ${guild_id} denied - not security`);
-            return Errors.notSecurity(reply);
+            throw err;
         }
 
         // Validate duration for suspensions and mutes
@@ -397,10 +398,11 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
             const punishment = checkResult.rows[0];
 
             // Authorization check
-            const authorized = await hasSecurity(punishment.guild_id, actor_roles, actor_has_admin);
-            if (!authorized) {
+            try {
+                await requireSecurity(punishment.guild_id, actor_user_id, actor_roles);
+            } catch (err) {
                 console.log(`[Punishments] User ${actor_user_id} denied removal - not security`);
-                return Errors.notSecurity(reply);
+                throw err;
             }
 
             // Ensure actor exists in member table before updating punishment

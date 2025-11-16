@@ -11,21 +11,21 @@ import {
     ComponentType,
     Guild,
 } from 'discord.js';
-import type { SlashCommand } from '../_types.js';
+import type { SlashCommand } from '../../_types.js';
 import {
     generateModmailTicketId,
     createModmailMessageEmbed,
     createModmailTicketEmbed,
     extractAttachments,
     validateModmailContent,
-} from '../../lib/modmail/modmail.js';
+} from '../../../lib/modmail/modmail.js';
 import {
     createModmailTicket,
     getGuildChannels,
     checkModmailBlacklist,
     getGuildModmailTickets,
     BackendError,
-} from '../../lib/utilities/http.js';
+} from '../../../lib/utilities/http.js';
 
 interface ModmailState {
     guilds: Guild[];

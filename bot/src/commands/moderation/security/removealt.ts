@@ -1,4 +1,4 @@
-// bot/src/commands/unverify.ts
+// bot/src/commands/moderation/security/removealt.ts
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
@@ -9,32 +9,29 @@ import {
     TextChannel,
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
-import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../../lib/permissions/permissions.js';
-import { updateRaiderStatus, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../../lib/utilities/http.js';
-import { logCommandExecution, logVerificationAction } from '../../../lib/logging/bot-logger.js';
+import { canActorTargetMember, getMemberRoleIds } from '../../../lib/permissions/permissions.js';
+import { removeRaiderAlt, BackendError, getGuildChannels, getRaider } from '../../../lib/utilities/http.js';
+import { logCommandExecution } from '../../../lib/logging/bot-logger.js';
+import { createLogger } from '../../../lib/logging/logger.js';
+
+const logger = createLogger('RemoveAlt');
 
 /**
- * /unverify - Remove verification status from a raider.
+ * /removealt - Remove the alt IGN from a verified raider.
  * Staff-only command (Security role required).
- * Sets raider status to 'pending' and removes verified raider role.
+ * Restores the raider's nickname to just their main IGN.
  */
-export const unverify: SlashCommand = {
+export const removealt: SlashCommand = {
     requiredRole: 'security',
-    mutatesRoles: true,
+    mutatesRoles: false,
     data: new SlashCommandBuilder()
-        .setName('unverify')
-        .setDescription('Remove verification status from a member (Security only)')
+        .setName('removealt')
+        .setDescription('Remove the alt IGN from a verified member (Security only)')
         .addUserOption(option =>
             option
                 .setName('member')
-                .setDescription('The Discord member to unverify')
+                .setDescription('The Discord member to remove alt from')
                 .setRequired(true)
-        )
-        .addStringOption(option =>
-            option
-                .setName('reason')
-                .setDescription('Reason for unverifying (optional)')
-                .setRequired(false)
         ),
 
     async run(interaction: ChatInputCommandInteraction) {
@@ -52,7 +49,6 @@ export const unverify: SlashCommand = {
 
         // Get options
         const targetUser = interaction.options.getUser('member', true);
-        const reason = interaction.options.getString('reason') || 'No reason provided';
 
         // Ensure target is in this guild
         let targetMember;
@@ -69,26 +65,29 @@ export const unverify: SlashCommand = {
         // Defer reply (backend call may take a moment)
         await interaction.deferReply();
 
-        // Check if user is verified
+        // Check if user is verified and has an alt
         let existingRaider;
         try {
             existingRaider = await getRaider(interaction.guildId, targetUser.id);
             if (!existingRaider) {
-                await interaction.editReply(`❌ **Not Verified**\n\n<@${targetUser.id}> is not in the verification system.`);
+                await interaction.editReply(`❌ **Not Verified**\n\n<@${targetUser.id}> is not verified in this server.`);
                 return;
             }
-            if (existingRaider.status !== 'approved') {
-                await interaction.editReply(`❌ **Not Verified**\n\n<@${targetUser.id}> is not currently verified (status: ${existingRaider.status}).`);
+            if (!existingRaider.alt_ign) {
+                await interaction.editReply(`❌ **No Alt IGN**\n\n<@${targetUser.id}> does not have an alt IGN to remove.`);
                 return;
             }
         } catch (checkErr) {
-            console.error('[Unverify] Failed to check existing raider:', checkErr);
+            logger.warn('Failed to check existing raider', { 
+                guildId: interaction.guildId,
+                targetUserId: targetUser.id,
+                error: checkErr instanceof Error ? checkErr.message : String(checkErr)
+            });
             await interaction.editReply('❌ Failed to check verification status. Please try again.');
             return;
         }
 
         // Check if we can change nickname (based on role hierarchy)
-        // Allow unverification of anyone, but only change nickname if they're lower in hierarchy
         let canChangeNickname = true;
         try {
             const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
@@ -97,107 +96,92 @@ export const unverify: SlashCommand = {
             });
             canChangeNickname = targetCheck.canTarget;
         } catch (hierarchyErr) {
-            console.error('[Unverify] Role hierarchy check failed:', hierarchyErr);
+            logger.warn('Role hierarchy check failed', { 
+                guildId: interaction.guildId,
+                actorId: interaction.user.id,
+                targetId: targetUser.id,
+                error: hierarchyErr instanceof Error ? hierarchyErr.message : String(hierarchyErr)
+            });
             canChangeNickname = false;
         }
 
         try {
             // Get actor's role IDs for authorization
             const actorRoles = getMemberRoleIds(invokerMember);
+            logger.debug('Actor roles retrieved for remove alt', { 
+                guildId: interaction.guildId,
+                actorId: interaction.user.id, 
+                roleCount: actorRoles.length 
+            });
             
-            // Call backend to update raider status to pending
-            const result = await updateRaiderStatus(targetUser.id, {
+            // Call backend to remove alt IGN
+            const result = await removeRaiderAlt(targetUser.id, {
                 actor_user_id: interaction.user.id,
                 actor_roles: actorRoles,
                 guild_id: interaction.guildId,
-                status: 'pending',
             });
 
-            // Remove nickname (revert to Discord username)
-            let nicknameRemoved = false;
+            // Update the member's nickname back to just their main IGN
+            let nicknameUpdated = true;
             let nicknameError = '';
             try {
                 // Only change nickname if hierarchy allows it
                 if (canChangeNickname) {
-                    if (targetMember.nickname) {
-                        await targetMember.setNickname(null, `Unverified by ${interaction.user.tag}`);
-                        nicknameRemoved = true;
-                    }
+                    await targetMember.setNickname(result.ign, `Alt removed by ${interaction.user.tag}`);
                 } else {
+                    nicknameUpdated = false;
                     nicknameError = 'User has higher or equal role (hierarchy protection)';
                 }
             } catch (nickErr: any) {
+                nicknameUpdated = false;
                 if (nickErr?.code === 50013) {
                     nicknameError = 'Missing permissions (user may have a higher role than the bot)';
-                    console.warn(`[Unverify] Cannot remove nickname for ${targetUser.id}: Missing Permissions`);
+                    logger.warn('Cannot set nickname after removing alt - Missing Permissions', { 
+                        guildId: interaction.guildId,
+                        targetUserId: targetUser.id,
+                        nickname: result.ign
+                    });
                 } else {
                     nicknameError = 'Unknown error';
-                    console.warn(`[Unverify] Failed to remove nickname for ${targetUser.id}:`, nickErr?.message || nickErr);
+                    logger.warn('Failed to set nickname after removing alt', { 
+                        guildId: interaction.guildId,
+                        targetUserId: targetUser.id,
+                        error: nickErr?.message || String(nickErr)
+                    });
                 }
-            }
-
-            // Remove verified raider role if mapped
-            let roleRemoved = false;
-            let roleError = '';
-            try {
-                const { roles } = await getGuildRoles(interaction.guildId);
-                const verifiedRaiderRoleId = roles.verified_raider;
-                
-                if (verifiedRaiderRoleId && targetMember.roles.cache.has(verifiedRaiderRoleId)) {
-                    await targetMember.roles.remove(verifiedRaiderRoleId, `Unverified by ${interaction.user.tag}`);
-                    roleRemoved = true;
-                }
-            } catch (roleErr: any) {
-                console.warn(`[Unverify] Failed to remove verified raider role:`, roleErr?.message || roleErr);
-                roleError = 'Failed to remove verified raider role';
             }
 
             // Build success embed
             const embed = new EmbedBuilder()
-                .setTitle('✅ Member Unverified')
+                .setTitle('✅ Alt IGN Removed')
                 .setColor(0xff9900)
                 .addFields(
                     { name: 'Member', value: `<@${result.user_id}>`, inline: true },
-                    { name: 'IGN', value: `\`${result.ign}\``, inline: true },
-                    { name: 'Old Status', value: result.old_status, inline: true },
-                    { name: 'New Status', value: result.status, inline: true },
-                    { name: 'Unverified By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: 'Reason', value: reason, inline: false }
+                    { name: 'Main IGN', value: `\`${result.ign}\``, inline: true },
+                    { name: 'Removed Alt IGN', value: `\`${result.old_alt_ign}\``, inline: true },
+                    { name: 'Removed By', value: `<@${interaction.user.id}>`, inline: true }
                 )
                 .setTimestamp();
 
-            const footerParts = [];
-            if (roleRemoved) {
-                footerParts.push('✓ Verified raider role removed');
-            } else if (roleError) {
-                footerParts.push(`⚠️ Role: ${roleError}`);
-            }
-
-            if (nicknameRemoved) {
-                footerParts.push('✓ Nickname removed');
-            } else if (nicknameError) {
-                footerParts.push(`⚠️ Nickname: ${nicknameError}`);
-            }
-
-            if (footerParts.length > 0) {
-                embed.setFooter({ text: footerParts.join(' | ') });
+            if (!nicknameUpdated) {
+                embed.setFooter({ text: `⚠️ Nickname: ${nicknameError}` });
+            } else {
+                embed.setFooter({ text: `✓ Nickname updated to: ${result.ign}` });
             }
 
             await interaction.editReply({
                 embeds: [embed],
             });
 
-            // Log to bot-log (brief since detailed log goes to veri_log)
-            await logVerificationAction(
-                interaction.client,
-                interaction.guildId,
-                'unverified',
-                interaction.user.id,
-                targetUser.id,
-                existingRaider.ign,
-                reason
-            );
-            await logCommandExecution(interaction.client, interaction, { success: true });
+            // Log to bot-log
+            await logCommandExecution(interaction.client, interaction, { 
+                success: true,
+                details: {
+                    'Target': `<@${targetUser.id}>`,
+                    'Main IGN': result.ign,
+                    'Removed Alt IGN': result.old_alt_ign || 'N/A'
+                }
+            });
 
             // Log to veri_log channel if configured
             try {
@@ -209,20 +193,18 @@ export const unverify: SlashCommand = {
                     
                     if (veriLogChannel && veriLogChannel.isTextBased()) {
                         const logEmbed = new EmbedBuilder()
-                            .setTitle('❌ Member Unverified')
+                            .setTitle('🔄 Alt IGN Removed')
                             .setColor(0xff9900)
                             .addFields(
                                 { name: 'Member', value: `<@${result.user_id}> (${targetUser.tag})`, inline: true },
                                 { name: 'User ID', value: result.user_id, inline: true },
-                                { name: 'IGN', value: `\`${result.ign}\``, inline: true },
-                                { name: 'Old Status', value: result.old_status, inline: true },
-                                { name: 'New Status', value: result.status, inline: true },
-                                { name: 'Unverified By', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
-                                { name: 'Reason', value: reason, inline: false },
+                                { name: 'Main IGN', value: `\`${result.ign}\``, inline: true },
+                                { name: 'Removed Alt IGN', value: `\`${result.old_alt_ign}\``, inline: true },
+                                { name: 'Removed By', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
                                 {
                                     name: 'Timestamp',
                                     value: time(new Date(), TimestampStyles.LongDateTime),
-                                    inline: false,
+                                    inline: true,
                                 }
                             )
                             .setTimestamp();
@@ -232,11 +214,15 @@ export const unverify: SlashCommand = {
                 }
             } catch (logErr) {
                 // Don't fail the command if logging fails, just log the error
-                console.warn(`Failed to log unverification to veri_log channel:`, logErr);
+                logger.warn('Failed to log alt removal to veri_log channel', { 
+                    guildId: interaction.guildId,
+                    targetUserId: targetUser.id,
+                    error: logErr instanceof Error ? logErr.message : String(logErr)
+                });
             }
         } catch (err) {
             // Map backend errors to user-friendly messages
-            let errorMessage = '❌ **Failed to unverify member**\n\n';
+            let errorMessage = '❌ **Failed to remove alt IGN**\n\n';
             
             if (err instanceof BackendError) {
                 switch (err.code) {
@@ -250,14 +236,23 @@ export const unverify: SlashCommand = {
                         errorMessage += '• Contact a server administrator if this persists';
                         break;
                     case 'RAIDER_NOT_FOUND':
-                        errorMessage += '**Issue:** This member is not in the verification system.\n\n';
+                        errorMessage += '**Issue:** This member is not verified in this server.\n\n';
+                        break;
+                    case 'NO_ALT_IGN':
+                        errorMessage += '**Issue:** This member does not have an alt IGN to remove.\n\n';
                         break;
                     default:
                         errorMessage += `**Error:** ${err.message}\n\n`;
                         errorMessage += 'Please try again or contact an administrator if the problem persists.';
                 }
             } else {
-                console.error('Unverify command error:', err);
+                logger.error('Remove alt command error', { 
+                    guildId: interaction.guildId,
+                    actorId: interaction.user.id,
+                    targetId: targetUser.id,
+                    error: err instanceof Error ? err.message : String(err),
+                    stack: err instanceof Error ? err.stack : undefined
+                });
                 errorMessage += 'An unexpected error occurred. Please try again later.';
             }
 

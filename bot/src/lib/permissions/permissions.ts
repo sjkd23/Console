@@ -82,6 +82,9 @@ export function invalidateRoleCache(guildId: string): void {
  * Returns true if:
  * - Member has Discord Administrator permission (short-circuit), OR
  * - Member has a Discord role that's mapped to the internal role
+ * 
+ * NOTE: This checks for the EXACT role only. For hierarchy checking,
+ * use hasRequiredRoleOrHigher() instead.
  */
 export async function hasInternalRole(
     member: GuildMember | null,
@@ -104,6 +107,70 @@ export async function hasInternalRole(
 
     // Check if member has the mapped Discord role
     return member.roles.cache.has(discordRoleId);
+}
+
+/**
+ * Check if a member has the required role OR any role higher in the hierarchy.
+ * This is the primary function for permission checking as it respects role hierarchy.
+ * 
+ * Returns true if:
+ * - Member has Discord Administrator permission (always highest), OR
+ * - Member has a Discord role mapped to the required role, OR
+ * - Member has a Discord role mapped to any role higher than the required role
+ * 
+ * Returns false if:
+ * - Required role is not configured in the guild
+ * - Member has no staff roles
+ * - Member only has roles lower than the required role
+ * 
+ * @param member The guild member to check
+ * @param requiredRole The minimum role required
+ * @returns Object with hasRole boolean and isConfigured boolean
+ */
+export async function hasRequiredRoleOrHigher(
+    member: GuildMember | null,
+    requiredRole: RoleKey
+): Promise<{ hasRole: boolean; isConfigured: boolean }> {
+    if (!member) {
+        return { hasRole: false, isConfigured: false };
+    }
+
+    // Short-circuit: Discord Administrator permission grants all roles
+    if (member.permissions.has('Administrator')) {
+        return { hasRole: true, isConfigured: true };
+    }
+
+    // Find the required role's position in hierarchy
+    const requiredRoleIndex = ROLE_HIERARCHY.indexOf(requiredRole);
+    if (requiredRoleIndex === -1) {
+        // Role doesn't exist in hierarchy (shouldn't happen with TypeScript)
+        return { hasRole: false, isConfigured: false };
+    }
+
+    // Fetch guild's role mapping
+    const mapping = await getGuildRoleMapping(member.guild.id);
+    
+    // Check if the required role itself is configured
+    const requiredRoleDiscordId = mapping[requiredRole];
+    if (!requiredRoleDiscordId) {
+        // Required role is not configured in this guild
+        return { hasRole: false, isConfigured: false };
+    }
+
+    // Check if member has the required role or any role higher in the hierarchy
+    // Iterate from highest to lowest, starting from roles at or above the required level
+    for (let i = ROLE_HIERARCHY.length - 1; i >= requiredRoleIndex; i--) {
+        const roleKey = ROLE_HIERARCHY[i];
+        const discordRoleId = mapping[roleKey];
+        
+        // If this role is configured and member has it, they pass
+        if (discordRoleId && member.roles.cache.has(discordRoleId)) {
+            return { hasRole: true, isConfigured: true };
+        }
+    }
+
+    // Member doesn't have required role or higher
+    return { hasRole: false, isConfigured: true };
 }
 
 /**

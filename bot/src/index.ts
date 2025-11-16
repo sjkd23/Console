@@ -28,10 +28,10 @@ import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.j
 import { handleHeadcountOrganizerPanel, handleHeadcountOrganizerPanelConfirm, handleHeadcountOrganizerPanelDeny } from './interactions/buttons/raids/headcount-organizer-panel.js';
 import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.js';
 import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-convert.js';
-import { 
-    handleQuotaConfigBasic, 
+import {
+    handleQuotaConfigBasic,
     handleQuotaConfigModeration,
-    handleQuotaConfigDungeons, 
+    handleQuotaConfigDungeons,
     handleQuotaRefreshPanel,
     handleQuotaResetPanel,
     handleQuotaConfigStop,
@@ -66,7 +66,7 @@ import {
 import {
     handleModmailConfirm,
     handleModmailCancel,
-} from './commands/moderation/modmail.js';
+} from './commands/moderation/security/modmail.js';
 import { handleModmailClose } from './interactions/buttons/modmail/modmail-close.js';
 import { startScheduledTasks } from './lib/tasks/scheduled-tasks.js';
 import { syncTeamRoleForMember } from './lib/team/team-role-manager.js';
@@ -87,7 +87,7 @@ const client = new Client({
 
 client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user?.tag}`);
-    
+
     // Start all scheduled maintenance tasks (runs, suspensions, verification cleanup, etc.)
     startScheduledTasks(client);
 });
@@ -98,9 +98,9 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
         // Check if roles changed
         const oldRoles = oldMember.roles.cache;
         const newRoles = newMember.roles.cache;
-        
+
         // If roles are different, sync team role
-        if (oldRoles.size !== newRoles.size || 
+        if (oldRoles.size !== newRoles.size ||
             !oldRoles.every(role => newRoles.has(role.id))) {
             await syncTeamRoleForMember(newMember);
         }
@@ -129,7 +129,7 @@ client.on('interactionCreate', async (interaction) => {
                     await cmd.run(interaction);
                 } catch (err) {
                     commandSuccess = false;
-                    
+
                     // Categorize the error
                     if (err instanceof BackendError) {
                         errorCode = err.code || 'BACKEND_ERROR';
@@ -146,16 +146,16 @@ client.on('interactionCreate', async (interaction) => {
                     } else {
                         errorCode = 'UNKNOWN_ERROR';
                     }
-                    
+
                     // Re-throw to preserve existing error handling
                     throw err;
                 } finally {
                     // Log command execution (success or failure)
                     const latencyMs = Date.now() - startTime;
-                    const result = commandSuccess 
+                    const result = commandSuccess
                         ? createSuccessResult(latencyMs)
                         : createErrorResult(errorCode!, latencyMs);
-                    
+
                     // Non-blocking log - won't affect command execution
                     logCommandExecution(interaction, result).catch(logErr => {
                         console.warn('[CommandLogging] Failed to log command:', logErr);
@@ -287,7 +287,7 @@ client.on('interactionCreate', async (interaction) => {
                 const parts = interaction.customId.split(':');
                 const action = parts[2]; // 'confirm', 'deny', or panelTimestamp
                 const identifier = parts[3]; // publicMessageId if confirm/deny
-                
+
                 if (action === 'confirm' && identifier) {
                     await handleHeadcountOrganizerPanelConfirm(interaction, identifier);
                     return;
@@ -435,7 +435,7 @@ client.on('interactionCreate', async (interaction) => {
                 // This is handled in the modmail command's collector
                 return;
             }
-            
+
             if (interaction.customId.startsWith('quota_select_dungeon_exalt:') ||
                 interaction.customId.startsWith('quota_select_dungeon_misc1:') ||
                 interaction.customId.startsWith('quota_select_dungeon_misc2:')) {

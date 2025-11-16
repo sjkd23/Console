@@ -5,15 +5,15 @@ import {
     MessageFlags,
     EmbedBuilder,
 } from 'discord.js';
-import type { SlashCommand } from '../_types.js';
+import type { SlashCommand } from '../../_types.js';
 import {
     createStaffReplyEmbed,
-} from '../../lib/modmail/modmail.js';
+} from '../../../lib/modmail/modmail.js';
 import {
     addModmailMessage,
     getModmailTicket,
-} from '../../lib/utilities/http.js';
-import { logCommandExecution } from '../../lib/logging/bot-logger.js';
+} from '../../../lib/utilities/http.js';
+import { logCommandExecution } from '../../../lib/logging/bot-logger.js';
 
 export const modmailreply: SlashCommand = {
     requiredRole: 'security',

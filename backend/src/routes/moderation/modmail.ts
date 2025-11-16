@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
-import { hasOfficer } from '../../lib/permissions/permissions.js';
+import { requireOfficer } from '../../lib/auth/authorization.js';
 import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { logAudit } from '../../lib/logging/audit.js';
 
@@ -410,14 +410,11 @@ export default async function modmailRoutes(app: FastifyInstance) {
         const { actor_user_id, actor_roles, guild_id, user_id, reason } = parsed.data;
 
         // Authorization: actor must have officer role or higher (officer, head_organizer, moderator, administrator)
-        const hasOfficerPermission = await hasOfficer(guild_id, actor_roles);
-        if (!hasOfficerPermission) {
-            return reply.code(403).send({
-                error: {
-                    code: 'NOT_OFFICER',
-                    message: 'You must have the Officer role or higher to blacklist users from modmail',
-                },
-            });
+        try {
+            await requireOfficer(guild_id, actor_user_id, actor_roles);
+        } catch (err) {
+            console.log(`[Modmail] User ${actor_user_id} denied blacklist - not officer`);
+            throw err;
         }
 
         try {
@@ -475,14 +472,11 @@ export default async function modmailRoutes(app: FastifyInstance) {
         const { actor_user_id, actor_roles, guild_id, user_id, reason } = parsed.data;
 
         // Authorization: actor must have officer role or higher (officer, head_organizer, moderator, administrator)
-        const hasOfficerPermission = await hasOfficer(guild_id, actor_roles);
-        if (!hasOfficerPermission) {
-            return reply.code(403).send({
-                error: {
-                    code: 'NOT_OFFICER',
-                    message: 'You must have the Officer role or higher to unblacklist users from modmail',
-                },
-            });
+        try {
+            await requireOfficer(guild_id, actor_user_id, actor_roles);
+        } catch (err) {
+            console.log(`[Modmail] User ${actor_user_id} denied unblacklist - not officer`);
+            throw err;
         }
 
         try {
