@@ -31,16 +31,16 @@ export function formatErrorMessage(options: ErrorMessageOptions): string {
             // Default handlers for common error codes
             switch (error.code) {
                 case 'NOT_AUTHORIZED':
-                    errorMessage += '**Issue:** You don\'t have permission to perform this action.\n\n';
+                    errorMessage += '**Issue:** You don\'t have permission for this action.\n\n';
                     errorMessage += '**What to do:**\n';
-                    errorMessage += '• Make sure you have the required Discord role\n';
-                    errorMessage += '• Contact a server administrator if you believe this is an error';
+                    errorMessage += '• Check that you have the required role\n';
+                    errorMessage += '• Contact an admin if you think this is wrong';
                     break;
                 case 'NOT_ORGANIZER':
-                    errorMessage += '**Issue:** You don\'t have the Organizer role configured for this server.\n\n';
+                    errorMessage += '**Issue:** You need the Organizer role.\n\n';
                     errorMessage += '**What to do:**\n';
-                    errorMessage += '• Ask a server admin to use `/setroles` to set up the Organizer role\n';
-                    errorMessage += '• Make sure you have the Discord role that\'s mapped to Organizer';
+                    errorMessage += '• Ask an admin to use `/setroles` to set it up\n';
+                    errorMessage += '• Make sure you have the Organizer Discord role';
                     break;
                 case 'VALIDATION_ERROR':
                     errorMessage += `**Issue:** ${error.message}\n\n`;
@@ -48,7 +48,7 @@ export function formatErrorMessage(options: ErrorMessageOptions): string {
                     break;
                 default:
                     errorMessage += `**Error:** ${error.message}\n\n`;
-                    errorMessage += 'Please try again or contact an administrator if the problem persists.';
+                    errorMessage += 'Try again or contact an admin if this persists.';
             }
         }
     } else {

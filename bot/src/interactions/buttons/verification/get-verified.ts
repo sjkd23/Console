@@ -62,8 +62,7 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
 
         if (verifiedRaiderRoleId && member.roles.cache.has(verifiedRaiderRoleId)) {
             await interaction.editReply(
-                '✅ You are already verified in this server!\n\n' +
-                'If you need to update your IGN or have other issues, please contact a staff member.'
+                '✅ You\'re already verified! Contact staff if you need to update your IGN.'
             );
             return;
         }
@@ -77,10 +76,8 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
                 existingSession.status !== 'cancelled' &&
                 existingSession.status !== 'denied') {
                 await interaction.editReply(
-                    '⚠️ **Active Verification Session**\n\n' +
-                    `You already have an active verification session (status: ${existingSession.status}).\n\n` +
-                    'Please complete or cancel your current verification before starting a new one.\n' +
-                    'Check your DMs or type "cancel" to cancel the current session.'
+                    `⚠️ You already have an active verification (status: ${existingSession.status}). ` +
+                    'Complete or cancel it before starting a new one.'
                 );
                 return;
             }
@@ -100,12 +97,11 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
                 { error: true }
             );
             await interaction.editReply(
-                '❌ **Cannot Send DM**\n\n' +
-                'I couldn\'t send you a direct message. Please enable DMs from server members:\n' +
+                '❌ **DMs are disabled**\n\n' +
+                'Enable DMs from server members:\n' +
                 '1. Right-click the server name\n' +
-                '2. Go to Privacy Settings\n' +
-                '3. Enable "Direct Messages"\n\n' +
-                'Then click the "Get Verified" button again.'
+                '2. Privacy Settings → Enable "Direct Messages"\n' +
+                '3. Try again'
             );
             return;
         }
@@ -118,13 +114,13 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
             .setTitle('🎮 Verification Started')
             .setDescription(
                 `**Server:** ${interaction.guild.name}\n\n` +
-                '**Would you like to verify through RealmEye, or send a manual verification screenshot?**\n\n' +
-                '🔄 **RealmEye** - Automatic verification by adding a code to your RealmEye profile\n' +
-                '📷 **Manual Screenshot** - Submit a screenshot showing your vault with Discord tag in chat\n\n' +
-                'Click a button below to continue.'
+                '**Choose your verification method:**\n\n' +
+                '🔄 **RealmEye** - Automatic (add code to profile)\n' +
+                '📷 **Manual Screenshot** - Submit vault screenshot with Discord tag\n\n' +
+                'Click a button below.'
             )
             .setColor(0x00AE86)
-            .setFooter({ text: 'Choose your verification method' });
+            .setFooter({ text: 'Choose your method' });
 
         const buttons = createVerificationMethodButtons();
         
@@ -143,9 +139,7 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
 
         // Confirm in guild
         await interaction.editReply(
-            '✅ **Verification Started!**\n\n' +
-            'Check your DMs for verification instructions.\n\n' +
-            'If you don\'t see a message from me, please check your privacy settings.'
+            '✅ Check your DMs for verification instructions!'
         );
 
         // Log verification start

@@ -32,17 +32,15 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
     // (which might be the confirmation embed if coming from confirm button)
     const dungeonTitle = run.dungeonLabel || 'Raid';
 
-    const panelEmbed = new EmbedBuilder()
-        .setTitle(`Organizer Panel — ${dungeonTitle}`)
-        .setTimestamp(new Date());
+        const panelEmbed = new EmbedBuilder()
+            .setTitle(`Organizer Panel — ${dungeonTitle}`)
+            .setTimestamp(new Date());
 
-    // Build description with key reaction users if any
-    let description = 'Use the controls below to manage the raid.';
+        // Build description with key reaction users if any
+        let description = 'Manage the raid with the controls below.';
 
-    if (Object.keys(keyUsers).length > 0) {
-        description += '\n\n**Key Reacts:**';
-        
-        // Get the dungeon-specific key emoji (all keys for this dungeon use the same emoji)
+        if (Object.keys(keyUsers).length > 0) {
+            description += '\n\n**Key Reacts:**';        // Get the dungeon-specific key emoji (all keys for this dungeon use the same emoji)
         const dungeonKeyEmoji = getDungeonKeyEmoji(run.dungeonKey);
         
         for (const [keyType, userIds] of Object.entries(keyUsers)) {
@@ -204,11 +202,11 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
     // If not the original organizer, show confirmation panel first
     if (!accessCheck.isOriginalOrganizer) {
         const confirmEmbed = new EmbedBuilder()
-            .setTitle('⚠️ Confirmation Required')
+            .setTitle('⚠️ Confirm Access')
             .setDescription(
-                `This run is being hosted by <@${run.organizerId}>.\n\n` +
+                `This run is hosted by <@${run.organizerId}>.\n\n` +
                 `Are you sure you want to manage it?\n\n` +
-                `**Note:** Your actions will be logged under your name.`
+                `Your actions will be logged under your name.`
             )
             .setColor(0xffa500) // Orange color
             .setTimestamp(new Date());

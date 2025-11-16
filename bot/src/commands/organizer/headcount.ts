@@ -53,7 +53,7 @@ export const headcount: SlashCommand = {
         const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
 
         await interaction.editReply({
-            content: '**Select dungeons for the headcount**\n\nChoose up to 10 dungeons to include in the headcount panel:',
+            content: '**Select dungeons for the headcount**\n\nChoose up to 10 dungeons:',
             components: [row]
         });
 
@@ -86,9 +86,9 @@ export const headcount: SlashCommand = {
                 .setColor(0x5865F2)
                 .setDescription(
                     `Organizer: <@${interaction.user.id}>\n\n` +
-                    `**Instructions:**\n` +
-                    `• Click **Join** if you're interested in these runs\n` +
-                    `• Click the key buttons if you have keys for specific dungeons\n\n` +
+                    `**What to do:**\n` +
+                    `• Click **Join** if you're interested\n` +
+                    `• Click the key buttons if you have keys\n\n` +
                     `**Dungeons:**\n${selectedDungeons.map(d => `• ${d.dungeonName}`).join('\n')}`
                 )
                 .addFields(
@@ -144,8 +144,7 @@ export const headcount: SlashCommand = {
 
             if (!raidChannelId) {
                 await interaction.editReply({
-                    content: '**Error:** No raid channel configured.\n\n' +
-                        'Please ask a server admin to use `/setchannels` to set up the raid channel first.',
+                    content: '**Error:** No raid channel is configured. Ask an admin to set one up with `/setchannels`.',
                     components: []
                 });
                 return;
@@ -157,8 +156,7 @@ export const headcount: SlashCommand = {
                 const fetchedChannel = await interaction.client.channels.fetch(raidChannelId);
                 if (!fetchedChannel || !fetchedChannel.isTextBased() || fetchedChannel.isDMBased()) {
                     await interaction.editReply({
-                        content: '**Error:** The configured raid channel is invalid or not a text channel.\n\n' +
-                            'Please ask a server admin to reconfigure it using `/setchannels`.',
+                        content: '**Error:** The raid channel is invalid. Ask an admin to reconfigure it with `/setchannels`.',
                         components: []
                     });
                     return;
@@ -167,8 +165,7 @@ export const headcount: SlashCommand = {
             } catch (err) {
                 console.error('Failed to fetch raid channel:', err);
                 await interaction.editReply({
-                    content: '**Error:** Could not access the configured raid channel.\n\n' +
-                        'It may have been deleted. Please ask a server admin to reconfigure it using `/setchannels`.',
+                    content: '**Error:** Can\'t access the raid channel. It may have been deleted. Ask an admin to reconfigure it with `/setchannels`.',
                     components: []
                 });
                 return;
@@ -225,7 +222,7 @@ export const headcount: SlashCommand = {
 
             // Confirm to organizer
             await interaction.editReply({
-                content: `✅ Headcount panel created: ${sent.url}`,
+                content: `✅ Headcount created: ${sent.url}`,
                 components: []
             });
 

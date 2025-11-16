@@ -379,25 +379,23 @@ export function validateIGN(ign: string): { valid: boolean; error?: string } {
  */
 export function createVerificationPanelEmbed(customMessage?: string | null, imageUrl?: string | null): EmbedBuilder {
     const description = 
-        '**Welcome to the verification process!**\n\n' +
-        'To participate in raids and access full server features, you need to verify your ROTMG account.\n\n' +
+        '**Get verified to join raids and access server features.**\n\n' +
         (customMessage ? `${customMessage}\n\n` : '') +
         '**How it works:**\n' +
-        '1️⃣ Click the **"Get Verified"** button below\n' +
-        '2️⃣ Follow the instructions sent to your DMs\n' +
-        '3️⃣ You can verify automatically via RealmEye or manually with a screenshot\n' +
-        '4️⃣ Once verified, you\'ll receive the Verified Raider role!\n\n' +
+        '1️⃣ Click **"Get Verified"** below\n' +
+        '2️⃣ Follow the DM instructions\n' +
+        '3️⃣ Choose RealmEye (automatic) or screenshot (manual)\n' +
+        '4️⃣ Get the Verified Raider role!\n\n' +
         '**Requirements:**\n' +
-        '• DMs enabled for this server\n' +
-        '• For automatic: A public RealmEye profile\n' +
-        '• For manual: A clear screenshot showing your vault and Discord tag in chat\n\n' +
-        '**Ready?** Click the button below to start!';
+        '• DMs enabled\n' +
+        '• For automatic: Public RealmEye profile\n' +
+        '• For manual: Screenshot of vault with Discord tag in chat';
 
     const embed = new EmbedBuilder()
         .setTitle('🎯 Get Verified')
         .setDescription(description)
         .setColor(0x00AE86)
-        .setFooter({ text: 'Need help? Contact a staff member' });
+        .setFooter({ text: 'Need help? Contact staff' });
 
     if (imageUrl) {
         embed.setImage(imageUrl);
@@ -427,15 +425,12 @@ export function createIgnRequestEmbed(guildName: string): EmbedBuilder {
         .setTitle('🎮 Verification Started')
         .setDescription(
             `**Server:** ${guildName}\n\n` +
-            '**Step 1: Provide your ROTMG IGN**\n\n' +
-            'Please reply with your **in-game name** (IGN) from Realm of the Mad God.\n\n' +
-            '**Important:**\n' +
-            '• This must match your RealmEye profile name exactly\n' +
-            '• Your profile must be **public** on RealmEye\n' +
-            '• Type your IGN in the next message'
+            '**Step 1: What\'s your ROTMG IGN?**\n\n' +
+            'Reply with your in-game name exactly as it appears on RealmEye.\n\n' +
+            '**Note:** Your profile must be public on RealmEye.'
         )
         .setColor(0x00AE86)
-        .setFooter({ text: 'Choose verification method below' });
+        .setFooter({ text: 'Type your IGN in the next message' });
 }
 
 /**
@@ -452,20 +447,18 @@ export function createRealmEyeInstructionsEmbed(
         .setDescription(
             `**Server:** ${guildName}\n` +
             `**IGN:** ${ign}\n\n` +
-            '**Step 2: Add verification code to RealmEye**\n\n' +
-            'Go to your RealmEye profile and add this code to your **description**:\n\n' +
+            '**Step 2: Add this code to your RealmEye description:**\n\n' +
             `\`\`\`\n${code}\n\`\`\`\n\n` +
             '**Instructions:**\n' +
             `1. Go to https://www.realmeye.com/player/${encodeURIComponent(ign)}\n` +
-            '2. Make sure you\'re logged in\n' +
-            '3. Edit your profile description\n' +
-            '4. Paste the code above somewhere in your description\n' +
-            '5. Save your profile\n' +
-            '6. Click **Done** below when ready\n\n' +
-            '**Note:** The code must be in your **description**, not your name or guild.'
+            '2. Edit your profile description\n' +
+            '3. Paste the code above\n' +
+            '4. Save your profile\n' +
+            '5. Click **Done** below\n\n' +
+            '**Note:** Code must be in your description, not name or guild.'
         )
         .setColor(0x00AE86)
-        .setFooter({ text: 'This code expires in 1 hour' });
+        .setFooter({ text: 'Expires in 1 hour' });
 
     if (imageUrl) {
         embed.setImage(imageUrl);
@@ -524,21 +517,21 @@ export function createManualVerificationEmbed(
     imageUrl?: string | null
 ): EmbedBuilder {
     const defaultInstructions = 
-        '**Please send a full-screen screenshot showing:**\n\n' +
-        '1️⃣ Your vault or character selection screen\n' +
-        '2️⃣ Your Discord tag visible in the in-game chat\n' +
+        '**Send a screenshot showing:**\n\n' +
+        '1️⃣ Your vault or character screen\n' +
+        '2️⃣ Your Discord tag in the chat\n' +
         '3️⃣ Your IGN clearly visible\n\n' +
-        '**Example:** Open your vault, type your Discord tag in chat, take a screenshot, and send it here.\n\n' +
-        '⚠️ **The screenshot must be clear and unedited.**';
+        '**Example:** Open vault, type Discord tag in chat, screenshot it.\n\n' +
+        '⚠️ **Screenshot must be clear and unedited.**';
 
     const embed = new EmbedBuilder()
-        .setTitle('📷 Manual Verification - Screenshot Required')
+        .setTitle('📷 Manual Verification')
         .setDescription(
             `**Server:** ${guildName}\n\n` +
             (customInstructions || defaultInstructions)
         )
         .setColor(0xFFA500)
-        .setFooter({ text: 'Send your screenshot in the next message' });
+        .setFooter({ text: 'Send your screenshot next' });
 
     if (imageUrl) {
         embed.setImage(imageUrl);
@@ -598,20 +591,19 @@ export function createSuccessEmbed(
     errors: string[]
 ): EmbedBuilder {
     const embed = new EmbedBuilder()
-        .setTitle('✅ Verification Complete!')
+        .setTitle('✅ Verified!')
         .setColor(0x00FF00)
         .setDescription(
-            `**Congratulations!** You've been verified in **${guildName}**.\n\n` +
+            `You're now verified in **${guildName}**.\n\n` +
             `**IGN:** ${ign}\n\n` +
-            '**What happened:**\n' +
-            `${roleApplied ? '✅' : '❌'} Verified Raider role assigned\n` +
-            `${nicknameSet ? '✅' : '❌'} Nickname set to your IGN\n\n` +
+            `${roleApplied ? '✅' : '❌'} Verified Raider role\n` +
+            `${nicknameSet ? '✅' : '❌'} Nickname set\n\n` +
             (errors.length > 0
-                ? '⚠️ **Partial Success:**\n' + errors.map(e => `• ${e}`).join('\n') + '\n\n'
+                ? '⚠️ **Partial success:**\n' + errors.map(e => `• ${e}`).join('\n') + '\n\n'
                 : '') +
-            'You can now participate in raids! See you in the realm!'
+            'You can now join raids!'
         )
-        .setFooter({ text: 'You can now close this DM' });
+        .setFooter({ text: 'You can close this DM' });
 
     return embed;
 }

@@ -35,8 +35,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     if (existingReaction.state === 'join') {
         await btn.editReply({
-            content: '⚠️ **You have already joined this raid.**\n\n' +
-                'If you want to opt out and remove the raid role, click the **Leave** button instead.'
+            content: 'You\'ve already joined this raid. Use the **Leave** button if you want to opt out.'
         });
         return;
     }
@@ -93,6 +92,6 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     // Send ephemeral confirmation message
     await btn.editReply({
-        content: '✅ **You have joined the raid!**\n\nCheck above the raid panel for the **Party** and **Location** of the run!'
+        content: '✅ You joined the raid! Check the panel above for party and location details.'
     });
 }

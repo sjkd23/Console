@@ -105,8 +105,7 @@ export const runCreate: SlashCommand = {
 
         if (!raidChannelId) {
             await interaction.editReply(
-                '**Error:** No raid channel configured.\n\n' +
-                'Please ask a server admin to use `/setchannels` to set up the raid channel first.'
+                '**Error:** No raid channel is configured. Ask an admin to set one up with `/setchannels`.'
             );
             return;
         }
@@ -117,8 +116,7 @@ export const runCreate: SlashCommand = {
             const fetchedChannel = await interaction.client.channels.fetch(raidChannelId);
             if (!fetchedChannel || !fetchedChannel.isTextBased() || fetchedChannel.isDMBased()) {
                 await interaction.editReply(
-                    '**Error:** The configured raid channel is invalid or not a text channel.\n\n' +
-                    'Please ask a server admin to reconfigure it using `/setchannels`.'
+                    '**Error:** The raid channel is invalid or inaccessible. Ask an admin to reconfigure it with `/setchannels`.'
                 );
                 return;
             }
@@ -131,8 +129,7 @@ export const runCreate: SlashCommand = {
                 stack: err instanceof Error ? err.stack : undefined
             });
             await interaction.editReply(
-                '**Error:** Could not access the configured raid channel.\n\n' +
-                'It may have been deleted. Please ask a server admin to reconfigure it using `/setchannels`.'
+                '**Error:** Can\'t access the raid channel. It may have been deleted. Ask an admin to reconfigure it with `/setchannels`.'
             );
             return;
         }
@@ -158,7 +155,7 @@ export const runCreate: SlashCommand = {
             // Build the public embed (Starting/Lobby phase)
             const embed = new EmbedBuilder()
                 .setTitle(`⏳ Starting Soon: ${d.dungeonName}`)
-                .setDescription(`Organizer: <@${interaction.user.id}>\n\n**Status:** Waiting for organizer to start`)
+                .setDescription(`Organizer: <@${interaction.user.id}>\n\n**Status:** Waiting to start`)
                 .addFields(
                     { name: 'Raiders', value: '0', inline: false }
                 )

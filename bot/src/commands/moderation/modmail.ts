@@ -139,9 +139,9 @@ export const modmail: SlashCommand = {
                         await selectInteraction.editReply({
                             content: 
                                 `❌ **Modmail Blacklisted**\n\n` +
-                                `You are currently blacklisted from using modmail in **${selectedGuild.name}**.\n\n` +
+                                `You're blacklisted from modmail in **${selectedGuild.name}**.\n\n` +
                                 `**Reason:** ${blacklistStatus.reason || 'No reason provided'}\n\n` +
-                                `If you believe this is a mistake, please contact a server administrator directly.`,
+                                `Contact a server admin directly if you believe this is wrong.`,
                             components: [],
                         });
                         collector.stop();
@@ -163,8 +163,7 @@ export const modmail: SlashCommand = {
                             content: 
                                 `⚠️ **Existing Ticket**\n\n` +
                                 `You already have an open modmail ticket in **${selectedGuild.name}**.\n\n` +
-                                `Please wait for staff to respond to your existing ticket before creating a new one. ` +
-                                `If you need to add more information, you can reply when staff responds to you.`,
+                                `Wait for staff to respond before creating a new ticket.`,
                             components: [],
                         });
                         collector.stop();
@@ -182,8 +181,8 @@ export const modmail: SlashCommand = {
                 await selectInteraction.editReply({
                     content: 
                         `📝 **Selected Server:** ${selectedGuild.name}\n\n` +
-                        'Please send your message here in this DM. You can include text and/or attachments (images, etc.).\n\n' +
-                        '**Type your message below** (you have 5 minutes):',
+                        'Send your message here with text and/or attachments.\n\n' +
+                        '**Type your message below** (5 minutes):',
                     components: [],
                 });
 
@@ -231,7 +230,7 @@ export const modmail: SlashCommand = {
                         );
 
                     await dmChannel.send({
-                        content: `📤 **Confirm Modmail Submission**\n\nYou are about to send the following message to **${selectedGuild.name}**:`,
+                        content: `📤 **Confirm Modmail**\n\nSending to **${selectedGuild.name}**:`,
                         embeds: [previewEmbed],
                         components: [confirmRow],
                     });
@@ -403,19 +402,19 @@ export async function handleModmailConfirm(interaction: any): Promise<void> {
         // Send confirmation to user (in DM)
         await interaction.followUp({
             content: 
-                `✅ **Modmail Submitted Successfully!**\n\n` +
-                `Your message has been sent to the staff of **${guild.name}**.\n` +
+                `✅ **Modmail Sent!**\n\n` +
+                `Your message has been sent to **${guild.name}** staff.\n` +
                 `**Ticket ID:** ${ticketId}\n\n` +
-                `The staff team will review your message and respond if needed. You'll receive a DM if they reply.`,
+                `You'll get a DM if they reply.`,
         });
 
         // Send initial message in thread
         await thread.send({
             content: 
-                `📬 **New Modmail Ticket**\n\n` +
+                `📬 **New Modmail**\n\n` +
                 `**From:** ${interaction.user.tag} (${interaction.user.id})\n` +
                 `**Ticket ID:** ${ticketId}\n\n` +
-                `Use \`/modmailreply\` in this thread to respond to the user.`,
+                `Use \`/modmailreply\` to respond.`,
         });
 
         MODMAIL_STATE.delete(userId);

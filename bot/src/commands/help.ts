@@ -125,17 +125,17 @@ export const help: SlashCommand = {
 
         // Add footer with usage tip
         embed.setFooter({ 
-            text: 'Tip: Use /help category:<name> to filter commands by category' 
+            text: 'Use /help category:<name> to filter by category' 
         });
 
         // Add description based on category
         if (category === 'all') {
             embed.setDescription(
-                'Welcome to the ROTMG Raid Bot! Below are all available commands organized by category.\n\n' +
+                'Commands organized by category.\n\n' +
                 '**Role Hierarchy:**\n' +
                 '• Administrator → Moderator → Officer → Head Organizer → Security → Organizer → Verified Raider\n' +
-                '• Commands marked with "+" (e.g., Security+) can be used by that role and all higher roles\n\n' +
-                'Use the category filter to view specific command groups.'
+                '• Commands marked with "+" can be used by that role and higher\n\n' +
+                'Use the category filter to view specific groups.'
             );
         } else {
             const categoryNames: Record<string, string> = {
@@ -146,8 +146,7 @@ export const help: SlashCommand = {
                 utility: 'Utility'
             };
             embed.setDescription(
-                `Showing commands for **${categoryNames[category]}** category.\n\n` +
-                'Use `/help` without a category to view all commands.'
+                `Showing **${categoryNames[category]}** commands.\n\nUse \`/help\` without a category to view all commands.`
             );
         }
 

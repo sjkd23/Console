@@ -174,7 +174,7 @@ async function handleStatusInternal(
         
         const panelEmbed = new EmbedBuilder()
             .setTitle(`Organizer Panel — ${dungeonTitle}`)
-            .setDescription('✅ **Run is now LIVE!**\n\nUse the controls below to manage the raid.')
+            .setDescription('✅ **Run is LIVE!**\n\nManage the raid below.')
             .setTimestamp(new Date())
             .setColor(0x00ff00); // Green color for live
         
@@ -299,7 +299,7 @@ async function handleStatusInternal(
         // Close the organizer panel with clear message
         const closureEmbed = new EmbedBuilder()
             .setTitle(`${icon} Run ${endLabel}`)
-            .setDescription(`The run has been ${endLabel.toLowerCase()}. This organizer panel is now closed.`)
+            .setDescription(`The run has ${endLabel.toLowerCase()}. This panel is now closed.`)
             .setColor(status === 'cancelled' ? 0xff0000 : 0x00ff00)
             .setTimestamp(new Date());
         

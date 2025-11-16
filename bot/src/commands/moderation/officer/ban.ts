@@ -99,15 +99,15 @@ export const ban: SlashCommand = {
             let dmSent = false;
             try {
                 const dmEmbed = new EmbedBuilder()
-                    .setTitle('🔨 Banned from Server')
-                    .setDescription(`You have been permanently banned from **${interaction.guild.name}**.`)
+                    .setTitle('🔨 Banned')
+                    .setDescription(`You were permanently banned from **${interaction.guild.name}**.`)
                     .setColor(0xff0000)
                     .addFields(
                         { name: 'Reason', value: reason },
                         { name: 'Banned By', value: `<@${interaction.user.id}>`, inline: true },
                         { name: 'Date', value: time(new Date(), TimestampStyles.LongDateTime) }
                     )
-                    .setFooter({ text: 'This ban is permanent. You may appeal to server administrators.' })
+                    .setFooter({ text: 'You may appeal to server administrators' })
                     .setTimestamp();
 
                 await targetUser.send({ embeds: [dmEmbed] });
@@ -126,7 +126,7 @@ export const ban: SlashCommand = {
                 console.error('[Ban] Failed to ban member:', banErr);
                 let errorMsg = '❌ **Failed to ban member**\n\n';
                 if (banErr?.code === 50013) {
-                    errorMsg += 'Missing permissions. The bot may not have the "Ban Members" permission, or the target member\'s role is higher than the bot\'s highest role.';
+                    errorMsg += 'Missing permissions. The bot may lack "Ban Members" permission, or the target has a higher role than the bot.';
                 } else {
                     errorMsg += `Error: ${banErr?.message || 'Unknown error'}`;
                 }
@@ -146,7 +146,7 @@ export const ban: SlashCommand = {
                     { name: 'Message Deletion', value: 'Last 24 hours', inline: true },
                     { name: 'Reason', value: reason }
                 )
-                .setFooter({ text: dmSent ? '✓ User notified via DM' : '⚠️ Could not DM user (DMs may be disabled)' })
+                .setFooter({ text: dmSent ? 'User notified via DM' : 'Could not DM user' })
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [responseEmbed] });

@@ -102,39 +102,35 @@ export const warn: SlashCommand = {
                 // Try to DM the user
                 let dmSent = false;
                 try {
-                    const dmEmbed = new EmbedBuilder()
-                        .setTitle('⚠️ Warning Issued')
-                        .setDescription(`You have received a warning in **${interaction.guild.name}**.`)
-                        .setColor(0xffa500)
-                        .addFields(
-                            { name: 'Reason', value: reason },
-                            { name: 'Issued By', value: `<@${interaction.user.id}>`, inline: true },
-                            { name: 'Warning ID', value: `\`${punishment.id}\``, inline: true },
-                            { name: 'Date', value: time(new Date(punishment.created_at), TimestampStyles.LongDateTime) }
-                        )
-                        .setFooter({ text: 'Please review server rules and avoid future violations.' })
-                        .setTimestamp();
-
-                    await targetUser.send({ embeds: [dmEmbed] });
+                const dmEmbed = new EmbedBuilder()
+                    .setTitle('⚠️ Warning')
+                    .setDescription(`You received a warning in **${interaction.guild.name}**.`)
+                    .setColor(0xffa500)
+                    .addFields(
+                        { name: 'Reason', value: reason },
+                        { name: 'Issued By', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: 'Warning ID', value: `\`${punishment.id}\``, inline: true },
+                        { name: 'Date', value: time(new Date(punishment.created_at), TimestampStyles.LongDateTime) }
+                    )
+                    .setFooter({ text: 'Please follow server rules to avoid future warnings' })
+                    .setTimestamp();                    await targetUser.send({ embeds: [dmEmbed] });
                     dmSent = true;
                 } catch (dmErr) {
                     console.warn(`[Warn] Failed to DM user ${targetUser.id}:`, dmErr);
                 }
 
-                // Build success response
-                const responseEmbed = new EmbedBuilder()
-                    .setTitle('⚠️ Warning Issued')
-                    .setColor(0xffa500)
-                    .addFields(
-                        { name: 'Member', value: `<@${targetUser.id}>`, inline: true },
-                        { name: 'Warning ID', value: `\`${punishment.id}\``, inline: true },
-                        { name: 'Moderator', value: `<@${interaction.user.id}>`, inline: true },
-                        { name: 'Reason', value: reason }
-                    )
-                    .setFooter({ text: dmSent ? '✓ User notified via DM' : '⚠️ Could not DM user (DMs may be disabled)' })
-                    .setTimestamp();
-
-                await interaction.editReply({ embeds: [responseEmbed] });
+            // Build success response
+            const responseEmbed = new EmbedBuilder()
+                .setTitle('⚠️ Warning Issued')
+                .setColor(0xffa500)
+                .addFields(
+                    { name: 'Member', value: `<@${targetUser.id}>`, inline: true },
+                    { name: 'Warning ID', value: `\`${punishment.id}\``, inline: true },
+                    { name: 'Moderator', value: `<@${interaction.user.id}>`, inline: true },
+                    { name: 'Reason', value: reason }
+                )
+                .setFooter({ text: dmSent ? 'User notified via DM' : 'Could not DM user' })
+                .setTimestamp();                await interaction.editReply({ embeds: [responseEmbed] });
 
                 // Log to punishment_log channel if configured
                 try {
@@ -171,10 +167,10 @@ export const warn: SlashCommand = {
                     switch (err.code) {
                         case 'NOT_AUTHORIZED':
                         case 'NOT_SECURITY':
-                            errorMessage += '**Issue:** You don\'t have the Security role configured for this server.\n\n';
+                            errorMessage += '**Issue:** You need the Security role.\n\n';
                             errorMessage += '**What to do:**\n';
-                            errorMessage += '• Ask a server admin to use `/setroles` to set up the Security role\n';
-                            errorMessage += '• Make sure you have the Discord role that\'s mapped to Security';
+                            errorMessage += '• Ask an admin to use `/setroles` to set it up\n';
+                            errorMessage += '• Make sure you have the Security Discord role';
                             break;
                         case 'VALIDATION_ERROR':
                             errorMessage += `**Issue:** ${err.message}\n\n`;
