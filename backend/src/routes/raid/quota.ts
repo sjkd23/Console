@@ -107,25 +107,48 @@ export default async function quotaRoutes(app: FastifyInstance) {
             // This queries quota_dungeon_override table (set via /configquota)
             const pointsPerRun = await getPointsForDungeon(guildId, dungeonKey, actorRoles);
             
-            // Log events based on amount (can be positive or negative)
-            const absoluteAmount = Math.abs(amount);
+            // Calculate total points to be added/removed
+            const totalPointsToAdd = pointsPerRun * amount;
             
-            for (let i = 0; i < absoluteAmount; i++) {
-                const event = await logQuotaEvent(
-                    guildId,
-                    targetOrganizerId,
-                    'run_completed',
-                    undefined, // No subject_id - manual logging doesn't reference a specific run
-                    dungeonKey,
-                    amount > 0 ? pointsPerRun : -pointsPerRun // Apply calculated quota points (positive or negative)
-                );
+            // Check if this would result in negative total quota points for the user
+            const currentStats = await query<{ total_quota_points: string }>(
+                `SELECT COALESCE(SUM(quota_points), 0) as total_quota_points
+                 FROM quota_event
+                 WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
+                [guildId, targetOrganizerId]
+            );
 
-                if (event) {
-                    // Use quota_points (organizer points), NOT points (raider points)
-                    // Convert to number in case DB returns string
-                    totalPoints += Number(event.quota_points);
-                    loggedCount += 1;
-                }
+            const currentTotal = currentStats.rowCount && currentStats.rowCount > 0 
+                ? Number(currentStats.rows[0].total_quota_points)
+                : 0;
+
+            const newTotal = currentTotal + totalPointsToAdd;
+
+            // If the new total would be negative, adjust amount to bring them to 0 instead
+            let adjustedAmount = amount;
+            let adjustedTotalPoints = totalPointsToAdd;
+            
+            if (newTotal < 0) {
+                // Calculate how many runs we can actually remove to bring to 0
+                adjustedAmount = amount > 0 ? amount : Math.ceil(-currentTotal / pointsPerRun);
+                adjustedTotalPoints = adjustedAmount * pointsPerRun;
+            }
+
+            // Log a single event with the total amount
+            const event = await logQuotaEvent(
+                guildId,
+                targetOrganizerId,
+                'run_completed',
+                `manual_log_run:${Date.now()}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`, // Unique subject_id
+                dungeonKey,
+                adjustedTotalPoints // Total quota points (can be positive or negative)
+            );
+
+            if (event) {
+                // Use quota_points (organizer points), NOT points (raider points)
+                // Convert to number in case DB returns string
+                totalPoints = Number(event.quota_points);
+                loggedCount = Math.abs(adjustedAmount);
             }
 
             console.log(`[Quota] Manually logged ${loggedCount} run(s) for organizer ${targetOrganizerId} in guild ${guildId} (dungeon: ${dungeonKey}, points per run: ${pointsPerRun}, total points: ${totalPoints})`);
@@ -184,44 +207,78 @@ export default async function quotaRoutes(app: FastifyInstance) {
             // Get the point value for popping keys for this dungeon
             const pointsPerKey = await getKeyPopPointsForDungeon(guildId, dungeonKey);
 
-            // Upsert key_pop count
+            // Get current key count to prevent negative values
+            const currentResult = await query<{ count: number }>(
+                `SELECT count FROM key_pop
+                 WHERE guild_id = $1::bigint AND user_id = $2::bigint AND dungeon_key = $3 AND key_type = $4`,
+                [guildId, userId, dungeonKey, keyType]
+            );
+
+            const currentCount = currentResult.rowCount && currentResult.rowCount > 0 
+                ? currentResult.rows[0].count 
+                : 0;
+
+            // Calculate the new count, ensuring it doesn't go below 0
+            const rawNewCount = currentCount + amount;
+            const adjustedAmount = rawNewCount < 0 ? -currentCount : amount; // Adjust to bring to 0 if would be negative
+            const newCount = Math.max(0, rawNewCount);
+
+            // Upsert key_pop count with the adjusted amount
             const result = await query<{ count: number }>(
                 `INSERT INTO key_pop (guild_id, user_id, dungeon_key, key_type, count, last_popped_at)
                  VALUES ($1::bigint, $2::bigint, $3, $4, $5, now())
                  ON CONFLICT (guild_id, user_id, dungeon_key, key_type)
                  DO UPDATE SET 
-                    count = GREATEST(0, key_pop.count + $5),
+                    count = $5,
                     last_popped_at = now()
                  RETURNING count`,
-                [guildId, userId, dungeonKey, keyType, amount]
+                [guildId, userId, dungeonKey, keyType, newCount]
             );
 
             const newTotal = result.rows[0]?.count ?? 0;
 
             // Award points to the user if configured (only for positive amounts)
             let totalPointsAwarded = 0;
-            if (pointsPerKey > 0 && amount > 0) {
-                const totalPoints = pointsPerKey * amount;
-                
-                // Log quota event for each key popped
-                for (let i = 0; i < amount; i++) {
+            if (pointsPerKey > 0 && adjustedAmount > 0) {
+                // Get current point total to prevent negative values
+                const currentPointsResult = await query<{ total_points: string }>(
+                    `SELECT COALESCE(SUM(points), 0) as total_points
+                     FROM quota_event
+                     WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
+                    [guildId, userId]
+                );
+
+                const currentPoints = currentPointsResult.rowCount && currentPointsResult.rowCount > 0 
+                    ? Number(currentPointsResult.rows[0].total_points)
+                    : 0;
+
+                const totalPointsToAdd = pointsPerKey * adjustedAmount;
+                const newPointsTotal = currentPoints + totalPointsToAdd;
+
+                // If would result in negative, adjust
+                const finalPointsToAdd = newPointsTotal < 0 
+                    ? -currentPoints 
+                    : totalPointsToAdd;
+
+                if (finalPointsToAdd !== 0) {
+                    // Log a single quota event for all keys at once
                     const event = await query<{ id: number; points: number }>(
                         `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
                          VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
                          RETURNING id, points`,
-                        [guildId, userId, `key_pop:${Date.now()}:${userId}:${i}`, dungeonKey, pointsPerKey]
+                        [guildId, userId, `key_pop:${Date.now()}:${userId}:${adjustedAmount}`, dungeonKey, finalPointsToAdd]
                     );
 
                     if (event.rowCount && event.rowCount > 0) {
-                        totalPointsAwarded += event.rows[0].points;
+                        totalPointsAwarded = event.rows[0].points;
                     }
                 }
             }
 
-            console.log(`[Quota] Manually logged ${amount} key pop(s) for user ${userId} in guild ${guildId} (dungeon: ${dungeonKey}, new total: ${newTotal}, points awarded: ${totalPointsAwarded})`);
+            console.log(`[Quota] Manually logged ${Math.abs(adjustedAmount)} key pop(s) for user ${userId} in guild ${guildId} (dungeon: ${dungeonKey}, new total: ${newTotal}, points awarded: ${totalPointsAwarded})`);
 
             return reply.code(200).send({
-                logged: Math.abs(amount),
+                logged: Math.abs(adjustedAmount),
                 new_total: newTotal,
                 points_awarded: totalPointsAwarded,
                 user_id: userId,
@@ -881,12 +938,28 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         try {
-            // Insert a quota event with the specified amount
+            // Get current total to prevent negative values
+            const currentStats = await query<{ total_quota_points: string }>(
+                `SELECT COALESCE(SUM(quota_points), 0) as total_quota_points
+                 FROM quota_event
+                 WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
+                [guild_id, user_id]
+            );
+
+            const currentTotal = currentStats.rowCount && currentStats.rowCount > 0 
+                ? Number(currentStats.rows[0].total_quota_points)
+                : 0;
+
+            // Calculate new total and adjust if it would be negative
+            const newTotal = currentTotal + amount;
+            const adjustedAmount = newTotal < 0 ? -currentTotal : amount;
+
+            // Insert a quota event with the adjusted amount
             const result = await query<{ id: number; quota_points: number }>(
                 `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, quota_points, points)
                  VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0)
                  RETURNING id, quota_points`,
-                [guild_id, user_id, `manual_adjust:${Date.now()}:${user_id}`, amount]
+                [guild_id, user_id, `manual_adjust:${Date.now()}:${user_id}`, adjustedAmount]
             );
 
             if (!result.rowCount || result.rowCount === 0) {
@@ -894,15 +967,15 @@ export default async function quotaRoutes(app: FastifyInstance) {
             }
 
             // Get updated total for the user
-            const stats = await query<{ total_quota_points: string }>(
+            const updatedStats = await query<{ total_quota_points: string }>(
                 `SELECT COALESCE(SUM(quota_points), 0) as total_quota_points
                  FROM quota_event
                  WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
                 [guild_id, user_id]
             );
 
-            const totalQuotaPoints = stats.rowCount && stats.rowCount > 0 
-                ? Number(stats.rows[0].total_quota_points)
+            const totalQuotaPoints = updatedStats.rowCount && updatedStats.rowCount > 0 
+                ? Number(updatedStats.rows[0].total_quota_points)
                 : 0;
 
             return reply.send({
@@ -969,12 +1042,28 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         try {
-            // Insert a quota event with the specified amount
+            // Get current total to prevent negative values
+            const currentStats = await query<{ total_points: string }>(
+                `SELECT COALESCE(SUM(points), 0) as total_points
+                 FROM quota_event
+                 WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
+                [guild_id, user_id]
+            );
+
+            const currentTotal = currentStats.rowCount && currentStats.rowCount > 0 
+                ? Number(currentStats.rows[0].total_points)
+                : 0;
+
+            // Calculate new total and adjust if it would be negative
+            const newTotal = currentTotal + amount;
+            const adjustedAmount = newTotal < 0 ? -currentTotal : amount;
+
+            // Insert a quota event with the adjusted amount
             const result = await query<{ id: number; points: number }>(
                 `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, points, quota_points)
                  VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0)
                  RETURNING id, points`,
-                [guild_id, user_id, `manual_adjust_points:${Date.now()}:${user_id}`, amount]
+                [guild_id, user_id, `manual_adjust_points:${Date.now()}:${user_id}`, adjustedAmount]
             );
 
             if (!result.rowCount || result.rowCount === 0) {
@@ -982,15 +1071,15 @@ export default async function quotaRoutes(app: FastifyInstance) {
             }
 
             // Get updated total for the user
-            const stats = await query<{ total_points: string }>(
+            const updatedStats = await query<{ total_points: string }>(
                 `SELECT COALESCE(SUM(points), 0) as total_points
                  FROM quota_event
                  WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
                 [guild_id, user_id]
             );
 
-            const totalPoints = stats.rowCount && stats.rowCount > 0 
-                ? Number(stats.rows[0].total_points)
+            const totalPoints = updatedStats.rowCount && updatedStats.rowCount > 0 
+                ? Number(updatedStats.rows[0].total_points)
                 : 0;
 
             return reply.send({

@@ -844,7 +844,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
         const run = cur.rows[0];
-        const { dungeon_key, key_pop_count } = run;
+        const { dungeon_key, key_pop_count, organizer_id } = run;
 
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
@@ -909,6 +909,21 @@ export default async function runsRoutes(app: FastifyInstance) {
         } catch (err) {
             logger.error({ err, runId, keyPopNumber: newKeyPopCount }, 'Failed to create key pop snapshot');
             // Don't fail the request - key pop should still work even if snapshot fails
+        }
+
+        // Award organizer quota for this key pop
+        try {
+            const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
+                guildId: run.guild_id,
+                dungeonKey: dungeon_key,
+                runId: runId,
+                organizerDiscordId: organizer_id,
+                keyPopNumber: newKeyPopCount,
+            });
+            logger.info({ runId, keyPopNumber: newKeyPopCount, organizerQuotaPoints }, 'Awarded organizer quota for key pop');
+        } catch (err) {
+            logger.error({ err, runId, keyPopNumber: newKeyPopCount }, 'Failed to award organizer quota for key pop');
+            // Don't fail the request - key pop should still work even if quota award fails
         }
 
         return reply.send({ 

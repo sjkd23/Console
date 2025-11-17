@@ -117,6 +117,13 @@ export const RateLimitPresets = {
         windowMs: 15_000,
         errorMessage: '⏱️ **Modmail rate limit.** Please wait before performing more modmail actions.'
     } as RateLimitConfig,
+
+    /** Key popped button - very strict to prevent accidental multiple pops (1 per 20s) */
+    BUTTON_KEY_POPPED: {
+        maxRequests: 1,
+        windowMs: 20_000,
+        errorMessage: '⏱️ **Key pop cooldown active.** You can only pop a key once every 20 seconds to prevent accidents.'
+    } as RateLimitConfig,
 } as const;
 
 /**

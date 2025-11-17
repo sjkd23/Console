@@ -413,7 +413,16 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
     const submitted = await awaitModalSubmission(btn, modal);
     if (!submitted) return;
 
-    await submitted.deferUpdate();
+    // Try to defer - may fail if user took too long to submit modal (>3s timeout)
+    let deferred = false;
+    try {
+        await submitted.deferUpdate();
+        deferred = true;
+    } catch (err) {
+        // Interaction token expired - user took too long to submit modal
+        // We can still process the request, just need to use reply instead of followUp
+        console.warn('Modal submission interaction expired, will use reply instead of followUp');
+    }
 
     const values = getModalFieldValues(submitted, ['chain']);
     const chainStr = values.chain;
@@ -421,10 +430,12 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
 
     // Validate input
     if (isNaN(chainAmount) || chainAmount < 1 || chainAmount > 99) {
-        await submitted.followUp({ 
-            content: '❌ Chain amount must be a number between 1 and 99', 
-            ephemeral: true 
-        });
+        const msg = '❌ Chain amount must be a number between 1 and 99';
+        if (deferred) {
+            await submitted.followUp({ content: msg, ephemeral: true });
+        } else {
+            await submitted.reply({ content: msg, ephemeral: true });
+        }
         return;
     }
 
@@ -433,7 +444,12 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
 
     const memberData = await fetchMemberWithRoles(submitted);
     if (!memberData) {
-        await submitted.followUp({ content: 'Could not fetch your member information.', ephemeral: true });
+        const msg = 'Could not fetch your member information.';
+        if (deferred) {
+            await submitted.followUp({ content: msg, ephemeral: true });
+        } else {
+            await submitted.reply({ content: msg, ephemeral: true });
+        }
         return;
     }
 
@@ -445,12 +461,14 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
             chainAmount
         }, { guildId: guildCtx.guildId });
     } catch (err) {
-        if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
-            await submitted.followUp({ content: 'Only the organizer can set chain amount.', ephemeral: true });
-            return;
+        const msg = err instanceof BackendError && err.code === 'NOT_ORGANIZER' 
+            ? 'Only the organizer can set chain amount.'
+            : `Error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        if (deferred) {
+            await submitted.followUp({ content: msg, ephemeral: true });
+        } else {
+            await submitted.reply({ content: msg, ephemeral: true });
         }
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        await submitted.followUp({ content: `Error: ${msg}`, ephemeral: true });
         return;
     }
 
@@ -468,7 +486,12 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
     }>(`/runs/${runId}`);
 
     if (!run.channelId || !run.postMessageId) {
-        await submitted.followUp({ content: 'Run record missing channel/message id.', ephemeral: true });
+        const msg = 'Run record missing channel/message id.';
+        if (deferred) {
+            await submitted.followUp({ content: msg, ephemeral: true });
+        } else {
+            await submitted.reply({ content: msg, ephemeral: true });
+        }
         return;
     }
 
@@ -481,10 +504,17 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
             if (embeds.length > 0) {
                 const embed = EmbedBuilder.from(embeds[0]);
                 
-                // Build title with chain tracking
+                // Build title with chain tracking (preserving current key_pop_count)
                 const statusEmoji = run.status === 'live' ? '🟢' : '📋';
                 const statusText = run.status === 'live' ? 'LIVE' : 'Starting';
-                const chainText = run.chainAmount ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` : '';
+                let chainText = '';
+                if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+                    if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
+                        chainText = ` | Chain ${run.keyPopCount}/${run.chainAmount}`;
+                    } else {
+                        chainText = ` | Chain ${run.keyPopCount}`;
+                    }
+                }
                 embed.setTitle(`${statusEmoji} ${statusText}: ${run.dungeonLabel}${chainText}`);
                 
                 await pubMsg.edit({ embeds: [embed, ...embeds.slice(1)] });
@@ -492,8 +522,10 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
         }
     }
 
-    await submitted.followUp({ 
-        content: `✅ Chain amount set to: **${chainAmount}**\n\nThe raid title will now show "Chain 0/${chainAmount}" (updates as you press Key popped)`, 
-        ephemeral: true 
-    });
+    const successMsg = `✅ Chain amount set to: **${chainAmount}**\n\nThe raid title will now show "Chain ${run.keyPopCount}/${chainAmount}" (updates as you press Key popped)`;
+    if (deferred) {
+        await submitted.followUp({ content: successMsg, ephemeral: true });
+    } else {
+        await submitted.reply({ content: successMsg, ephemeral: true });
+    }
 }

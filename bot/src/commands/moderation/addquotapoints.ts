@@ -12,6 +12,7 @@ import { adjustQuotaPoints } from '../../lib/utilities/http.js';
 import { ensureGuildContext, validateGuildMember, fetchGuildMember } from '../../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { logCommandExecution, logQuotaAction } from '../../lib/logging/bot-logger.js';
+import { validateAndCapAmount, CAPS } from '../../lib/validation/amount-validation.js';
 
 /**
  * /addquotapoints - Manually adjust quota points for a member.
@@ -26,7 +27,7 @@ export const addquotapoints: SlashCommand = {
         .addIntegerOption(option =>
             option
                 .setName('amount')
-                .setDescription('Amount to add (use negative numbers to subtract)')
+                .setDescription(`Amount to add (max: ${CAPS.POINTS_QUOTA}, use negative to subtract)`)
                 .setRequired(true)
         )
         .addUserOption(option =>
@@ -41,17 +42,22 @@ export const addquotapoints: SlashCommand = {
         if (!guild) return;
 
         // Get options
-        const amount = interaction.options.getInteger('amount', true);
+        let amount = interaction.options.getInteger('amount', true);
         const targetUser = interaction.options.getUser('member') || interaction.user;
 
-        // Validation
-        if (amount === 0) {
+        // Validate and cap amount
+        const cappedAmount = validateAndCapAmount(amount, CAPS.POINTS_QUOTA);
+        if (cappedAmount === null) {
             await interaction.reply({
                 content: '❌ Amount cannot be 0.',
                 flags: MessageFlags.Ephemeral,
             });
             return;
         }
+
+        // Track if amount was capped
+        const wasCapped = cappedAmount !== amount;
+        amount = cappedAmount;
 
         // Ensure target is in this guild
         const targetMember = await validateGuildMember(interaction, guild, targetUser.id, `<@${targetUser.id}>`);
@@ -95,6 +101,11 @@ export const addquotapoints: SlashCommand = {
                     { name: 'Adjusted By', value: `<@${interaction.user.id}>`, inline: true }
                 )
                 .setTimestamp();
+
+            // Add warning footer if amount was capped
+            if (wasCapped) {
+                embed.setFooter({ text: `⚠️ Amount was capped at ${CAPS.POINTS_QUOTA} (max allowed)` });
+            }
 
             await interaction.editReply({
                 embeds: [embed],

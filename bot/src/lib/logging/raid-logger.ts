@@ -380,6 +380,32 @@ export async function logScreenshotSubmission(
 }
 
 /**
+ * Log key logging action (organizer logging keys after run end)
+ */
+export async function logKeyLogged(
+    client: Client,
+    context: RaidLogContext,
+    userId: string,
+    username: string,
+    keyCount: number,
+    pointsAwarded: number
+): Promise<void> {
+    // Ensure pointsAwarded is a number
+    const points = Number(pointsAwarded) || 0;
+    
+    const embed = new EmbedBuilder()
+        .setTitle('🔑 Keys Logged')
+        .setDescription(
+            `<@${context.organizerId}> logged **${keyCount}** key${keyCount > 1 ? 's' : ''} for <@${userId}> (${username})\n\n` +
+            `**Points Awarded:** +${points.toFixed(2)}`
+        )
+        .setColor(0xfee75c)
+        .setTimestamp(new Date());
+
+    await logToThread(client, context, '', embed);
+}
+
+/**
  * Clear the thread cache for a specific raid (call when raid ends)
  */
 export function clearLogThreadCache(context: RaidLogContext): void {

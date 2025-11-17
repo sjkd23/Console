@@ -176,13 +176,22 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         );
 
         // Step 2: Award organizer quota points using QuotaService
-        const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
-            guildId: input.guildId,
-            dungeonKey: input.dungeonKey,
-            runId: input.runId,
-            organizerDiscordId: input.organizerId,
-            organizerRoles: input.actorRoles,
-        }, client);
+        // Only award at run end if no key pops occurred (otherwise awarded per key pop)
+        let organizerQuotaPoints = 0;
+        if (input.keyPopCount === 0) {
+            organizerQuotaPoints = await quotaService.awardOrganizerQuota({
+                guildId: input.guildId,
+                dungeonKey: input.dungeonKey,
+                runId: input.runId,
+                organizerDiscordId: input.organizerId,
+                organizerRoles: input.actorRoles,
+            }, client);
+            logger.debug({ runId: input.runId, organizerQuotaPoints }, 
+                'Awarded organizer quota at run end (no key pops)');
+        } else {
+            logger.debug({ runId: input.runId, keyPopCount: input.keyPopCount }, 
+                'Skipping organizer quota at run end (already awarded per key pop - organizer received quota for each of the ' + input.keyPopCount + ' key pops)');
+        }
 
         // Step 3: Award raider points using QuotaService
         let raiderPointsAwarded = 0;
@@ -218,7 +227,11 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         runId: input.runId, 
         guildId: input.guildId, 
         organizerQuotaPoints: result.organizerQuotaPoints,
-        raiderPointsAwarded: result.raiderPointsAwarded
+        raiderPointsAwarded: result.raiderPointsAwarded,
+        keyPopCount: input.keyPopCount,
+        note: input.keyPopCount > 0 
+            ? `Organizer received ${input.keyPopCount} quota point(s) during key pops` 
+            : 'Organizer received quota at run end'
     }, 'Run ended successfully');
 
     return result;

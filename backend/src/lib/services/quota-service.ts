@@ -34,6 +34,7 @@ export interface QuotaContext {
 export interface OrganizerQuotaInput extends QuotaContext {
     organizerDiscordId: string;
     organizerRoles?: string[]; // For dungeon point overrides lookup
+    keyPopNumber?: number; // Optional: for awarding per key pop in chains
 }
 
 /**
@@ -80,6 +81,11 @@ export class QuotaService {
         );
 
         // Step 2: Log quota event with idempotency
+        // Use key pop number in idempotency key if provided (for chain tracking)
+        const idempotencyKey = input.keyPopNumber 
+            ? `run:${input.runId}:keypop:${input.keyPopNumber}` 
+            : `run:${input.runId}`;
+        
         const res = await db.query<{ id: number; quota_points: string }>(
             `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
              VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5)
@@ -89,14 +95,14 @@ export class QuotaService {
             [
                 input.guildId,
                 input.organizerDiscordId,
-                `run:${input.runId}`, // Idempotency key
+                idempotencyKey,
                 input.dungeonKey,
                 points,
             ]
         );
 
         if (res.rowCount === 0) {
-            logger.debug({ runId: input.runId, guildId: input.guildId }, 
+            logger.debug({ runId: input.runId, guildId: input.guildId, keyPopNumber: input.keyPopNumber }, 
                 'Organizer quota event already logged (idempotent no-op)');
             return 0;
         }
@@ -107,6 +113,7 @@ export class QuotaService {
             guildId: input.guildId, 
             organizerId: input.organizerDiscordId,
             dungeonKey: input.dungeonKey,
+            keyPopNumber: input.keyPopNumber,
             quotaPoints
         }, 'Awarded organizer quota points');
 

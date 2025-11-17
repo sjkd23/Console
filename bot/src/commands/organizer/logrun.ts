@@ -17,6 +17,7 @@ import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { handleDungeonAutocomplete } from '../../lib/utilities/dungeon-autocomplete.js';
 import { formatPoints } from '../../lib/utilities/format-helpers.js';
 import { logCommandExecution } from '../../lib/logging/bot-logger.js';
+import { validateAndCapAmount, CAPS } from '../../lib/validation/amount-validation.js';
 
 /**
  * /logrun - Manually log run completion quota for organizers.
@@ -39,7 +40,7 @@ export const logrun: SlashCommand = {
         .addIntegerOption(option =>
             option
                 .setName('amount')
-                .setDescription('Number of runs to add/remove (negative to remove, default: 1)')
+                .setDescription(`Number of runs to add/remove (max: ${CAPS.RUN_KEY}, negative to remove, default: 1)`)
                 .setRequired(false)
         )
         .addUserOption(option =>
@@ -65,8 +66,22 @@ export const logrun: SlashCommand = {
 
         // Get options
         const dungeonCode = interaction.options.getString('dungeon', true);
-        const amount = interaction.options.getInteger('amount') ?? 1;
+        let amount = interaction.options.getInteger('amount') ?? 1;
         const targetUser = interaction.options.getUser('member') ?? interaction.user;
+
+        // Validate and cap amount
+        const cappedAmount = validateAndCapAmount(amount, CAPS.RUN_KEY);
+        if (cappedAmount === null) {
+            await interaction.reply({
+                content: '❌ Amount cannot be zero.',
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
+
+        // Notify user if amount was capped
+        const wasCapped = cappedAmount !== amount;
+        amount = cappedAmount;
 
         // Validate dungeon
         const dungeon = dungeonByCode[dungeonCode];
@@ -129,6 +144,11 @@ export const logrun: SlashCommand = {
                     { name: `${actionText} By`, value: `<@${interaction.user.id}>`, inline: true },
                 )
                 .setTimestamp();
+
+            // Add warning footer if amount was capped
+            if (wasCapped) {
+                embed.setFooter({ text: `⚠️ Amount was capped at ${CAPS.RUN_KEY} (max allowed)` });
+            }
 
             await interaction.editReply({
                 embeds: [embed],

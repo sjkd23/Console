@@ -356,6 +356,51 @@ client.on('interactionCreate', async (interaction) => {
 
             // Handle run management buttons
             const [ns, action, runId, ...rest] = interaction.customId.split(':');
+            
+            // Handle key logging buttons (after run ends)
+            if (ns === 'keylog') {
+                if (action === 'custom') {
+                    const { handleKeyLogCustomName } = await import('./interactions/buttons/raids/key-logging.js');
+                    // Don't wrap in safeHandleInteraction - modals must be shown immediately
+                    try {
+                        await handleKeyLogCustomName(interaction as ButtonInteraction, runId);
+                    } catch (error) {
+                        console.error('[KeyLog] Error showing custom name modal:', error);
+                        // Try to send an error message if possible
+                        try {
+                            if (!interaction.replied && !interaction.deferred) {
+                                await interaction.reply({ content: 'Failed to show modal. Please try again.', flags: MessageFlags.Ephemeral });
+                            }
+                        } catch {
+                            // Silently fail if we can't even send an error message
+                        }
+                    }
+                    return;
+                }
+                if (action === 'cancel') {
+                    const { handleKeyLogCancel } = await import('./interactions/buttons/raids/key-logging.js');
+                    await safeHandleInteraction(interaction, () => handleKeyLogCancel(interaction as ButtonInteraction, runId), { ephemeral: true });
+                    return;
+                }
+                if (action === 'close') {
+                    const { handleKeyLogClose } = await import('./interactions/buttons/raids/key-logging.js');
+                    await safeHandleInteraction(interaction, () => handleKeyLogClose(interaction as ButtonInteraction, runId), { ephemeral: true });
+                    return;
+                }
+                if (action === 'back') {
+                    const { handleKeyLogBack } = await import('./interactions/buttons/raids/key-logging.js');
+                    await safeHandleInteraction(interaction, () => handleKeyLogBack(interaction as ButtonInteraction, runId), { ephemeral: true });
+                    return;
+                }
+                if (action === 'selectuser' && rest.length > 0) {
+                    // This is from the "Continue" button after custom name search
+                    const userId = rest[0];
+                    const { handleKeyLogSelectUserFromButton } = await import('./interactions/buttons/raids/key-logging.js');
+                    await safeHandleInteraction(interaction, () => handleKeyLogSelectUserFromButton(interaction as ButtonInteraction, runId, userId), { ephemeral: true });
+                    return;
+                }
+            }
+
             if (ns !== 'run' || !runId) return;
 
             if (action === 'org' || action === 'panel') {
@@ -411,7 +456,7 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
             if (action === 'keypop') {
-                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                if (!await applyButtonRateLimit(interaction, 'run:keypop')) return;
                 await safeHandleInteraction(interaction, () => handleKeyWindow(interaction, runId), { ephemeral: true });
                 return;
             }
@@ -457,6 +502,14 @@ client.on('interactionCreate', async (interaction) => {
 
         // Handle modal submissions
         if (interaction.isModalSubmit()) {
+            // Handle key logging custom name modal
+            if (interaction.customId.startsWith('keylog:customname:modal:')) {
+                const runId = interaction.customId.split(':')[3];
+                const { handleKeyLogCustomNameModal } = await import('./interactions/buttons/raids/key-logging.js');
+                await safeHandleInteraction(interaction, () => handleKeyLogCustomNameModal(interaction, runId), { ephemeral: true });
+                return;
+            }
+
             if (interaction.customId.startsWith('verification:approve_modal:')) {
                 await safeHandleInteraction(interaction, () => handleVerificationApproveModal(interaction), { ephemeral: true });
                 return;
@@ -485,6 +538,22 @@ client.on('interactionCreate', async (interaction) => {
 
         // Handle select menu interactions
         if (interaction.isStringSelectMenu()) {
+            // Handle key logging select menus
+            if (interaction.customId.startsWith('keylog:selectuser:')) {
+                const runId = interaction.customId.split(':')[2];
+                const { handleKeyLogSelectUser } = await import('./interactions/buttons/raids/key-logging.js');
+                await safeHandleInteraction(interaction, () => handleKeyLogSelectUser(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (interaction.customId.startsWith('keylog:keycount:')) {
+                const parts = interaction.customId.split(':');
+                const runId = parts[2];
+                const userId = parts[3];
+                const { handleKeyLogKeyCount } = await import('./interactions/buttons/raids/key-logging.js');
+                await safeHandleInteraction(interaction, () => handleKeyLogKeyCount(interaction, runId, userId), { ephemeral: true });
+                return;
+            }
+
             // Handle modmail select menu
             if (interaction.customId.startsWith('modmail:select_guild:')) {
                 // This is handled in the modmail command's collector

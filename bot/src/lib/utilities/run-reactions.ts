@@ -6,8 +6,10 @@ import { createLogger } from '../logging/logger.js';
 const logger = createLogger('RunReactions');
 
 /**
- * Add all reactions (keyReactions + otherReactions) to a run message
+ * Add reactions (otherReactions only) to a run message
  * based on the dungeon's configuration.
+ * 
+ * Key reactions are excluded - users should use the key buttons instead.
  * 
  * Handles errors gracefully - missing emojis or permission issues won't crash,
  * they'll just be logged and skipped.
@@ -22,9 +24,8 @@ export async function addRunReactions(message: Message, dungeonKey: string): Pro
         return;
     }
 
-    // Combine keyReactions and otherReactions
+    // Only use otherReactions - keyReactions are handled via buttons
     const allReactions = [
-        ...(dungeon.keyReactions || []),
         ...(dungeon.otherReactions || [])
     ];
 

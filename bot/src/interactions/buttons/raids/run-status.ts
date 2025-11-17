@@ -398,6 +398,32 @@ async function handleStatusInternal(
             console.error('Failed to log status change to raid-log:', e);
         }
 
+        // If run ended, show key logging panel
+        // Always log at least 1 key (the organizer's key to start the run)
+        // If they clicked "Key Popped", use that count instead
+        if (status === 'ended') {
+            const totalKeys = Math.max(1, run.keyPopCount);
+            
+            logger.info('Run ended, showing key logging panel', {
+                runId,
+                keyPopCount: run.keyPopCount,
+                totalKeys,
+            });
+
+            // Import showKeyLoggingPanel dynamically to avoid circular dependencies
+            const { showKeyLoggingPanel } = await import('./key-logging.js');
+
+            await showKeyLoggingPanel(
+                btn,
+                parseInt(runId),
+                guildId,
+                run.dungeonKey,
+                run.dungeonLabel,
+                totalKeys
+            );
+            return;
+        }
+
         // Close the organizer panel with clear message
         const closureEmbed = new EmbedBuilder()
             .setTitle(`${icon} Run ${endLabel}`)
@@ -431,9 +457,16 @@ function buildLiveEmbed(
     const embed = EmbedBuilder.from(original);
 
     // Set title with LIVE badge and optional chain tracking (not for Oryx 3)
-    const chainText = (run.dungeonKey !== 'ORYX_3' && run.chainAmount)
-        ? ` | Chain ${run.keyPopCount}/${run.chainAmount}`
-        : '';
+    let chainText = '';
+    if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+        if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
+            // Show Chain X/Y only if chain amount is set AND not exceeded
+            chainText = ` | Chain ${run.keyPopCount}/${run.chainAmount}`;
+        } else {
+            // Show Chain X if no chain amount set OR if count exceeded amount
+            chainText = ` | Chain ${run.keyPopCount}`;
+        }
+    }
     embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}${chainText}`);
 
     // Build description with organizer and key window if active
@@ -526,8 +559,12 @@ function buildEndedEmbed(
     }
 
     // Add final chain count if chain tracking was enabled (not for Oryx 3)
-    if (run.dungeonKey !== 'ORYX_3' && run.chainAmount && run.keyPopCount > 0) {
-        desc += `\n\n**Chains Completed:** ${run.keyPopCount}/${run.chainAmount}`;
+    if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+        if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
+            desc += `\n\n**Chains Completed:** ${run.keyPopCount}/${run.chainAmount}`;
+        } else {
+            desc += `\n\n**Chains Completed:** ${run.keyPopCount}`;
+        }
     }
 
     embed.setDescription(desc);

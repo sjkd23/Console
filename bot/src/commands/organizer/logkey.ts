@@ -16,6 +16,7 @@ import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { handleDungeonAutocomplete } from '../../lib/utilities/dungeon-autocomplete.js';
 import { formatPoints } from '../../lib/utilities/format-helpers.js';
 import { logCommandExecution } from '../../lib/logging/bot-logger.js';
+import { validateAndCapAmount, CAPS } from '../../lib/validation/amount-validation.js';
 
 /**
  * /logkey - Manually log key pops for raiders.
@@ -43,10 +44,8 @@ export const logkey: SlashCommand = {
         .addIntegerOption(option =>
             option
                 .setName('amount')
-                .setDescription('Number of keys to add/remove (negative to remove, default: 1)')
+                .setDescription(`Number of keys to add/remove (max: ${CAPS.RUN_KEY}, negative to remove, default: 1)`)
                 .setRequired(false)
-                .setMinValue(-100)
-                .setMaxValue(100)
         ),
 
     async run(interaction: ChatInputCommandInteraction) {
@@ -66,16 +65,21 @@ export const logkey: SlashCommand = {
         // Get options
         const targetUser = interaction.options.getUser('member', true);
         const dungeonCode = interaction.options.getString('dungeon', true);
-        const amount = interaction.options.getInteger('amount') ?? 1;
+        let amount = interaction.options.getInteger('amount') ?? 1;
 
-        // Validate amount is not zero
-        if (amount === 0) {
+        // Validate and cap amount
+        const cappedAmount = validateAndCapAmount(amount, CAPS.RUN_KEY);
+        if (cappedAmount === null) {
             await interaction.reply({
                 content: '❌ Amount cannot be zero.',
                 flags: MessageFlags.Ephemeral,
             });
             return;
         }
+
+        // Notify user if amount was capped
+        const wasCapped = cappedAmount !== amount;
+        amount = cappedAmount;
 
         // Validate dungeon
         const dungeon = dungeonByCode[dungeonCode];
@@ -140,8 +144,15 @@ export const logkey: SlashCommand = {
 
             embed.setTimestamp();
 
-            if (Math.abs(amount) > 1) {
-                embed.setFooter({ text: `${actionText} ${Math.abs(amount)} key(s) for ${dungeon.dungeonName}` });
+            if (Math.abs(amount) > 1 || wasCapped) {
+                let footerText = '';
+                if (Math.abs(amount) > 1) {
+                    footerText = `${actionText} ${Math.abs(amount)} key(s) for ${dungeon.dungeonName}`;
+                }
+                if (wasCapped) {
+                    footerText += footerText ? ` | ⚠️ Amount was capped at ${CAPS.RUN_KEY}` : `⚠️ Amount was capped at ${CAPS.RUN_KEY} (max allowed)`;
+                }
+                embed.setFooter({ text: footerText });
             }
 
             await interaction.editReply({

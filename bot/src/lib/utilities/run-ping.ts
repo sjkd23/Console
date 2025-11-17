@@ -200,8 +200,12 @@ export async function sendKeyPoppedPing(
         const info: string[] = [];
         if (run.party) info.push(`Party: **${run.party}**`);
         if (run.location) info.push(`Location: **${run.location}**`);
-        if (run.dungeonKey !== 'ORYX_3' && run.chainAmount) {
-            info.push(`Chain: **${run.keyPopCount}**/**${run.chainAmount}**`);
+        if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+            if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
+                info.push(`Chain: **${run.keyPopCount}**/**${run.chainAmount}**`);
+            } else {
+                info.push(`Chain: **${run.keyPopCount}**`);
+            }
         }
         if (info.length > 0) {
             content += `\n${info.join(' • ')}`;

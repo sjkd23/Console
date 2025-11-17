@@ -143,9 +143,16 @@ function buildLiveEmbed(
     const embed = EmbedBuilder.from(original);
 
     // Set title with LIVE badge and optional chain tracking (not for Oryx 3)
-    const chainText = (run.dungeonKey !== 'ORYX_3' && run.chainAmount) 
-        ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` 
-        : '';
+    let chainText = '';
+    if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+        if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
+            // Show Chain X/Y only if chain amount is set AND not exceeded
+            chainText = ` | Chain ${run.keyPopCount}/${run.chainAmount}`;
+        } else {
+            // Show Chain X if no chain amount set OR if count exceeded amount
+            chainText = ` | Chain ${run.keyPopCount}`;
+        }
+    }
     embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}${chainText}`);
 
     // Build description with organizer and key window if active
