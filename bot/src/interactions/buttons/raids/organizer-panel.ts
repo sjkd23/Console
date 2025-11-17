@@ -251,11 +251,11 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
     // If not the original organizer, show confirmation panel first
     if (!accessCheck.isOriginalOrganizer) {
         const confirmEmbed = new EmbedBuilder()
-            .setTitle('⚠️ Confirm Access')
+            .setTitle('Confirm Access')
             .setDescription(
                 `This run is hosted by <@${run.organizerId}>.\n\n` +
                 `Are you sure you want to manage it?\n\n` +
-                `Your actions will be logged under your name.`
+                `Your actions will be logged.`
             )
             .setColor(0xffa500) // Orange color
             .setTimestamp(new Date());

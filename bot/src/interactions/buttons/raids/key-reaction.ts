@@ -24,7 +24,7 @@ function updateKeysField(embed: EmbedBuilder, keyCounts: Record<string, number>,
 
     let keysText: string;
     if (entries.length === 0) {
-        keysText = 'No keys reported';
+        keysText = 'None';
     } else {
         keysText = entries.join(' • ');
     }

@@ -42,7 +42,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     if (existingReaction.state === 'join') {
         await btn.editReply({
-            content: 'You\'ve already joined this raid. Use the **Leave** button if you want to opt out.'
+            content: 'You already joined this raid. Click Leave if you want to drop out.'
         });
         return;
     }
@@ -100,6 +100,6 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     // Send ephemeral confirmation message
     await btn.editReply({
-        content: '✅ You joined the raid! Check the panel above for party and location details.'
+        content: 'Joined the raid! Check above for party and location.'
     });
 }

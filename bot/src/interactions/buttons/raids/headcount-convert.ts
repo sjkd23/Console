@@ -285,7 +285,7 @@ async function convertHeadcountToRun(
             const keysText = `${dungeonKeyEmoji} ${keyLabel}: **${keyUserIds.length}**`;
             runEmbed.addFields({ name: 'Keys', value: keysText, inline: false });
         } else {
-            runEmbed.addFields({ name: 'Keys', value: 'No keys reported', inline: false });
+            runEmbed.addFields({ name: 'Keys', value: 'None', inline: false });
         }
     }
 

@@ -228,7 +228,7 @@ export const runCreate: SlashCommand = {
 
             // Add Keys field if the dungeon has key reactions
             if (d.keyReactions && d.keyReactions.length > 0) {
-                embed.addFields({ name: 'Keys', value: 'No keys reported', inline: false });
+                embed.addFields({ name: 'Keys', value: 'None', inline: false });
             }
 
             // Add Organizer Note field if description provided

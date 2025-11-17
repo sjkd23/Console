@@ -95,7 +95,7 @@ async function setupLeaderboardPagination(
             // Only allow the user who invoked the command to use buttons
             if (i.user.id !== userId) {
                 i.reply({
-                    content: '❌ You cannot use these buttons. Use `/leaderboard` to view your own results.',
+                    content: 'You can\'t use these buttons. Use `/leaderboard` to view your own.',
                     ephemeral: true,
                 }).catch(() => {});
                 return false;
@@ -252,7 +252,7 @@ export const leaderboard: SlashCommand = {
             const sinceDate = new Date(since);
             if (isNaN(sinceDate.getTime())) {
                 await interaction.reply({
-                    content: '❌ Invalid "since" date format. Please use YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss format.',
+                    content: 'Invalid "since" date. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.',
                     flags: MessageFlags.Ephemeral,
                 });
                 return;
@@ -263,7 +263,7 @@ export const leaderboard: SlashCommand = {
             const untilDate = new Date(until);
             if (isNaN(untilDate.getTime())) {
                 await interaction.reply({
-                    content: '❌ Invalid "until" date format. Please use YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss format.',
+                    content: 'Invalid "until" date. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.',
                     flags: MessageFlags.Ephemeral,
                 });
                 return;
@@ -295,7 +295,7 @@ export const leaderboard: SlashCommand = {
                 }
 
                 const embed = new EmbedBuilder()
-                    .setTitle('📊 Leaderboard')
+                    .setTitle('Leaderboard')
                     .setDescription(`No data found for **${categoryName}** in **${dungeonName}**${dateRangeText}.`)
                     .setColor(0x95a5a6)
                     .setFooter({ text: `Requested by ${interaction.user.tag}` })

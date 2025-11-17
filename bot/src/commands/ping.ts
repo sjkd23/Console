@@ -32,16 +32,16 @@ export const ping: SlashCommand = {
 
         // Create an embed with the latency information
         const embed = new EmbedBuilder()
-            .setTitle('🏓 Pong!')
+            .setTitle('Pong!')
             .setColor(websocketLatency < 200 ? 0x57F287 : websocketLatency < 400 ? 0xFEE75C : 0xED4245)
             .addFields(
                 {
-                    name: '📡 Roundtrip Latency',
+                    name: 'Roundtrip Latency',
                     value: `${roundTripLatency}ms`,
                     inline: true
                 },
                 {
-                    name: '💓 WebSocket Latency',
+                    name: 'WebSocket Latency',
                     value: `${websocketLatency}ms`,
                     inline: true
                 }

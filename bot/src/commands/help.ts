@@ -387,7 +387,7 @@ export const help: SlashCommand = {
             
             if (!helpInfo) {
                 await interaction.reply({
-                    content: `❌ No help information available for command: \`${commandName}\``,
+                    content: `No help available for: \`${commandName}\``,
                     flags: MessageFlags.Ephemeral,
                 });
                 return;
@@ -399,18 +399,18 @@ export const help: SlashCommand = {
                 : getRoleDisplayName(requiredRole);
 
             const embed = new EmbedBuilder()
-                .setTitle(`📖 Command: /${helpInfo.name}`)
+                .setTitle(`Command: /${helpInfo.name}`)
                 .setDescription(helpInfo.description)
                 .addFields(
-                    { name: '� Usage', value: `\`${helpInfo.usage}\``, inline: false },
-                    { name: '🔑 Required Role', value: roleText + '+', inline: true }
+                    { name: 'Usage', value: `\`${helpInfo.usage}\``, inline: false },
+                    { name: 'Required Role', value: roleText + '+', inline: true }
                 )
                 .setColor(0x5865F2)
                 .setTimestamp();
 
             if (helpInfo.examples && helpInfo.examples.length > 0) {
                 embed.addFields({
-                    name: '💡 Examples',
+                    name: 'Examples',
                     value: helpInfo.examples.map(ex => `• \`${ex}\``).join('\n'),
                     inline: false,
                 });
@@ -424,14 +424,14 @@ export const help: SlashCommand = {
 
         // Otherwise, show command list grouped by role
         const embed = new EmbedBuilder()
-            .setTitle('📚 Available Commands')
+            .setTitle('Available Commands')
             .setDescription(
-                'Commands are listed below, grouped by required role.\n\n' +
+                'Commands listed below are grouped by required role.\n\n' +
                 '**Role Hierarchy:** Administrator → Moderator → Officer → Head Organizer → Security → Organizer → Verified Raider\n\n' +
-                'Use `/help command:<name>` to see detailed information about a specific command.'
+                'Use `/help command:<name>` for detailed info about a specific command.'
             )
             .setColor(0x5865F2)
-            .setFooter({ text: 'Tip: Commands marked with + can be used by that role and all higher roles' })
+            .setFooter({ text: 'Commands marked with + can be used by that role and all higher roles' })
             .setTimestamp();
 
         // Group commands by their minimum required role

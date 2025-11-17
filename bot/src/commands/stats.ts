@@ -46,27 +46,27 @@ export const stats: SlashCommand = {
 
             // Build embed
             const embed = new EmbedBuilder()
-                .setTitle(`📊 Quota Statistics`)
-                .setDescription(`Statistics for <@${targetUser.id}>`)
+                .setTitle(`Quota Stats`)
+                .setDescription(`Stats for <@${targetUser.id}>`)
                 .setColor(0x3498db);
 
             // Add Points field (for raider participation - future implementation)
             embed.addFields(
-                { name: '🎯 Points', value: `${formatPoints(stats.total_points)}`, inline: true }
+                { name: 'Points', value: `${formatPoints(stats.total_points)}`, inline: true }
             );
 
             // Add Quota Points field only if they have some (for organizers/verifiers)
             if (stats.total_quota_points > 0) {
                 embed.addFields(
-                    { name: '⭐ Quota Points', value: `${formatPoints(stats.total_quota_points)}`, inline: true }
+                    { name: 'Quota Points', value: `${formatPoints(stats.total_quota_points)}`, inline: true }
                 );
             }
 
             // Add runs organized and verifications
             embed.addFields(
-                { name: '🗺️ Runs Organized', value: `${stats.total_runs_organized}`, inline: true },
-                { name: '✅ Verifications', value: `${stats.total_verifications}`, inline: true },
-                { name: '🔑 Keys Popped', value: `${stats.total_keys_popped}`, inline: true }
+                { name: 'Runs Organized', value: `${stats.total_runs_organized}`, inline: true },
+                { name: 'Verifications', value: `${stats.total_verifications}`, inline: true },
+                { name: 'Keys Popped', value: `${stats.total_keys_popped}`, inline: true }
             );
 
             embed.setTimestamp();
@@ -101,7 +101,7 @@ export const stats: SlashCommand = {
                 const chunkSize = 20; // Show 20 dungeons per field
                 for (let i = 0; i < dungeonLines.length; i += chunkSize) {
                     const chunk = dungeonLines.slice(i, i + chunkSize);
-                    const fieldName = i === 0 ? '🏆 Dungeons: Completed | Keys Popped | Organized' : '🏆 Dungeons (continued)';
+                    const fieldName = i === 0 ? 'Dungeons: Completed | Keys | Organized' : 'Dungeons (continued)';
                     
                     embed.addFields({
                         name: fieldName,
@@ -111,8 +111,8 @@ export const stats: SlashCommand = {
                 }
             } else {
                 embed.addFields({
-                    name: '🏆 Dungeons: Completed | Keys Popped | Organized',
-                    value: 'No runs completed/organized yet',
+                    name: 'Dungeons: Completed | Keys | Organized',
+                    value: 'No activity yet',
                     inline: false
                 });
             }

@@ -62,8 +62,7 @@ export async function handleScreenshotButton(btn: ButtonInteraction, runId: stri
             '2. Attach your screenshot using the `screenshot` option\n' +
             '3. Make sure the screenshot is **fullscreen** and shows both `/who` and `/server` commands visible in the in-game chat\n\n' +
             '**Why is this required?**\n' +
-            'Oryx 3 runs require completion proof for verification purposes. ' +
-            'The screenshot must be fullscreen with `/who` and `/server` visible in chat so staff can verify the completion.\n\n' +
+            'O3 runs require a taken screenshot to prove that our organizers made sure to check if the location was available.\n\n' +
             '⏱️ **You must submit a screenshot before starting the run.**',
         flags: MessageFlags.Ephemeral
     });

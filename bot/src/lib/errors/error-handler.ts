@@ -21,7 +21,7 @@ export interface ErrorMessageOptions {
 export function formatErrorMessage(options: ErrorMessageOptions): string {
     const { error, baseMessage, errorHandlers = {} } = options;
     
-    let errorMessage = `❌ **${baseMessage}**\n\n`;
+    let errorMessage = `**${baseMessage}**\n\n`;
     
     if (error instanceof BackendError) {
         // Check for custom handler first
@@ -31,29 +31,25 @@ export function formatErrorMessage(options: ErrorMessageOptions): string {
             // Default handlers for common error codes
             switch (error.code) {
                 case 'NOT_AUTHORIZED':
-                    errorMessage += '**Issue:** You don\'t have permission for this action.\n\n';
-                    errorMessage += '**What to do:**\n';
-                    errorMessage += '• Check that you have the required role\n';
-                    errorMessage += '• Contact an admin if you think this is wrong';
+                    errorMessage += 'You don\'t have permission for this.\n\n';
+                    errorMessage += 'Make sure you have the right role, or contact an admin if something\'s wrong.';
                     break;
                 case 'NOT_ORGANIZER':
-                    errorMessage += '**Issue:** You need the Organizer role.\n\n';
-                    errorMessage += '**What to do:**\n';
-                    errorMessage += '• Ask an admin to use `/setroles` to set it up\n';
-                    errorMessage += '• Make sure you have the Organizer Discord role';
+                    errorMessage += 'You need the Organizer role.\n\n';
+                    errorMessage += 'Ask an admin to use `/setroles` to set it up and make sure you have the Organizer Discord role.';
                     break;
                 case 'VALIDATION_ERROR':
-                    errorMessage += `**Issue:** ${error.message}\n\n`;
-                    errorMessage += 'Please check your input and try again.';
+                    errorMessage += `${error.message}\n\n`;
+                    errorMessage += 'Check your input and try again.';
                     break;
                 default:
-                    errorMessage += `**Error:** ${error.message}\n\n`;
-                    errorMessage += 'Try again or contact an admin if this persists.';
+                    errorMessage += `${error.message}\n\n`;
+                    errorMessage += 'Try again or contact an admin if this keeps happening.';
             }
         }
     } else {
         console.error(`[Error] ${baseMessage}:`, error);
-        errorMessage += 'An unexpected error occurred. Please try again later.';
+        errorMessage += 'Something went wrong. Try again later.';
     }
     
     return errorMessage;
