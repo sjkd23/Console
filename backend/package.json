@@ -7,7 +7,11 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc",
-    "migrate": "tsx src/scripts/migrate.ts"
+    "migrate": "tsx src/scripts/migrate.ts",
+    "migrate:test": "cross-env NODE_ENV=test tsx src/scripts/migrate.ts",
+    "test": "cross-env NODE_ENV=test vitest run",
+    "test:watch": "cross-env NODE_ENV=test vitest",
+    "test:coverage": "cross-env NODE_ENV=test vitest run --coverage"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -19,8 +23,12 @@
   "devDependencies": {
     "@types/node": "^22.7.4",
     "@types/pg": "^8.15.6",
+    "@vitest/coverage-v8": "^4.0.9",
+    "@vitest/ui": "^4.0.9",
+    "cross-env": "^7.0.3",
     "pino-pretty": "^11.0.0",
     "tsx": "^4.16.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.0.9"
   }
 }

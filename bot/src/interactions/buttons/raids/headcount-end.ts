@@ -13,6 +13,7 @@ import { clearKeyOffers } from './headcount-key.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { withButtonLock, getHeadcountLockKey } from '../../../lib/utilities/button-mutex.js';
+import { unregisterHeadcount } from '../../../lib/state/active-headcount-tracker.js';
 
 export async function handleHeadcountEnd(btn: ButtonInteraction, publicMessageId: string) {
     await btn.deferUpdate();
@@ -73,29 +74,60 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
     }
 
     // Update the embed to show it's ended
+    const originalTitle = embed.data.title || '';
+    const isSingleDungeon = originalTitle.includes('Headcount:') || originalTitle.includes('—');
+    
     const endedEmbed = EmbedBuilder.from(embed)
-        .setTitle('❌ Headcount Ended')
-        .setColor(0xff0000);
+        .setTitle(originalTitle.replace('🎯', '❌').replace('Headcount', 'Headcount Ended'))
+        .setColor(0xff0000)
+        .setTimestamp(new Date());
 
-    // Keep the existing description but add an ended notice at the top
+    // Simplify the description - remove extra sections
     const data = embed.toJSON();
     let description = data.description || '';
     
-    // Add ended notice after the organizer line
+    // Extract just the organizer line and participants
     const lines = description.split('\n');
-    const organizerLineIdx = lines.findIndex(l => l.includes('Organizer:'));
+    const organizerLine = lines.find(l => l.includes('Organizer:')) || '';
+    const joinedLine = lines.find(l => l.includes('**Joined:**')) || '';
     
-    if (organizerLineIdx >= 0) {
-        lines.splice(organizerLineIdx + 1, 0, '\n**Status:** This headcount has ended');
-        description = lines.join('\n');
-    } else {
-        description = '**Status:** This headcount has ended\n\n' + description;
+    // For multi-dungeon, keep the dungeons list
+    const dungeonsLine = lines.find(l => l.includes('**Dungeons:**')) || '';
+    
+    // Rebuild clean description
+    let cleanDescription = organizerLine;
+    
+    // Add dungeons for multi-dungeon headcounts
+    if (dungeonsLine) {
+        cleanDescription += `\n\n${dungeonsLine}`;
     }
     
-    endedEmbed.setDescription(description);
+    if (joinedLine) {
+        cleanDescription += `\n\n${joinedLine}`;
+    }
+    
+    endedEmbed.setDescription(cleanDescription);
+    
+    // Keep interested/participant count and keys fields
+    const fields = data.fields || [];
+    const interestedField = fields.find(f => f.name === 'Interested' || f.name === 'Participants');
+    const keysField = fields.find(f => f.name === 'Keys' || f.name === 'Total Keys');
+    
+    const fieldsToKeep = [];
+    if (interestedField) fieldsToKeep.push(interestedField);
+    if (keysField) fieldsToKeep.push(keysField);
+    
+    if (fieldsToKeep.length > 0) {
+        endedEmbed.setFields(fieldsToKeep);
+    }
 
     // Remove all buttons from the public message
     await publicMsg.edit({ embeds: [endedEmbed], components: [] });
+
+    // Unregister the active headcount
+    if (btn.guild) {
+        unregisterHeadcount(btn.guild.id, organizerId);
+    }
 
     // Log headcount ending to raid-log
     if (btn.guild) {

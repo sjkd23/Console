@@ -99,6 +99,15 @@ export async function handleClassSelection(btn: ButtonInteraction, runId: string
         await selectInteraction.deferUpdate();
 
         const selectedClass = selectInteraction.values[0];
+        const guildId = btn.guildId;
+
+        if (!guildId) {
+            await selectInteraction.editReply({
+                content: 'This command can only be used in a server.',
+                components: []
+            });
+            return;
+        }
 
         // Update backend with PATCH
         const result = await patchJSON<{ joinCount: number; classCounts: Record<string, number> }>(
@@ -106,7 +115,8 @@ export async function handleClassSelection(btn: ButtonInteraction, runId: string
             {
                 userId: btn.user.id,
                 class: selectedClass
-            }
+            },
+            { guildId }
         );
 
         // Update the original message embed

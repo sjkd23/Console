@@ -1,6 +1,9 @@
 // backend/src/lib/authorization.ts
 import { query } from '../../db/pool.js';
 import { getGuildRoles as getGuildRoleMappings } from '../database/database-helpers.js';
+import { createLogger } from '../logging/logger.js';
+
+const authLogger = createLogger('RunAuth');
 
 /**
  * Internal role keys (must match role_catalog entries)
@@ -249,4 +252,185 @@ export async function requireAdministrator(
     userRoles?: string[]
 ): Promise<void> {
     return requireRole(guildId, userId, 'administrator', userRoles);
+}
+
+/* -------------------------------------------
+ * Run authorization helpers
+ * Centralized logic for who can mutate runs
+ * ------------------------------------------*/
+
+/**
+ * Minimal run data needed for authorization checks
+ */
+export interface RunRow {
+    organizer_id: string;
+    guild_id: string;
+    status: string;
+}
+
+/**
+ * Actor context for run authorization
+ * Derived from the authenticated request
+ */
+export interface RunActorContext {
+    userId: string;
+    userRoles?: string[];
+}
+
+/**
+ * Options for authorizing run actions
+ */
+export interface RunAuthOptions {
+    /**
+     * Allow the run's organizer to perform this action
+     * @default false
+     */
+    allowOrganizer?: boolean;
+
+    /**
+     * Allow users with the 'organizer' role to perform this action
+     * (staff with organizer permissions can override)
+     * @default false
+     */
+    allowOrganizerRole?: boolean;
+
+    /**
+     * Allow the auto-end system to bypass all checks.
+     * 
+     * ⚠️ SECURITY WARNING: This bypasses ALL authorization checks.
+     * Only use this when the request is verified to come from a trusted
+     * system actor (e.g., auto-end task with isAutoEnd=true flag).
+     * 
+     * The caller MUST validate that this is a legitimate system action
+     * before setting this to true. Do NOT pass user-controlled data directly.
+     * 
+     * @default false
+     */
+    allowAutoEndBypass?: boolean;
+}
+
+/**
+ * Authorize an actor to perform an action on a run.
+ * 
+ * This centralizes all run authorization logic to avoid duplication and drift.
+ * Throws an error if the actor is not authorized.
+ * 
+ * Authorization priority (first match wins):
+ * 1. Auto-end bypass (system actions) - ⚠️ Must be validated by caller
+ * 2. Organizer role (staff with organizer permissions)
+ * 3. Run organizer (creator of the run)
+ * 
+ * @param run - The run being acted upon
+ * @param actor - The actor attempting the action
+ * @param opts - Authorization options for this action
+ * @throws Error with code='NOT_ORGANIZER' and statusCode=403 if actor is not authorized
+ * 
+ * @example
+ * // Allow only the organizer
+ * await authorizeRunActor(run, actor, { allowOrganizer: true });
+ * 
+ * @example
+ * // Allow organizer or staff with organizer role
+ * await authorizeRunActor(run, actor, { 
+ *   allowOrganizer: true, 
+ *   allowOrganizerRole: true 
+ * });
+ * 
+ * @example
+ * // System auto-end (bypasses all checks - caller must validate isAutoEnd flag)
+ * await authorizeRunActor(run, actor, { 
+ *   allowAutoEndBypass: true 
+ * });
+ */
+export async function authorizeRunActor(
+    run: RunRow,
+    actor: RunActorContext,
+    opts: RunAuthOptions
+): Promise<void> {
+    const {
+        allowOrganizer = false,
+        allowOrganizerRole = false,
+        allowAutoEndBypass = false,
+    } = opts;
+
+    // 1. Check auto-end bypass (system actions)
+    // ⚠️ The caller MUST validate this is a legitimate system action
+    if (allowAutoEndBypass) {
+        authLogger.info(
+            { guildId: run.guild_id, actorId: actor.userId },
+            'Auto-end bypass: system actor allowed'
+        );
+        return; // Authorized
+    }
+
+    // 2. Check if actor has organizer role (staff override)
+    if (allowOrganizerRole) {
+        const hasRole = await hasInternalRole(
+            run.guild_id,
+            actor.userId,
+            'organizer',
+            actor.userRoles
+        );
+        if (hasRole) {
+            authLogger.debug(
+                { guildId: run.guild_id, actorId: actor.userId },
+                'Authorized via organizer role'
+            );
+            return; // Authorized
+        }
+    }
+
+    // 3. Check if actor is the run organizer
+    if (allowOrganizer) {
+        const isOrganizer = run.organizer_id === actor.userId;
+        if (isOrganizer) {
+            authLogger.debug(
+                { guildId: run.guild_id, actorId: actor.userId, organizerId: run.organizer_id },
+                'Authorized as run organizer'
+            );
+            return; // Authorized
+        }
+    }
+
+    // No authorization rule matched - deny access
+    authLogger.warn(
+        { 
+            guildId: run.guild_id, 
+            actorId: actor.userId, 
+            organizerId: run.organizer_id,
+            allowOrganizer,
+            allowOrganizerRole,
+        },
+        'Run action denied - insufficient permissions'
+    );
+
+    // Throw error compatible with existing API contract
+    const error: any = new Error('only the organizer can perform this action');
+    error.code = 'NOT_ORGANIZER';
+    error.statusCode = 403;
+    throw error;
+}
+
+/**
+ * Build a RunActorContext from request body fields.
+ * 
+ * This extracts the actor information from the typical request body
+ * format used in run mutation endpoints.
+ * 
+ * ⚠️ NOTE: This currently relies on bot-supplied data from the request body.
+ * The actorId and actorRoles are provided by the bot (which is trusted via API key).
+ * In the future, this could be hardened by using request.auth context if available.
+ * 
+ * @param actorId - Discord user ID from request body
+ * @param actorRoles - Optional array of Discord role IDs from request body
+ * @returns RunActorContext for authorization checks
+ */
+export function buildRunActorContext(
+    actorId: string,
+    actorRoles?: string[]
+): RunActorContext {
+    return {
+        userId: actorId,
+        userRoles: actorRoles,
+    };
 }

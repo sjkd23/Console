@@ -49,12 +49,18 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
     // Defer the reply so we can send a follow-up message
     await btn.deferReply({ flags: MessageFlags.Ephemeral });
 
+    const guildId = btn.guildId;
+    if (!guildId) {
+        await btn.editReply({ content: 'This command can only be used in a server.' });
+        return;
+    }
+
     // Fetch run details to get dungeonKey and organizerId
     const run = await getJSON<{ 
         dungeonKey: string; 
         dungeonLabel: string;
         organizerId: string;
-    }>(`/runs/${runId}`).catch(() => null);
+    }>(`/runs/${runId}`, { guildId }).catch(() => null);
     if (!run) {
         await btn.editReply({ content: 'Could not fetch run details.' });
         return;
@@ -66,7 +72,8 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
         {
             userId: btn.user.id,
             keyType: keyType
-        }
+        },
+        { guildId }
     );
 
     const msg = btn.message;

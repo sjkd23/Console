@@ -37,14 +37,29 @@ export function clearKeyOffers(messageId: string): void {
 }
 
 /**
- * Update the "Total Keys" field to show total count across all dungeons.
+ * Update the "Total Keys" or "Keys" field to show total count.
+ * Handles both multi-dungeon ("Total Keys") and single-dungeon ("Keys") formats.
  */
 function updateTotalKeys(embed: EmbedBuilder, keyOffers: Map<string, Set<string>>): EmbedBuilder {
     let totalKeys = 0;
     for (const userIds of keyOffers.values()) {
         totalKeys += userIds.size;
     }
-    return setEmbedField(embed, 'Total Keys', String(totalKeys), true);
+    
+    // Try to update "Total Keys" first (multi-dungeon), then "Keys" (single-dungeon)
+    const data = embed.toJSON();
+    const fields = data.fields || [];
+    
+    const totalKeysIdx = fields.findIndex(f => f.name === 'Total Keys');
+    const keysIdx = fields.findIndex(f => f.name === 'Keys');
+    
+    if (totalKeysIdx >= 0) {
+        fields[totalKeysIdx].value = String(totalKeys);
+    } else if (keysIdx >= 0) {
+        fields[keysIdx].value = String(totalKeys);
+    }
+    
+    return new EmbedBuilder(data);
 }
 
 /**

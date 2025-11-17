@@ -5,6 +5,7 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   BACKEND_API_KEY: z.string().min(1, "BACKEND_API_KEY is required (shared secret for bot -> backend)"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  TEST_DATABASE_URL: z.string().optional(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

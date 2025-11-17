@@ -7,23 +7,36 @@ const BASE = botConfig.BACKEND_URL;
 const API_KEY = botConfig.BACKEND_API_KEY;
 const logger = createLogger('HTTP');
 
-function headers(requestId: string) {
-    return {
+interface RequestContext {
+    guildId?: string;
+}
+
+function headers(requestId: string, ctx?: RequestContext) {
+    const hdrs: Record<string, string> = {
         'content-type': 'application/json',
         'x-api-key': API_KEY,
         'x-request-id': requestId, // Correlation ID for tracing
     };
+    
+    // Add guild context if provided
+    if (ctx?.guildId) {
+        hdrs['x-guild-id'] = ctx.guildId;
+    }
+    
+    return hdrs;
 }
 
 export class BackendError extends Error {
     code?: string;
     status?: number;
     requestId?: string;
-    constructor(message: string, code?: string, status?: number, requestId?: string) {
+    data?: any; // Additional error data from backend
+    constructor(message: string, code?: string, status?: number, requestId?: string, data?: any) {
         super(message);
         this.code = code;
         this.status = status;
         this.requestId = requestId;
+        this.data = data;
     }
 }
 
@@ -34,22 +47,22 @@ async function handle(res: Response, requestId: string) {
 
     if (res.ok) return data;
 
-    // Expect unified error: { error: { code, message } }
+    // Expect unified error: { error: { code, message, ...extra } }
     const code = data?.error?.code ?? 'UNKNOWN';
     const msg = data?.error?.message ?? `HTTP ${res.status}`;
-    throw new BackendError(msg, code, res.status, requestId);
+    throw new BackendError(msg, code, res.status, requestId, data?.error);
 }
 
-async function makeRequest<T>(method: string, path: string, body?: any): Promise<T> {
+async function makeRequest<T>(method: string, path: string, body?: any, ctx?: RequestContext): Promise<T> {
     const requestId = randomUUID().slice(0, 8);
     const start = Date.now();
     
-    logger.debug('API request starting', { requestId, method, path });
+    logger.debug('API request starting', { requestId, method, path, guildId: ctx?.guildId });
     
     try {
         const options: RequestInit = { 
             method, 
-            headers: headers(requestId)
+            headers: headers(requestId, ctx)
         };
         
         if (body !== undefined) {
@@ -64,7 +77,8 @@ async function makeRequest<T>(method: string, path: string, body?: any): Promise
             method, 
             path, 
             status: res.status, 
-            duration 
+            duration,
+            guildId: ctx?.guildId
         });
         
         return handle(res, requestId) as Promise<T>;
@@ -79,7 +93,8 @@ async function makeRequest<T>(method: string, path: string, body?: any): Promise
                 status: err.status,
                 code: err.code,
                 duration,
-                message: err.message
+                message: err.message,
+                guildId: ctx?.guildId
             });
         } else {
             logger.error('API request failed', { 
@@ -88,7 +103,8 @@ async function makeRequest<T>(method: string, path: string, body?: any): Promise
                 path, 
                 duration,
                 error: err instanceof Error ? err.message : String(err),
-                stack: err instanceof Error ? err.stack : undefined
+                stack: err instanceof Error ? err.stack : undefined,
+                guildId: ctx?.guildId
             });
         }
         
@@ -96,20 +112,20 @@ async function makeRequest<T>(method: string, path: string, body?: any): Promise
     }
 }
 
-export async function getJSON<T>(path: string): Promise<T> {
-    return makeRequest<T>('GET', path);
+export async function getJSON<T>(path: string, ctx?: RequestContext): Promise<T> {
+    return makeRequest<T>('GET', path, undefined, ctx);
 }
 
-export async function postJSON<T>(path: string, body: any): Promise<T> {
-    return makeRequest<T>('POST', path, body);
+export async function postJSON<T>(path: string, body: any, ctx?: RequestContext): Promise<T> {
+    return makeRequest<T>('POST', path, body, ctx);
 }
 
-export async function patchJSON<T>(path: string, body: any): Promise<T> {
-    return makeRequest<T>('PATCH', path, body);
+export async function patchJSON<T>(path: string, body: any, ctx?: RequestContext): Promise<T> {
+    return makeRequest<T>('PATCH', path, body, ctx);
 }
 
-export async function deleteJSON<T>(path: string, body: any): Promise<T> {
-    return makeRequest<T>('DELETE', path, body);
+export async function deleteJSON<T>(path: string, body: any, ctx?: RequestContext): Promise<T> {
+    return makeRequest<T>('DELETE', path, body, ctx);
 }
 
 /** Create a modmail ticket (POST /modmail/tickets) */
@@ -130,12 +146,13 @@ export async function createModmailTicket(payload: {
     message_id: string | null;
     created_at: string;
 }> {
-    return postJSON('/modmail/tickets', payload);
+    return postJSON('/modmail/tickets', payload, { guildId: payload.guild_id });
 }
 
 /** Get a modmail ticket (GET /modmail/tickets/:ticket_id) */
 export async function getModmailTicket(
-    ticketId: string
+    ticketId: string,
+    guildId?: string
 ): Promise<{
     ticket_id: string;
     guild_id: string;
@@ -147,7 +164,7 @@ export async function getModmailTicket(
     closed_at: string | null;
     closed_by: string | null;
 }> {
-    return getJSON(`/modmail/tickets/${ticketId}`);
+    return getJSON(`/modmail/tickets/${ticketId}`, guildId ? { guildId } : undefined);
 }
 
 /** Close a modmail ticket (PATCH /modmail/tickets/:ticket_id/close) */
@@ -155,14 +172,15 @@ export async function closeModmailTicket(
     ticketId: string,
     payload: {
         closed_by: string;
-    }
+    },
+    guildId?: string
 ): Promise<{
     ticket_id: string;
     status: string;
     closed_at: string;
     closed_by: string;
 }> {
-    return patchJSON(`/modmail/tickets/${ticketId}/close`, payload);
+    return patchJSON(`/modmail/tickets/${ticketId}/close`, payload, guildId ? { guildId } : undefined);
 }
 
 /** Add a message to a modmail ticket (POST /modmail/tickets/:ticket_id/messages) */
@@ -173,7 +191,8 @@ export async function addModmailMessage(
         content: string;
         attachments?: string[];
         is_staff_reply: boolean;
-    }
+    },
+    guildId?: string
 ): Promise<{
     message_id: number;
     ticket_id: string;
@@ -183,12 +202,13 @@ export async function addModmailMessage(
     sent_at: string;
     is_staff_reply: boolean;
 }> {
-    return postJSON(`/modmail/tickets/${ticketId}/messages`, payload);
+    return postJSON(`/modmail/tickets/${ticketId}/messages`, payload, guildId ? { guildId } : undefined);
 }
 
 /** Get all messages for a modmail ticket (GET /modmail/tickets/:ticket_id/messages) */
 export async function getModmailMessages(
-    ticketId: string
+    ticketId: string,
+    guildId?: string
 ): Promise<{
     messages: Array<{
         message_id: number;
@@ -200,7 +220,7 @@ export async function getModmailMessages(
         is_staff_reply: boolean;
     }>;
 }> {
-    return getJSON(`/modmail/tickets/${ticketId}/messages`);
+    return getJSON(`/modmail/tickets/${ticketId}/messages`, guildId ? { guildId } : undefined);
 }
 
 /** Get open modmail tickets for a guild (GET /modmail/tickets/guild/:guild_id) */
@@ -221,7 +241,7 @@ export async function getGuildModmailTickets(
     }>;
 }> {
     const query = status ? `?status=${status}` : '';
-    return getJSON(`/modmail/tickets/guild/${guildId}${query}`);
+    return getJSON(`/modmail/tickets/guild/${guildId}${query}`, { guildId });
 }
 
 /** Check if a user is blacklisted from modmail (GET /modmail/blacklist/:guild_id/:user_id) */
@@ -234,7 +254,7 @@ export async function checkModmailBlacklist(
     blacklisted_by: string | null;
     blacklisted_at: string | null;
 }> {
-    return getJSON(`/modmail/blacklist/${guildId}/${userId}`);
+    return getJSON(`/modmail/blacklist/${guildId}/${userId}`, { guildId });
 }
 
 /** Blacklist a user from modmail (POST /modmail/blacklist) */
@@ -255,7 +275,7 @@ export async function blacklistModmail(payload: {
         modmail_blacklisted_at: string;
     };
 }> {
-    return postJSON('/modmail/blacklist', payload);
+    return postJSON('/modmail/blacklist', payload, { guildId: payload.guild_id });
 }
 
 /** Unblacklist a user from modmail (POST /modmail/unblacklist) */
@@ -269,15 +289,16 @@ export async function unblacklistModmail(payload: {
     success: boolean;
     message: string;
 }> {
-    return postJSON('/modmail/unblacklist', payload);
+    return postJSON('/modmail/unblacklist', payload, { guildId: payload.guild_id });
 }
 
 /** Set key window for a run (PATCH /runs/:id/key-window) */
 export async function setKeyWindow(
     runId: number,
-    payload: { actor_user_id: string; seconds?: number }
+    payload: { actor_user_id: string; seconds?: number },
+    guildId: string
 ): Promise<{ key_window_ends_at: string }> {
-    return patchJSON(`/runs/${runId}/key-window`, payload);
+    return patchJSON(`/runs/${runId}/key-window`, payload, { guildId });
 }
 
 /** Verify a raider (POST /raiders/verify) */
@@ -941,4 +962,21 @@ export async function getLeaderboard(
     }
     
     return getJSON(`/quota/leaderboard/${guildId}?${params.toString()}`);
+}
+
+/** Get active runs for an organizer (GET /runs/active-by-organizer/:organizerId) */
+export async function getActiveRunsByOrganizer(
+    guildId: string,
+    organizerId: string
+): Promise<{
+    activeRuns: Array<{
+        id: number;
+        dungeonLabel: string;
+        status: string;
+        createdAt: string;
+        channelId: string;
+        postMessageId: string | null;
+    }>;
+}> {
+    return getJSON(`/runs/active-by-organizer/${organizerId}`, { guildId });
 }

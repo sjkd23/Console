@@ -1,15 +1,49 @@
 // backend/src/routes/runs.ts
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query } from '../../db/pool.js';
-import { zSnowflake, zReactionState } from '../../lib/constants/constants';
-import { Errors } from '../../lib/errors/errors';
-import { hasInternalRole } from '../../lib/auth/authorization.js';
-import { logQuotaEvent, getPointsForDungeon, awardRaiderPoints, snapshotRaidersAtKeyPop, awardCompletionsToKeyPopSnapshot } from '../../lib/quota/quota.js';
-import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
+import { zSnowflake, zReactionState } from '../../lib/constants/constants.js';
+import { Errors } from '../../lib/errors/errors.js';
+import { hasInternalRole, authorizeRunActor, buildRunActorContext, RunRow } from '../../lib/auth/authorization.js';
+import { snapshotRaidersAtKeyPop } from '../../lib/quota/quota.js';
+import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
+import { createRunWithTransaction, endRunWithTransaction } from '../../services/run-service.js';
+import { QuotaService } from '../../services/quota-service.js';
+import { RAID_BEHAVIOR } from '../../config/raid-config.js';
 
 const logger = createLogger('Runs');
+const quotaService = new QuotaService();
+
+/**
+ * Enforce guild scoping: if the request has a guild context, ensure the run belongs to that guild.
+ * Returns true if the check passes (or no guild context provided), false if denied.
+ * If denied, it logs a warning and sends a 403 response.
+ * 
+ * TODO: Once all bot calls send x-guild-id, make callerGuildId required (deny if absent).
+ */
+function enforceGuildScope(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    run: { guild_id: string },
+    runId: string | number
+): boolean {
+    const guildContext = (req as any).guildContext;
+    const callerGuildId = guildContext?.guildId;
+
+    if (callerGuildId && run.guild_id !== callerGuildId) {
+        logger.warn({
+            runId,
+            runGuildId: run.guild_id,
+            callerGuildId,
+        }, 'Guild mismatch for run access');
+        
+        Errors.notAuthorized(reply, 'run does not belong to this guild');
+        return false;
+    }
+
+    return true;
+}
 
 /**
  * Body schema for creating a run.
@@ -27,11 +61,67 @@ const CreateRun = z.object({
     description: z.string().optional(),
     party: z.string().optional(),
     location: z.string().optional(),
-    autoEndMinutes: z.number().int().positive().max(1440).default(120), // default 2 hours, max 24 hours
+    autoEndMinutes: z.number().int().positive().max(RAID_BEHAVIOR.maxAutoEndMinutes).default(RAID_BEHAVIOR.defaultAutoEndMinutes),
     roleId: zSnowflake.optional(), // Optional Discord role ID for the run
 });
 
 export default async function runsRoutes(app: FastifyInstance) {
+    /**
+     * GET /runs/active-by-organizer/:organizerId
+     * Get all active (open or live) runs for a specific organizer in the current guild.
+     * Used to enforce "one run per organizer" rule.
+     * Returns { activeRuns: Array<{ id, dungeonLabel, status, createdAt }> }
+     */
+    app.get('/runs/active-by-organizer/:organizerId', async (req, reply) => {
+        const Params = z.object({ organizerId: zSnowflake });
+        const p = Params.safeParse(req.params);
+        if (!p.success) return Errors.validation(reply);
+
+        const { organizerId } = p.data;
+
+        // Get guild context (required for this endpoint)
+        const guildContext = (req as any).guildContext;
+        const callerGuildId = guildContext?.guildId;
+
+        if (!callerGuildId) {
+            return reply.code(400).send({
+                error: {
+                    code: 'MISSING_GUILD_CONTEXT',
+                    message: 'This endpoint requires guild context (x-guild-id header)',
+                },
+            });
+        }
+
+        // Query for active runs (status = 'open' or 'live') for this organizer in this guild
+        const res = await query<{
+            id: number;
+            dungeon_label: string;
+            status: string;
+            created_at: string;
+            channel_id: string;
+            post_message_id: string | null;
+        }>(
+            `SELECT id, dungeon_label, status, created_at, channel_id, post_message_id
+             FROM run
+             WHERE organizer_id = $1::bigint
+               AND guild_id = $2::bigint
+               AND status IN ('open', 'live')
+             ORDER BY created_at DESC`,
+            [organizerId, callerGuildId]
+        );
+
+        const activeRuns = res.rows.map(r => ({
+            id: r.id,
+            dungeonLabel: r.dungeon_label,
+            status: r.status,
+            createdAt: r.created_at,
+            channelId: r.channel_id,
+            postMessageId: r.post_message_id,
+        }));
+
+        return reply.send({ activeRuns });
+    });
+
     /**
      * POST /runs
      * Create a new run record (status=open) and upsert guild/member.
@@ -74,19 +164,29 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
-        // Upsert guild & member snapshots
-        await ensureGuildExists(guildId, guildName);
-        await ensureMemberExists(organizerId, organizerUsername);
+        // Create run with transaction (ensures atomicity of guild/member/run creation)
+        try {
+            const result = await createRunWithTransaction({
+                guildId,
+                guildName,
+                organizerId,
+                organizerUsername,
+                organizerRoles,
+                channelId,
+                dungeonKey,
+                dungeonLabel,
+                description,
+                party,
+                location,
+                autoEndMinutes,
+                roleId,
+            });
 
-        // Insert run (status=open)
-        const res = await query<{ id: number }>(
-            `INSERT INTO run (guild_id, organizer_id, dungeon_key, dungeon_label, channel_id, status, description, party, location, auto_end_minutes, role_id)
-        VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9, $10::bigint)
-        RETURNING id`,
-            [guildId, organizerId, dungeonKey, dungeonLabel, channelId, description, party, location, autoEndMinutes, roleId]
-        );
-
-        return reply.code(201).send({ runId: res.rows[0].id });
+            return reply.code(201).send({ runId: result.runId });
+        } catch (err) {
+            logger.error({ err, guildId, organizerId, dungeonKey }, 'Failed to create run');
+            return Errors.internal(reply, 'Failed to create run');
+        }
     });
 
     /**
@@ -112,15 +212,20 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { userId, state } = b.data;
 
-        // Block edits for closed runs
-        const statusRes = await query<{ status: string }>(
-            `SELECT status FROM run WHERE id = $1::bigint`,
+        // Block edits for closed runs + load guild_id
+        const statusRes = await query<{ status: string; guild_id: string }>(
+            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
             return Errors.runNotFound(reply, runId);
         }
-        const currentStatus = statusRes.rows[0].status;
+        const run = statusRes.rows[0];
+        const currentStatus = run.status;
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
         if (currentStatus === 'ended') {
             return Errors.runClosed(reply);
         }
@@ -168,6 +273,19 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { userId } = p.data;
 
+        // Load run to check guild_id
+        const runRes = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
         const reactionRes = await query<{ state: string; class: string | null }>(
             `SELECT state, class FROM reaction WHERE run_id = $1::bigint AND user_id = $2::bigint`,
             [runId, userId]
@@ -200,15 +318,20 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { userId, class: selectedClass } = b.data;
 
-        // Block edits for closed runs
-        const statusRes = await query<{ status: string }>(
-            `SELECT status FROM run WHERE id = $1::bigint`,
+        // Block edits for closed runs + load guild_id
+        const statusRes = await query<{ status: string; guild_id: string }>(
+            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
             return Errors.runNotFound(reply, runId);
         }
-        const currentStatus = statusRes.rows[0].status;
+        const run = statusRes.rows[0];
+        const currentStatus = run.status;
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
         if (currentStatus === 'ended') {
             return Errors.runClosed(reply);
         }
@@ -279,25 +402,37 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { actorId, actorRoles, status, isAutoEnd } = b.data;
 
-        // Read current status AND organizer_id AND guild_id AND dungeon_key
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string; dungeon_key: string }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key FROM run WHERE id = $1::bigint`,
+        // Read current status AND organizer_id AND guild_id AND dungeon_key AND party AND location AND screenshot_url
+        const cur = await query<RunRow & { dungeon_key: string; party: string | null; location: string | null; screenshot_url: string | null }>(
+            `SELECT status, organizer_id, guild_id, dungeon_key, party, location, screenshot_url FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const from = cur.rows[0].status;
-        const organizerId = cur.rows[0].organizer_id;
-        const guildId = cur.rows[0].guild_id;
-        const dungeonKey = cur.rows[0].dungeon_key;
+        const run = cur.rows[0];
+        const from = run.status;
+        const dungeonKey = run.dungeon_key;
 
-        // Authorization: actor must be the organizer OR have organizer role (skip for auto-end)
-        if (!isAutoEnd) {
-            const isOrganizer = actorId === organizerId;
-            const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
-            
-            if (!isOrganizer && !hasOrganizerRole) {
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        // Note: isAutoEnd flag comes from the bot's auto-end task (trusted via API key)
+        // and is used only for system-initiated run endings (not user actions)
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                    allowAutoEndBypass: isAutoEnd, // ⚠️ Only true for auto-end system task
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
                 return Errors.notOrganizer(reply);
             }
+            throw err;
         }
 
         if (status === 'live') {
@@ -305,6 +440,31 @@ export default async function runsRoutes(app: FastifyInstance) {
             if (from !== 'open') {
                 return Errors.invalidStatusTransition(reply, from, status);
             }
+
+            // VALIDATION: Check if party and location are set (required for all dungeons)
+            if (!run.party || !run.location) {
+                return reply.code(400).send({
+                    error: {
+                        code: 'MISSING_PARTY_LOCATION',
+                        message: 'Party and Location must be set before starting the run.',
+                        missing: {
+                            party: !run.party,
+                            location: !run.location,
+                        },
+                    },
+                });
+            }
+
+            // VALIDATION: Check if screenshot is submitted for Oryx 3
+            if (dungeonKey === 'ORYX_3' && !run.screenshot_url) {
+                return reply.code(400).send({
+                    error: {
+                        code: 'MISSING_SCREENSHOT',
+                        message: 'Screenshot must be submitted before starting Oryx 3 runs.',
+                    },
+                });
+            }
+
             await query(
                 `UPDATE run
             SET status='live',
@@ -327,50 +487,20 @@ export default async function runsRoutes(app: FastifyInstance) {
             );
             const keyPopCount = keyPopRes.rows[0]?.key_pop_count ?? 0;
             
-            await query(
-                `UPDATE run
-            SET status='ended',
-                ended_at = COALESCE(ended_at, now())
-          WHERE id = $1::bigint`,
-                [runId]
-            );
-
-            // Log quota event for organizer when run ends
+            // End run with transaction (ensures atomicity of status update + quota/points awards)
             try {
-                // Get the correct point value for this dungeon based on guild config
-                const points = await getPointsForDungeon(guildId, dungeonKey, actorRoles);
-                
-                await logQuotaEvent(
-                    guildId,
-                    organizerId,
-                    'run_completed',
-                    `run:${runId}`,
-                    dungeonKey, // Track dungeon for per-dungeon stats
-                    points // Use calculated points based on dungeon overrides
-                );
+                await endRunWithTransaction({
+                    runId,
+                    guildId: run.guild_id,
+                    organizerId: run.organizer_id,
+                    dungeonKey,
+                    keyPopCount,
+                    actorRoles,
+                });
             } catch (err) {
-                // Log error but don't fail the request
-                logger.error({ err, runId, guildId, organizerId }, 'Failed to log quota event for run');
-            }
-
-            // Award completions to raiders from the last key pop snapshot (if any key pops occurred)
-            if (keyPopCount > 0) {
-                try {
-                    const awardedCount = await awardCompletionsToKeyPopSnapshot(guildId, runId, keyPopCount, dungeonKey);
-                    logger.info({ runId, keyPopCount, awardedCount }, 'Awarded completions to final key pop snapshot on run end');
-                } catch (err) {
-                    // Log error but don't fail the request
-                    logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award completions from final key pop snapshot');
-                }
-            } else {
-                // No key pops occurred - fall back to old behavior (award to all joined raiders)
-                // This maintains backward compatibility for runs that end without any key pops
-                try {
-                    await awardRaiderPoints(guildId, runId, dungeonKey);
-                } catch (err) {
-                    // Log error but don't fail the request
-                    logger.error({ err, runId, guildId, dungeonKey }, 'Failed to award raider points for run');
-                }
+                logger.error({ err, runId, guildId: run.guild_id, organizerId: run.organizer_id }, 
+                    'Failed to end run with transaction');
+                return Errors.internal(reply, 'Failed to end run');
             }
         }
 
@@ -420,6 +550,68 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * POST /runs/:id/screenshot
+     * Store screenshot URL for a run (required for Oryx 3 before going live).
+     * Body: { actorId: Snowflake, actorRoles?: string[], screenshotUrl: string }
+     * Authorization: actorId must match run.organizer_id OR have organizer role.
+     */
+    app.post('/runs/:id/screenshot', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            actorId: zSnowflake,
+            actorRoles: z.array(zSnowflake).optional(),
+            screenshotUrl: z.string().url().min(1),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) {
+            return Errors.validation(reply, 'Invalid screenshot URL or missing parameters');
+        }
+        const runId = Number(p.data.id);
+        const { actorId, actorRoles, screenshotUrl } = b.data;
+
+        // Read current run details for authorization
+        const cur = await query<RunRow>(
+            `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
+        const run = cur.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
+        }
+
+        // Store screenshot URL
+        await query(
+            `UPDATE run SET screenshot_url = $2 WHERE id = $1::bigint`,
+            [runId, screenshotUrl]
+        );
+
+        logger.info({ runId, guildId: run.guild_id, actorId, screenshotUrl }, 
+            'Screenshot URL stored for run');
+
+        return reply.send({ ok: true });
+    });
+
+    /**
      * GET /runs/:id
      * Minimal getter to locate message + surface basic fields.
      */
@@ -431,6 +623,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const res = await query<{
             id: number;
+            guild_id: string;
             channel_id: string | null;
             post_message_id: string | null;
             dungeon_key: string;
@@ -447,10 +640,11 @@ export default async function runsRoutes(app: FastifyInstance) {
             ping_message_id: string | null;
             key_pop_count: number;
             chain_amount: number | null;
+            screenshot_url: string | null;
         }>(
-            `SELECT id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
+            `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
                     started_at, ended_at, key_window_ends_at, party, location, description, role_id, ping_message_id,
-                    key_pop_count, chain_amount
+                    key_pop_count, chain_amount, screenshot_url
          FROM run
         WHERE id = $1::bigint`,
             [runId]
@@ -459,6 +653,10 @@ export default async function runsRoutes(app: FastifyInstance) {
         if (res.rowCount === 0) return Errors.runNotFound(reply, runId);
 
         const r = res.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, r, runId)) return;
+
         return reply.send({
             id: r.id,
             channelId: r.channel_id,
@@ -477,6 +675,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             pingMessageId: r.ping_message_id,
             keyPopCount: r.key_pop_count,
             chainAmount: r.chain_amount,
+            screenshotUrl: r.screenshot_url,
         });
     });
 
@@ -490,6 +689,19 @@ export default async function runsRoutes(app: FastifyInstance) {
         if (!p.success) return Errors.validation(reply);
 
         const runId = Number(p.data.id);
+
+        // Load run to check guild_id
+        const runRes = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
 
         // Get class counts (only for joined users)
         const classRes = await query<{ class: string | null; count: string }>(
@@ -560,21 +772,32 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string }>(
+        const cur = await query<RunRow>(
             `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const currentStatus = cur.rows[0].status;
-        const organizerId = cur.rows[0].organizer_id;
-        const guildId = cur.rows[0].guild_id;
+        const run = cur.rows[0];
+        const currentStatus = run.status;
 
-        // Authorization: actor must be the organizer OR have organizer role
-        const isOrganizer = actorId === organizerId;
-        const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
-        
-        if (!isOrganizer && !hasOrganizerRole) {
-            return Errors.notOrganizer(reply);
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
         }
 
         // Don't allow canceling already ended runs
@@ -603,7 +826,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             actor_user_id: zSnowflake,
-            seconds: z.number().int().positive().max(300).default(30),
+            seconds: z.number().int().positive().max(RAID_BEHAVIOR.maxKeyWindowSeconds).default(RAID_BEHAVIOR.defaultKeyWindowSeconds),
         });
 
         const p = Params.safeParse(req.params);
@@ -615,20 +838,35 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actor_user_id, seconds } = b.data;
 
         // Read current status, organizer_id, guild_id, dungeon_key, and key_pop_count
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string; dungeon_key: string; key_pop_count: number }>(
+        const cur = await query<RunRow & { dungeon_key: string; key_pop_count: number }>(
             `SELECT status, organizer_id, guild_id, dungeon_key, key_pop_count FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const { status, organizer_id, guild_id, dungeon_key, key_pop_count } = cur.rows[0];
+        const run = cur.rows[0];
+        const { dungeon_key, key_pop_count } = run;
 
-        // Authorization: actor must be the organizer
-        if (actor_user_id !== organizer_id) {
-            return Errors.notOrganizer(reply);
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: only organizer (no staff override for key popping)
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actor_user_id),
+                {
+                    allowOrganizer: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
         }
 
         // Must be live
-        if (status !== 'live') {
+        if (run.status !== 'live') {
             return reply.code(409).send({
                 error: {
                     code: 'RUN_NOT_LIVE',
@@ -651,7 +889,12 @@ export default async function runsRoutes(app: FastifyInstance) {
         // If this is not the first key pop, award completions to the previous snapshot
         if (key_pop_count > 0) {
             try {
-                await awardCompletionsToKeyPopSnapshot(guild_id, runId, key_pop_count, dungeon_key);
+                await quotaService.awardRaidersQuotaFromSnapshot({
+                    guildId: run.guild_id,
+                    dungeonKey: dungeon_key,
+                    runId: runId,
+                    keyPopNumber: key_pop_count,
+                });
                 logger.info({ runId, previousKeyPop: key_pop_count, newKeyPop: newKeyPopCount }, 'Awarded completions to previous key pop snapshot');
             } catch (err) {
                 logger.error({ err, runId, keyPopNumber: key_pop_count }, 'Failed to award completions to previous key pop snapshot');
@@ -698,23 +941,35 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles, party } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string }>(
+        const cur = await query<RunRow>(
             `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const { status, organizer_id, guild_id } = cur.rows[0];
+        const run = cur.rows[0];
 
-        // Authorization: actor must be the organizer OR have organizer role
-        const isOrganizer = actorId === organizer_id;
-        const hasOrganizerRole = await hasInternalRole(guild_id, actorId, 'organizer', actorRoles);
-        
-        if (!isOrganizer && !hasOrganizerRole) {
-            return Errors.notOrganizer(reply);
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
         }
 
         // Don't allow updating ended runs
-        if (status === 'ended') {
+        if (run.status === 'ended') {
             return Errors.runClosed(reply);
         }
 
@@ -751,23 +1006,35 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles, location } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string }>(
+        const cur = await query<RunRow>(
             `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const { status, organizer_id, guild_id } = cur.rows[0];
+        const run = cur.rows[0];
 
-        // Authorization: actor must be the organizer OR have organizer role
-        const isOrganizer = actorId === organizer_id;
-        const hasOrganizerRole = await hasInternalRole(guild_id, actorId, 'organizer', actorRoles);
-        
-        if (!isOrganizer && !hasOrganizerRole) {
-            return Errors.notOrganizer(reply);
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
         }
 
         // Don't allow updating ended runs
-        if (status === 'ended') {
+        if (run.status === 'ended') {
             return Errors.runClosed(reply);
         }
 
@@ -804,23 +1071,35 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles, chainAmount } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<{ status: string; organizer_id: string; guild_id: string }>(
+        const cur = await query<RunRow>(
             `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
-        const { status, organizer_id, guild_id } = cur.rows[0];
+        const run = cur.rows[0];
 
-        // Authorization: actor must be the organizer OR have organizer role
-        const isOrganizer = actorId === organizer_id;
-        const hasOrganizerRole = await hasInternalRole(guild_id, actorId, 'organizer', actorRoles);
-        
-        if (!isOrganizer && !hasOrganizerRole) {
-            return Errors.notOrganizer(reply);
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Authorization: use centralized helper
+        try {
+            await authorizeRunActor(
+                run,
+                buildRunActorContext(actorId, actorRoles),
+                {
+                    allowOrganizer: true,
+                    allowOrganizerRole: true,
+                }
+            );
+        } catch (err: any) {
+            if (err.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw err;
         }
 
         // Don't allow updating ended runs
-        if (status === 'ended') {
+        if (run.status === 'ended') {
             return Errors.runClosed(reply);
         }
 
@@ -839,7 +1118,9 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Toggles a user's key reaction for a run.
      * If the user has already reacted with this key, it removes it.
      * If the user hasn't reacted with this key, it adds it.
-     * Returns { keyCounts: Record<string, number> }.
+     * Returns { keyCounts: Record<string, number>, added: boolean }.
+     * 
+     * Implementation note: Uses atomic DELETE/INSERT to avoid race conditions.
      */
     app.post('/runs/:id/key-reactions', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -856,15 +1137,20 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { userId, keyType } = b.data;
 
-        // Block edits for closed runs
-        const statusRes = await query<{ status: string }>(
-            `SELECT status FROM run WHERE id = $1::bigint`,
+        // Block edits for closed runs + load guild_id
+        const statusRes = await query<{ status: string; guild_id: string }>(
+            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
             return Errors.runNotFound(reply, runId);
         }
-        const currentStatus = statusRes.rows[0].status;
+        const run = statusRes.rows[0];
+        const currentStatus = run.status;
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
         if (currentStatus === 'ended') {
             return Errors.runClosed(reply);
         }
@@ -872,31 +1158,44 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Ensure member exists
         await ensureMemberExists(userId);
 
-        // Check if the user has already reacted with this key
-        const existingRes = await query<{ key_type: string }>(
-            `SELECT key_type FROM key_reaction
-             WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3`,
-            [runId, userId, keyType]
-        );
+        // Atomically toggle: Try DELETE first, then INSERT if nothing was deleted
+        // This avoids race conditions from separate SELECT + DELETE/INSERT
+        let added = false;
 
-        let added = false; // Track whether we added or removed
-
-        if (existingRes.rowCount && existingRes.rowCount > 0) {
-            // Remove the key reaction (toggle off)
-            await query(
+        try {
+            // Step 1: Try to delete the existing key reaction
+            const deleteRes = await query(
                 `DELETE FROM key_reaction
-                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3`,
+                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3
+                 RETURNING key_type`,
                 [runId, userId, keyType]
             );
-            added = false;
-        } else {
-            // Add the key reaction (toggle on)
-            await query(
-                `INSERT INTO key_reaction (run_id, user_id, key_type)
-                 VALUES ($1::bigint, $2::bigint, $3)`,
-                [runId, userId, keyType]
-            );
-            added = true;
+
+            if (deleteRes.rowCount && deleteRes.rowCount > 0) {
+                // Successfully deleted - user had the key, now removed
+                added = false;
+            } else {
+                // Nothing deleted - user didn't have the key, add it now
+                // Use INSERT with ON CONFLICT DO NOTHING for extra safety (handles concurrent inserts)
+                await query(
+                    `INSERT INTO key_reaction (run_id, user_id, key_type)
+                     VALUES ($1::bigint, $2::bigint, $3)
+                     ON CONFLICT (run_id, user_id, key_type) DO NOTHING`,
+                    [runId, userId, keyType]
+                );
+                added = true;
+            }
+        } catch (err: any) {
+            // Handle any unexpected constraint violations gracefully
+            // (Should not happen with ON CONFLICT, but defensive programming)
+            if (err.code === '23505') {
+                // Unique violation - treat as idempotent add (key already exists)
+                logger.warn({ runId, userId, keyType, err: err.message }, 
+                    'Key reaction unique constraint violation - treating as duplicate');
+                added = true;
+            } else {
+                throw err;
+            }
         }
 
         // Get updated key counts
@@ -928,6 +1227,19 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         const runId = Number(p.data.id);
 
+        // Load run to check guild_id
+        const runRes = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
         // Get key counts
         const keyRes = await query<{ key_type: string; count: string }>(
             `SELECT key_type, COUNT(*)::text AS count
@@ -956,6 +1268,19 @@ export default async function runsRoutes(app: FastifyInstance) {
         if (!p.success) return Errors.validation(reply);
 
         const runId = Number(p.data.id);
+
+        // Load run to check guild_id
+        const runRes = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
 
         // Get all key reactions with user IDs
         const keyRes = await query<{ key_type: string; user_id: string }>(

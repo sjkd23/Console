@@ -17,6 +17,12 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
     // Defer the reply so we can send a follow-up message
     await btn.deferReply({ flags: MessageFlags.Ephemeral });
 
+    const guildId = btn.guildId;
+    if (!guildId) {
+        await btn.editReply({ content: '❌ This command can only be used in a server.' });
+        return;
+    }
+
     // Fetch run details for logging and role removal
     const run = await getJSON<{ 
         dungeonKey: string; 
@@ -24,7 +30,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
         organizerId: string;
         roleId: string | null;
         status: string;
-    }>(`/runs/${runId}`).catch(() => null);
+    }>(`/runs/${runId}`, { guildId }).catch(() => null);
 
     if (!run) {
         await btn.editReply({ content: '❌ Run not found.' });
@@ -39,7 +45,8 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
 
     // Check if user is actually in the run
     const existingReaction = await getJSON<{ state: string | null }>(
-        `/runs/${runId}/reactions/${btn.user.id}`
+        `/runs/${runId}/reactions/${btn.user.id}`,
+        { guildId }
     ).catch(() => ({ state: null }));
 
     if (existingReaction.state !== 'join') {
@@ -53,7 +60,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
     const result = await postJSON<{ joinCount: number }>(`/runs/${runId}/reactions`, {
         userId: btn.user.id,
         state: 'leave'
-    });
+    }, { guildId });
 
     // Remove the run role
     if (run.roleId && btn.guild) {
@@ -65,7 +72,8 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
 
     // Fetch class counts to update the display
     const classRes = await getJSON<{ classCounts: Record<string, number> }>(
-        `/runs/${runId}/classes`
+        `/runs/${runId}/classes`,
+        { guildId }
     ).catch(() => ({ classCounts: {} }));
 
     // Update the embed

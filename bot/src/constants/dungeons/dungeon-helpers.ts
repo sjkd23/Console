@@ -52,3 +52,27 @@ export function searchDungeons(query: string, limit = 10): DungeonInfo[] {
         .slice(0, limit)
         .map(([, d]) => d);
 }
+
+/**
+ * Get dungeons categorized into groups for UI selection
+ */
+export function getCategorizedDungeons(): {
+    exalt: DungeonInfo[];
+    misc1: DungeonInfo[];
+    misc2: DungeonInfo[];
+} {
+    const exalt = ALL
+        .filter(d => d._isExalt)
+        .sort((a, b) => a.dungeonName.localeCompare(b.dungeonName));
+    
+    const nonExalt = ALL
+        .filter(d => !d._isExalt)
+        .sort((a, b) => a.dungeonName.localeCompare(b.dungeonName));
+    
+    // Split non-exalt dungeons into two groups
+    const midpoint = Math.ceil(nonExalt.length / 2);
+    const misc1 = nonExalt.slice(0, midpoint);
+    const misc2 = nonExalt.slice(midpoint);
+    
+    return { exalt, misc1, misc2 };
+}

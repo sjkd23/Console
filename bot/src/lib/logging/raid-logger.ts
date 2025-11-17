@@ -358,6 +358,28 @@ export async function logKeyWindow(
 }
 
 /**
+ * Log screenshot submission (for Oryx 3 runs)
+ */
+export async function logScreenshotSubmission(
+    client: Client,
+    context: RaidLogContext,
+    screenshotUrl: string,
+    userId: string
+): Promise<void> {
+    const embed = new EmbedBuilder()
+        .setTitle('📸 Completion Screenshot Submitted')
+        .setDescription(
+            `<@${userId}> submitted a completion screenshot for Oryx 3.\n\n` +
+            `[View Screenshot](${screenshotUrl})`
+        )
+        .setImage(screenshotUrl)
+        .setColor(0x3498db)
+        .setTimestamp(new Date());
+
+    await logToThread(client, context, '', embed);
+}
+
+/**
  * Clear the thread cache for a specific raid (call when raid ends)
  */
 export function clearLogThreadCache(context: RaidLogContext): void {

@@ -1,4 +1,3 @@
-// src/commands/run.ts
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
@@ -12,7 +11,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
-import { postJSON, getGuildChannels, getDungeonRolePings } from '../../lib/utilities/http.js';
+import { postJSON, getGuildChannels, getDungeonRolePings, getActiveRunsByOrganizer } from '../../lib/utilities/http.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import { addRecentDungeon } from '../../lib/dungeon/dungeon-cache.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
@@ -23,6 +22,9 @@ import { formatKeyLabel } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
 import { createRunRole } from '../../lib/utilities/run-role-manager.js';
 import { createLogger } from '../../lib/logging/logger.js';
+import { getDefaultAutoEndMinutes } from '../../config/raid-config.js';
+import { addRunReactions } from '../../lib/utilities/run-reactions.js';
+import { hasActiveHeadcount, getActiveHeadcount } from '../../lib/state/active-headcount-tracker.js';
 
 const logger = createLogger('RunCreate');
 
@@ -78,6 +80,69 @@ export const runCreate: SlashCommand = {
         const location = interaction.options.getString('location') || undefined;
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        // Check if organizer has any active runs (open or live)
+        try {
+            const { activeRuns } = await getActiveRunsByOrganizer(guild.id, interaction.user.id);
+            
+            if (activeRuns.length > 0) {
+                // Organizer already has active run(s) - prevent creating a new one
+                const activeRun = activeRuns[0]; // Show details of the first active run
+                
+                // Build message link if we have both channel and message IDs
+                let runLink = '';
+                if (activeRun.channelId && activeRun.postMessageId) {
+                    runLink = `https://discord.com/channels/${guild.id}/${activeRun.channelId}/${activeRun.postMessageId}`;
+                }
+                
+                let message = `⚠️ **You already have an active run**\n\n`;
+                message += `**Dungeon:** ${activeRun.dungeonLabel}\n`;
+                message += `**Status:** ${activeRun.status === 'open' ? '⏳ Starting Soon' : '🔴 Live'}\n`;
+                message += `**Created:** <t:${Math.floor(new Date(activeRun.createdAt).getTime() / 1000)}:R>\n\n`;
+                
+                if (runLink) {
+                    message += `[Jump to Run](${runLink})\n\n`;
+                }
+                
+                message += `Please end or cancel your current run before starting a new one.\n\n`;
+                message += `**To end your run:**\n`;
+                message += `• Click the "Organizer Panel" button on your active run\n`;
+                message += `• Use the "End Run" or "Cancel Run" button\n\n`;
+                message += `*If your run is glitched and you can't end it, contact a server admin for help.*`;
+                
+                await interaction.editReply(message);
+                return;
+            }
+        } catch (err) {
+            // Log the error but don't block run creation if the check fails
+            logger.error('Failed to check for active runs', {
+                guildId: guild.id,
+                organizerId: interaction.user.id,
+                error: err instanceof Error ? err.message : String(err),
+                stack: err instanceof Error ? err.stack : undefined
+            });
+            // Continue with run creation - don't let API failures block legitimate runs
+        }
+
+        // Check if organizer has an active headcount
+        if (hasActiveHeadcount(guild.id, interaction.user.id)) {
+            const activeHeadcount = getActiveHeadcount(guild.id, interaction.user.id);
+            if (activeHeadcount) {
+                const headcountLink = `https://discord.com/channels/${guild.id}/${activeHeadcount.channelId}/${activeHeadcount.messageId}`;
+                
+                let message = `⚠️ **You have an active headcount**\n\n`;
+                message += `**Dungeons:** ${activeHeadcount.dungeons.join(', ')}\n`;
+                message += `**Created:** <t:${Math.floor(activeHeadcount.createdAt.getTime() / 1000)}:R>\n\n`;
+                message += `[Jump to Headcount](${headcountLink})\n\n`;
+                message += `Please end your headcount before starting a run.\n\n`;
+                message += `**To end your headcount:**\n`;
+                message += `• Click the "Organizer Panel" button on your active headcount\n`;
+                message += `• Use the "End Headcount" button`;
+                
+                await interaction.editReply(message);
+                return;
+            }
+        }
 
         // Track this dungeon as recently used for this guild
         addRecentDungeon(guild.id, codeName);
@@ -148,14 +213,14 @@ export const runCreate: SlashCommand = {
                 description: desc,
                 party,
                 location,
-                autoEndMinutes: 120, // Auto-end runs after 2 hours
+                autoEndMinutes: getDefaultAutoEndMinutes(),
                 roleId: role?.id // Store the created role ID
-            });
+            }, { guildId: guild.id });
 
             // Build the public embed (Starting/Lobby phase)
             const embed = new EmbedBuilder()
                 .setTitle(`⏳ Starting Soon: ${d.dungeonName}`)
-                .setDescription(`Organizer: <@${interaction.user.id}>\n\n**Status:** Waiting to start`)
+                .setDescription(`Organizer: <@${interaction.user.id}>`)
                 .addFields(
                     { name: 'Raiders', value: '0', inline: false }
                 )
@@ -189,10 +254,6 @@ export const runCreate: SlashCommand = {
                     .setCustomId(`run:leave:${runId}`)
                     .setLabel('Leave')
                     .setStyle(ButtonStyle.Danger),
-                new ButtonBuilder()
-                    .setCustomId(`run:class:${runId}`)
-                    .setLabel('Class')
-                    .setStyle(ButtonStyle.Primary),
                 new ButtonBuilder()
                     .setCustomId(`run:org:${runId}`)
                     .setLabel('Organizer Panel')
@@ -245,13 +306,7 @@ export const runCreate: SlashCommand = {
                 // Continue without custom role ping
             }
             
-            if (party && location) {
-                content += ` Party: **${party}** | Location: **${location}**`;
-            } else if (party) {
-                content += ` Party: **${party}**`;
-            } else if (location) {
-                content += ` Location: **${location}**`;
-            }
+            // Don't show party/location in message content until run goes live
 
             const sent = await raidChannel.send({
                 content,
@@ -261,7 +316,7 @@ export const runCreate: SlashCommand = {
 
             // NEW: tell backend the message id we just posted
             try {
-                await postJSON(`/runs/${runId}/message`, { postMessageId: sent.id });
+                await postJSON(`/runs/${runId}/message`, { postMessageId: sent.id }, { guildId: guild.id });
             } catch (e) {
                 logger.error('Failed to store post_message_id', { 
                     guildId: guild.id,
@@ -269,6 +324,20 @@ export const runCreate: SlashCommand = {
                     messageId: sent.id,
                     error: e instanceof Error ? e.message : String(e)
                 });
+            }
+
+            // Add reactions to the run message based on dungeon configuration
+            try {
+                await addRunReactions(sent, d.codeName);
+            } catch (e) {
+                logger.error('Failed to add reactions to run message', {
+                    guildId: guild.id,
+                    runId: runId,
+                    messageId: sent.id,
+                    dungeonKey: d.codeName,
+                    error: e instanceof Error ? e.message : String(e)
+                });
+                // Don't fail the command if reactions fail - continue with run creation
             }
 
             // Log the run creation to raid-log channel

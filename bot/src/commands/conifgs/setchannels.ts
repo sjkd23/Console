@@ -24,6 +24,7 @@ const CHANNEL_OPTIONS = [
     { key: 'bot_log', label: 'Bot Log', description: 'General bot activity and command execution logs' },
     { key: 'staff_updates', label: 'Staff Updates', description: 'Channel for staff promotion announcements' },
     { key: 'modmail', label: 'Modmail', description: 'Channel for receiving and managing modmail support tickets' },
+    { key: 'role_ping', label: 'Role Ping', description: 'Channel for the role ping panel where users can self-assign dungeon ping roles' },
 ] as const;
 
 export const setchannels: SlashCommand = {
@@ -41,6 +42,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('bot_log').setDescription('Bot activity log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('staff_updates').setDescription('Staff promotion announcements channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('modmail').setDescription('Modmail support tickets channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('role_ping').setDescription('Role ping panel channel').addChannelTypes(ChannelType.GuildText))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setDMPermission(false),
 

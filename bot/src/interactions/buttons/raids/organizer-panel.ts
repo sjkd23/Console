@@ -15,16 +15,18 @@ import { logButtonClick } from '../../../lib/logging/raid-logger.js';
  * Internal function to build and show the organizer panel.
  * Used by both initial access and confirmed access.
  */
-async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
+async function showOrganizerPanel(btn: ButtonInteraction, runId: number, guildId: string, run: {
     status: string;
     dungeonLabel: string;
     dungeonKey: string;
     organizerId: string;
+    screenshotUrl?: string | null;
 }) {
     // Fetch key reaction users if there are key reactions for this dungeon
     let keyUsers: Record<string, string[]> = {};
     const keyUsersResponse = await getJSON<{ keyUsers: Record<string, string[]> }>(
-        `/runs/${runId}/key-reaction-users`
+        `/runs/${runId}/key-reaction-users`,
+        { guildId }
     ).catch(() => ({ keyUsers: {} }));
     keyUsers = keyUsersResponse.keyUsers;
 
@@ -58,7 +60,8 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
     let controls: ActionRowBuilder<ButtonBuilder>[];
 
     if (run.status === 'open') {
-        // Starting phase: Start, Cancel (row 1) + Set Party, Set Location, Chain Amount (row 2)
+        // Starting phase: Start, Cancel (row 1) + Set Party/Loc, Chain Amount (row 2)
+        // For Oryx 3: Add screenshot instruction button if not yet submitted (row 3)
         const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
                 .setCustomId(`run:start:${runId}`)
@@ -69,35 +72,63 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
                 .setLabel('Cancel')
                 .setStyle(ButtonStyle.Danger)
         );
-        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        
+        // For Oryx 3, don't show Chain Amount button
+        const row2Components = [
             new ButtonBuilder()
-                .setCustomId(`run:setparty:${runId}`)
-                .setLabel('Set Party')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setlocation:${runId}`)
-                .setLabel('Set Location')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setchain:${runId}`)
-                .setLabel('Chain Amount')
+                .setCustomId(`run:setpartyloc:${runId}`)
+                .setLabel('Set Party/Loc')
                 .setStyle(ButtonStyle.Secondary)
-        );
-        controls = [row1, row2];
-    } else if (run.status === 'live') {
-        // Live phase: End, Ping Raiders, Update Note, Key popped (row 1) + Set Party, Set Location (row 2)
-
-        // Build the "Key popped" button with the appropriate emoji
-        const keyPoppedButton = new ButtonBuilder()
-            .setCustomId(`run:keypop:${runId}`)
-            .setLabel('Key popped')
-            .setStyle(ButtonStyle.Success);
-
-        // Add emoji from the dungeon's first key reaction if available
-        const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
-        if (keyEmojiIdentifier) {
-            keyPoppedButton.setEmoji(keyEmojiIdentifier);
+        ];
+        
+        if (run.dungeonKey !== 'ORYX_3') {
+            row2Components.push(
+                new ButtonBuilder()
+                    .setCustomId(`run:setchain:${runId}`)
+                    .setLabel('Chain Amount')
+                    .setStyle(ButtonStyle.Secondary)
+            );
         }
+        
+        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(...row2Components);
+        
+        controls = [row1, row2];
+        
+        // Add screenshot instruction button for Oryx 3 if not yet submitted
+        if (run.dungeonKey === 'ORYX_3') {
+            const screenshotRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`run:screenshot:${runId}`)
+                    .setLabel(run.screenshotUrl ? '✅ Screenshot Submitted' : '📸 Submit Screenshot')
+                    .setStyle(run.screenshotUrl ? ButtonStyle.Success : ButtonStyle.Secondary)
+                    .setDisabled(!!run.screenshotUrl) // Disable if already submitted
+            );
+            controls.push(screenshotRow);
+        }
+    } else if (run.status === 'live') {
+        // Live phase: End, Ping Raiders, Update Note, Key popped/Realm Score (row 1) + Set Party/Loc, Chain Amount, Cancel (row 2)
+
+        // For Oryx 3, use "Realm Score %" instead of "Key popped"
+        const actionButton = run.dungeonKey === 'ORYX_3'
+            ? new ButtonBuilder()
+                .setCustomId(`run:realmscore:${runId}`)
+                .setLabel('Realm Score %')
+                .setStyle(ButtonStyle.Success)
+            : (() => {
+                // Build the "Key popped" button with the appropriate emoji
+                const keyPoppedButton = new ButtonBuilder()
+                    .setCustomId(`run:keypop:${runId}`)
+                    .setLabel('Key popped')
+                    .setStyle(ButtonStyle.Success);
+
+                // Add emoji from the dungeon's first key reaction if available
+                const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
+                if (keyEmojiIdentifier) {
+                    keyPoppedButton.setEmoji(keyEmojiIdentifier);
+                }
+                
+                return keyPoppedButton;
+            })();
 
         const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
@@ -108,27 +139,34 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
                 .setCustomId(`run:ping:${runId}`)
                 .setLabel('Ping Raiders')
                 .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(`run:note:${runId}`)
-                .setLabel('Update Note')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(true), // Placeholder for future implementation
-            keyPoppedButton
+            actionButton
         );
-        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        
+        // For Oryx 3, don't show Chain Amount button
+        const row2Components = [
             new ButtonBuilder()
-                .setCustomId(`run:setparty:${runId}`)
-                .setLabel('Set Party')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setlocation:${runId}`)
-                .setLabel('Set Location')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setchain:${runId}`)
-                .setLabel('Chain Amount')
+                .setCustomId(`run:setpartyloc:${runId}`)
+                .setLabel('Set Party/Loc')
                 .setStyle(ButtonStyle.Secondary)
+        ];
+        
+        if (run.dungeonKey !== 'ORYX_3') {
+            row2Components.push(
+                new ButtonBuilder()
+                    .setCustomId(`run:setchain:${runId}`)
+                    .setLabel('Chain Amount')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+        }
+        
+        row2Components.push(
+            new ButtonBuilder()
+                .setCustomId(`run:cancel:${runId}`)
+                .setLabel('Cancel Run')
+                .setStyle(ButtonStyle.Danger)
         );
+        
+        const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(...row2Components);
         controls = [row1, row2];
     } else {
         // Ended phase: no controls
@@ -158,7 +196,7 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
                     organizerUsername: '',
                     dungeonName: run.dungeonLabel,
                     type: 'run',
-                    runId: parseInt(runId)
+                    runId: runId
                 },
                 btn.user.id,
                 'Organizer Panel',
@@ -171,14 +209,25 @@ async function showOrganizerPanel(btn: ButtonInteraction, runId: string, run: {
 }
 
 export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string) {
+    const guildId = btn.guildId;
+    if (!guildId) {
+        await btn.reply({
+            content: 'This command can only be used in a server.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
     // Fetch run status from backend to determine which buttons to show
     const run = await getJSON<{
         status: string;
         dungeonLabel: string;
         dungeonKey: string;
         organizerId: string;
+        screenshotUrl?: string | null;
     }>(
-        `/runs/${runId}`
+        `/runs/${runId}`,
+        { guildId }
     ).catch(() => null);
 
     if (!run) {
@@ -231,7 +280,7 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
     }
 
     // Original organizer - show panel directly
-    await showOrganizerPanel(btn, runId, run);
+    await showOrganizerPanel(btn, parseInt(runId), guildId, run);
 }
 
 /**
@@ -240,13 +289,24 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
 export async function handleOrganizerPanelConfirm(btn: ButtonInteraction, runId: string) {
     await btn.deferUpdate();
 
+    const guildId = btn.guildId;
+    if (!guildId) {
+        await btn.editReply({
+            content: 'This command can only be used in a server.',
+            embeds: [],
+            components: []
+        });
+        return;
+    }
+
     // Fetch run details
     const run = await getJSON<{
         status: string;
         dungeonLabel: string;
         dungeonKey: string;
         organizerId: string;
-    }>(`/runs/${runId}`).catch(() => null);
+        screenshotUrl?: string | null;
+    }>(`/runs/${runId}`, { guildId }).catch(() => null);
 
     if (!run) {
         await btn.editReply({
@@ -269,7 +329,7 @@ export async function handleOrganizerPanelConfirm(btn: ButtonInteraction, runId:
     }
 
     // Show the full organizer panel
-    await showOrganizerPanel(btn, runId, run);
+    await showOrganizerPanel(btn, parseInt(runId), guildId, run);
 }
 
 /**

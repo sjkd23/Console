@@ -1,4 +1,4 @@
-import { ButtonInteraction, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { ButtonInteraction, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
 import { getJSON, patchJSON, deleteJSON, BackendError } from '../../../lib/utilities/http.js';
 import { getMemberRoleIds } from '../../../lib//permissions/permissions.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
@@ -7,6 +7,10 @@ import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime
 import { deleteRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { sendRunPing } from '../../../lib/utilities/run-ping.js';
 import { withButtonLock, getRunLockKey } from '../../../lib/utilities/button-mutex.js';
+import { createLogger } from '../../../lib/logging/logger.js';
+import { clearRunReactions } from '../../../lib/utilities/run-reactions.js';
+
+const logger = createLogger('RunStatus');
 
 export async function handleStatus(
     btn: ButtonInteraction,
@@ -78,6 +82,7 @@ async function handleStatusInternal(
     }
 
     const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
+    const guildId = btn.guildId!;
 
     // 1) Update backend status (PATCH for live/ended, DELETE for cancelled) with actorId
     //    Backend will verify that btn.user.id === run.organizer_id OR has organizer role
@@ -86,20 +91,81 @@ async function handleStatusInternal(
             await deleteJSON(`/runs/${runId}`, { 
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member)
-            });
+            }, { guildId });
         } else {
             await patchJSON(`/runs/${runId}`, { 
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member),
                 status 
-            });
+            }, { guildId });
         }
     } catch (err) {
-        if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
-            await btn.editReply({ content: 'Only the organizer can perform this action.', components: [] });
-            return;
+        if (err instanceof BackendError) {
+            if (err.code === 'NOT_ORGANIZER') {
+                // This is a critical auth error, can close the panel
+                await btn.editReply({ content: 'Only the organizer can perform this action.', components: [] });
+                return;
+            }
+            if (err.code === 'MISSING_PARTY_LOCATION') {
+                const errorData = (err as any).data;
+                const missing: string[] = [];
+                if (errorData?.missing?.party) missing.push('**Party**');
+                if (errorData?.missing?.location) missing.push('**Location**');
+                
+                // Send a separate ephemeral follow-up message, keeping the panel intact
+                await btn.followUp({ 
+                    content: 
+                        `❌ **Cannot Start Run**\n\n` +
+                        `You must set ${missing.join(' and ')} before starting the run.\n\n` +
+                        `**How to fix:**\n` +
+                        `• Use the "Set Party" button to enter the party name\n` +
+                        `• Use the "Set Location" button to enter the server/location\n` +
+                        `• Then try clicking "Start" again`,
+                    flags: MessageFlags.Ephemeral
+                });
+                
+                logger.info('Run start blocked - missing party/location', { 
+                    runId, 
+                    guildId, 
+                    userId: btn.user.id,
+                    missingParty: errorData?.missing?.party,
+                    missingLocation: errorData?.missing?.location
+                });
+                return;
+            }
+            if (err.code === 'MISSING_SCREENSHOT') {
+                // Send a separate ephemeral follow-up message, keeping the panel intact
+                await btn.followUp({ 
+                    content: 
+                        `❌ **Cannot Start Oryx 3 Run**\n\n` +
+                        `You must submit a completion screenshot before starting Oryx 3 runs.\n\n` +
+                        `**How to submit:**\n` +
+                        `• Use the \`/taken\` command in the raid channel\n` +
+                        `• Attach your screenshot with the \`screenshot\` option\n` +
+                        `• Screenshot must be fullscreen showing \`/who\` and \`/server\` in chat\n\n` +
+                        `**Why is this required?**\n` +
+                        `Oryx 3 runs require completion proof for verification purposes. ` +
+                        `The screenshot must be fullscreen with \`/who\` and \`/server\` visible in chat so staff can verify the completion.`,
+                    flags: MessageFlags.Ephemeral
+                });
+                
+                logger.info('Oryx 3 run start blocked - missing screenshot', { 
+                    runId, 
+                    guildId, 
+                    userId: btn.user.id 
+                });
+                return;
+            }
         }
-        // Other errors
+        
+        // Other errors - these are unexpected, so we can close the panel
+        logger.error('Failed to update run status', { 
+            runId, 
+            guildId, 
+            userId: btn.user.id, 
+            status, 
+            error: err instanceof Error ? err.message : String(err) 
+        });
         const msg = err instanceof Error ? err.message : 'Unknown error';
         await btn.editReply({ content: `Error: ${msg}`, components: [] });
         return;
@@ -178,17 +244,27 @@ async function handleStatusInternal(
             .setTimestamp(new Date())
             .setColor(0x00ff00); // Green color for live
         
-        // Build the "Key popped" button with the appropriate emoji
-        const keyPoppedButton = new ButtonBuilder()
-            .setCustomId(`run:keypop:${runId}`)
-            .setLabel('Key popped')
-            .setStyle(ButtonStyle.Success);
-        
-        // Add emoji from the dungeon's first key reaction if available
-        const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
-        if (keyEmojiIdentifier) {
-            keyPoppedButton.setEmoji(keyEmojiIdentifier);
-        }
+        // For Oryx 3, use "Realm Score %" instead of "Key popped"
+        const actionButton = run.dungeonKey === 'ORYX_3'
+            ? new ButtonBuilder()
+                .setCustomId(`run:realmscore:${runId}`)
+                .setLabel('Realm Score %')
+                .setStyle(ButtonStyle.Success)
+            : (() => {
+                // Build the "Key popped" button with the appropriate emoji
+                const keyPoppedButton = new ButtonBuilder()
+                    .setCustomId(`run:keypop:${runId}`)
+                    .setLabel('Key popped')
+                    .setStyle(ButtonStyle.Success);
+                
+                // Add emoji from the dungeon's first key reaction if available
+                const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
+                if (keyEmojiIdentifier) {
+                    keyPoppedButton.setEmoji(keyEmojiIdentifier);
+                }
+                
+                return keyPoppedButton;
+            })();
         
         const liveControls = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
@@ -199,28 +275,34 @@ async function handleStatusInternal(
                 .setCustomId(`run:ping:${runId}`)
                 .setLabel('Ping Raiders')
                 .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(`run:note:${runId}`)
-                .setLabel('Update Note')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(true),
-            keyPoppedButton
+            actionButton
         );
         
-        const liveControls2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        // For Oryx 3, don't show Chain Amount button
+        const liveControls2Components = [
             new ButtonBuilder()
-                .setCustomId(`run:setparty:${runId}`)
-                .setLabel('Set Party')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setlocation:${runId}`)
-                .setLabel('Set Location')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`run:setchain:${runId}`)
-                .setLabel('Chain Amount')
+                .setCustomId(`run:setpartyloc:${runId}`)
+                .setLabel('Set Party/Loc')
                 .setStyle(ButtonStyle.Secondary)
+        ];
+        
+        if (run.dungeonKey !== 'ORYX_3') {
+            liveControls2Components.push(
+                new ButtonBuilder()
+                    .setCustomId(`run:setchain:${runId}`)
+                    .setLabel('Chain Amount')
+                    .setStyle(ButtonStyle.Secondary)
+            );
+        }
+        
+        liveControls2Components.push(
+            new ButtonBuilder()
+                .setCustomId(`run:cancel:${runId}`)
+                .setLabel('Cancel Run')
+                .setStyle(ButtonStyle.Danger)
         );
+        
+        const liveControls2 = new ActionRowBuilder<ButtonBuilder>().addComponents(...liveControls2Components);
         
         await btn.editReply({ embeds: [panelEmbed], components: [liveControls, liveControls2] });
     } else {
@@ -230,7 +312,14 @@ async function handleStatusInternal(
         
         // Delete the run role if it exists
         if (run.roleId && btn.guild) {
-            await deleteRunRole(btn.guild, run.roleId);
+            const roleDeleted = await deleteRunRole(btn.guild, run.roleId);
+            if (!roleDeleted) {
+                console.warn('Failed to delete run role on manual end:', { 
+                    runId, 
+                    roleId: run.roleId,
+                    guildId: btn.guild.id 
+                });
+            }
         }
         
         // Delete the ping message if it exists
@@ -253,6 +342,19 @@ async function handleStatusInternal(
         
         // Change PUBLIC MESSAGE content and remove buttons
         await pubMsg.edit({ content: endLabel, embeds: [endedEmbed, ...embeds.slice(1)], components: [] });
+
+        // Clear all reactions from the run message
+        try {
+            await clearRunReactions(pubMsg);
+        } catch (err) {
+            logger.error('Failed to clear reactions on run end', {
+                runId,
+                guildId: btn.guild.id,
+                messageId: pubMsg.id,
+                error: err instanceof Error ? err.message : String(err)
+            });
+            // Don't fail the end operation if reaction clearing fails
+        }
 
         // Log status change to raid-log
         try {
@@ -328,8 +430,10 @@ function buildLiveEmbed(
 ): EmbedBuilder {
     const embed = EmbedBuilder.from(original);
     
-    // Set title with LIVE badge and optional chain tracking
-    const chainText = run.chainAmount ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` : '';
+    // Set title with LIVE badge and optional chain tracking (not for Oryx 3)
+    const chainText = (run.dungeonKey !== 'ORYX_3' && run.chainAmount) 
+        ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` 
+        : '';
     embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}${chainText}`);
     
     // Build description with organizer and key window if active
@@ -350,41 +454,26 @@ function buildLiveEmbed(
     
     embed.setDescription(desc);
     
-    // Keep existing fields (Raiders, Classes, etc.) but update Party/Location if needed
+    // Keep existing fields (Raiders, Keys, etc.) but remove Party/Location and Classes
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
     
-    // Update or add Party field
+    // Remove Party field if present
     const partyIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
-    if (run.party) {
-        if (partyIdx >= 0) {
-            fields[partyIdx] = { ...fields[partyIdx], value: run.party };
-        } else {
-            // Add new Party field after Raiders
-            const raidersIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'raiders');
-            const insertIdx = raidersIdx >= 0 ? raidersIdx + 1 : fields.length;
-            fields.splice(insertIdx, 0, { name: 'Party', value: run.party, inline: true });
-        }
-    } else if (partyIdx >= 0) {
-        // Remove Party field if empty
+    if (partyIdx >= 0) {
         fields.splice(partyIdx, 1);
     }
     
-    // Update or add Location field
+    // Remove Location field if present
     const locIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'location');
-    if (run.location) {
-        if (locIdx >= 0) {
-            fields[locIdx] = { ...fields[locIdx], value: run.location };
-        } else {
-            // Add new Location field after Party (if exists) or Raiders
-            const partyFieldIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
-            const raidersIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'raiders');
-            const insertIdx = partyFieldIdx >= 0 ? partyFieldIdx + 1 : (raidersIdx >= 0 ? raidersIdx + 1 : fields.length);
-            fields.splice(insertIdx, 0, { name: 'Location', value: run.location, inline: true });
-        }
-    } else if (locIdx >= 0) {
-        // Remove Location field if empty
+    if (locIdx >= 0) {
         fields.splice(locIdx, 1);
+    }
+    
+    // Remove Classes field if present
+    const classIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'classes');
+    if (classIdx >= 0) {
+        fields.splice(classIdx, 1);
     }
     
     // Update or add Organizer Note field
@@ -404,6 +493,7 @@ function buildLiveEmbed(
 function buildEndedEmbed(
     original: any,
     run: {
+        dungeonKey: string;
         dungeonLabel: string;
         organizerId: string;
         startedAt: string | null;
@@ -435,8 +525,8 @@ function buildEndedEmbed(
         desc += `\nDuration: ${durationMin}m ${durationSec}s`;
     }
     
-    // Add final chain count if chain tracking was enabled
-    if (run.chainAmount && run.keyPopCount > 0) {
+    // Add final chain count if chain tracking was enabled (not for Oryx 3)
+    if (run.dungeonKey !== 'ORYX_3' && run.chainAmount && run.keyPopCount > 0) {
         desc += `\n\n**Chains Completed:** ${run.keyPopCount}/${run.chainAmount}`;
     }
     
@@ -446,10 +536,10 @@ function buildEndedEmbed(
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
     
-    // Keep only Raiders, Classes, and Keys fields, remove others
+    // Keep only Raiders and Keys fields, remove others
     const keepFields = fields.filter(f => {
         const name = (f.name ?? '').toLowerCase();
-        return name === 'raiders' || name === 'classes' || name === 'keys';
+        return name === 'raiders' || name === 'keys';
     });
     
     return embed.setFields(keepFields as any);

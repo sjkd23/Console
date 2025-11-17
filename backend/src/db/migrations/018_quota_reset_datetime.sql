@@ -11,7 +11,7 @@ ALTER TABLE quota_role_config
 
 -- Add the new reset_at column (nullable for now)
 ALTER TABLE quota_role_config
-    ADD COLUMN reset_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS reset_at TIMESTAMPTZ;
 
 -- Migrate existing data: convert reset_day/hour/minute to absolute datetime
 -- For simplicity, set reset_at to 7 days from now for all existing configs
@@ -24,10 +24,10 @@ ALTER TABLE quota_role_config
     ALTER COLUMN reset_at SET NOT NULL,
     ALTER COLUMN reset_at SET DEFAULT NOW();
 
--- Drop the old columns
+-- Drop the old columns (only if they exist)
 ALTER TABLE quota_role_config
-    DROP COLUMN reset_day,
-    DROP COLUMN reset_hour,
-    DROP COLUMN reset_minute;
+    DROP COLUMN IF EXISTS reset_day,
+    DROP COLUMN IF EXISTS reset_hour,
+    DROP COLUMN IF EXISTS reset_minute;
 
 COMMIT;

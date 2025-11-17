@@ -3,9 +3,11 @@ import type { SlashCommand } from './_types.js';
 import { withPermissionCheck } from '../lib/permissions/command-middleware.js';
 import { withRateLimit } from '../lib/utilities/rate-limit-middleware.js';
 import { runCreate } from './organizer/run.js';
+import { taken } from './organizer/taken.js';
 import { verify } from './moderation/security/verify.js';
 import { setroles } from './conifgs/setroles.js';
 import { setchannels } from './conifgs/setchannels.js';
+import { sendrolepingembed } from './conifgs/sendrolepingembed.js';
 import { editname } from './moderation/security/editname.js';
 import { unverify } from './moderation/security/unverify.js';
 import { addalt } from './moderation/security/addalt.js';
@@ -52,10 +54,12 @@ const withMiddleware = (cmd: SlashCommand) => withRateLimit(withPermissionCheck(
 // Apply permission middleware and rate limiting to all commands
 export const commands: SlashCommand[] = [
     withMiddleware(runCreate),
+    withMiddleware(taken),
     withMiddleware(headcount),
     withMiddleware(verify),
     withMiddleware(setroles),
     withMiddleware(setchannels),
+    withMiddleware(sendrolepingembed),
     withMiddleware(editname),
     withMiddleware(unverify),
     withMiddleware(addalt),

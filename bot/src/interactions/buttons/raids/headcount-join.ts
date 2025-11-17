@@ -38,7 +38,15 @@ export async function handleHeadcountJoin(btn: ButtonInteraction, panelTimestamp
 
     // Update embed
     let updatedEmbed = updateParticipantsList(embed, participants);
-    updatedEmbed = setEmbedField(updatedEmbed, 'Participants', String(participants.size), true);
+    
+    // Update the participant count - check for both "Participants" and "Interested" field names
+    const participantsFieldIdx = updatedEmbed.data.fields?.findIndex(f => 
+        f.name === 'Participants' || f.name === 'Interested'
+    ) ?? -1;
+    
+    if (participantsFieldIdx >= 0 && updatedEmbed.data.fields) {
+        updatedEmbed.data.fields[participantsFieldIdx].value = String(participants.size);
+    }
 
     await msg.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
 

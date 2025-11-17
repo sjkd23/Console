@@ -595,6 +595,9 @@ export async function logQuotaEvent(
  * Award raider points to all participants when a run completes.
  * This should be called after a run status changes to 'ended'.
  * 
+ * @deprecated Use QuotaService.awardRaidersQuotaFromParticipants instead for run lifecycle operations.
+ * This function is kept for backward compatibility and manual operations only.
+ * 
  * @param guildId - Discord guild ID
  * @param runId - Run ID that was completed
  * @param dungeonKey - Dungeon identifier for looking up point config
@@ -916,6 +919,9 @@ export async function snapshotRaidersAtKeyPop(
 /**
  * Award completion points to raiders from a specific key pop snapshot.
  * This should be called when the next key pops OR when the run ends (for the last snapshot).
+ * 
+ * @deprecated Use QuotaService.awardRaidersQuotaFromSnapshot instead for run lifecycle operations.
+ * This function is kept for backward compatibility and manual operations only.
  * 
  * @param guildId - The guild ID
  * @param runId - The run ID

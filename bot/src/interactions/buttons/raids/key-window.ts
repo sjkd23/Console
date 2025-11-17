@@ -3,20 +3,29 @@ import { setKeyWindow, getJSON, BackendError } from '../../../lib/utilities/http
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyWindow } from '../../../lib/logging/raid-logger.js';
 import { sendKeyPoppedPing } from '../../../lib/utilities/run-ping.js';
+import { getDefaultKeyWindowSeconds } from '../../../config/raid-config.js';
 
 /**
  * Handle "Key popped" button press.
- * Sets a 30-second party join window and updates the run embed.
+ * Sets a configurable party join window and updates the run embed.
  */
 export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
     await btn.deferUpdate();
+
+    const guildId = btn.guildId;
+    if (!guildId) {
+        await btn.editReply({ content: 'This command can only be used in a server.', components: [] });
+        return;
+    }
+
+    const keyWindowSeconds = getDefaultKeyWindowSeconds();
 
     try {
         // Call backend to set the key window
         const { key_window_ends_at } = await setKeyWindow(Number(runId), {
             actor_user_id: btn.user.id,
-            seconds: 30,
-        });
+            seconds: keyWindowSeconds,
+        }, guildId);
 
         // Fetch full run details to rebuild embed
         const run = await getJSON<{
@@ -33,7 +42,7 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
             description: string | null;
             keyPopCount: number;
             chainAmount: number | null;
-        }>(`/runs/${runId}`);
+        }>(`/runs/${runId}`, { guildId });
 
         if (!run.channelId || !run.postMessageId) {
             await btn.editReply({ content: 'Run record missing channel/message id.', components: [] });
@@ -85,7 +94,7 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
                         runId: parseInt(runId)
                     },
                     btn.user.id,
-                    30 // 30 seconds
+                    keyWindowSeconds
                 );
             } catch (e) {
                 console.error('Failed to log key window to raid-log:', e);
@@ -133,8 +142,10 @@ function buildLiveEmbed(
 ): EmbedBuilder {
     const embed = EmbedBuilder.from(original);
 
-    // Set title with LIVE badge and optional chain tracking
-    const chainText = run.chainAmount ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` : '';
+    // Set title with LIVE badge and optional chain tracking (not for Oryx 3)
+    const chainText = (run.dungeonKey !== 'ORYX_3' && run.chainAmount) 
+        ? ` | Chain ${run.keyPopCount}/${run.chainAmount}` 
+        : '';
     embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}${chainText}`);
 
     // Build description with organizer and key window if active
@@ -156,24 +167,26 @@ function buildLiveEmbed(
 
     embed.setDescription(desc);
 
-    // Keep existing fields (Raiders, Classes, etc.) but update Party/Location if needed
+    // Keep existing fields (Raiders, Keys, etc.) but remove Party/Location and Classes
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
 
-    // Update or add Party field
-    if (run.party) {
-        const partyIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
-        if (partyIdx >= 0) {
-            fields[partyIdx] = { ...fields[partyIdx], value: run.party };
-        }
+    // Remove Party field if present
+    const partyIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
+    if (partyIdx >= 0) {
+        fields.splice(partyIdx, 1);
     }
 
-    // Update or add Location field
-    if (run.location) {
-        const locIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'location');
-        if (locIdx >= 0) {
-            fields[locIdx] = { ...fields[locIdx], value: run.location };
-        }
+    // Remove Location field if present
+    const locIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'location');
+    if (locIdx >= 0) {
+        fields.splice(locIdx, 1);
+    }
+
+    // Remove Classes field if present
+    const classIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'classes');
+    if (classIdx >= 0) {
+        fields.splice(classIdx, 1);
     }
 
     // Update or add Organizer Note field

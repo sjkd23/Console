@@ -89,7 +89,7 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                 actorId: client.user!.id, // Bot acts as the ender
                 status: 'ended',
                 isAutoEnd: true // Flag to bypass authorization and allow any->ended transition
-            });
+            }, { guildId: run.guild_id });
 
             logger.info(`Auto-ended run`, {
                 runId: run.id,
@@ -103,8 +103,17 @@ async function checkExpiredRuns(client: Client): Promise<void> {
 
             // Delete the run role if it exists
             if (run.role_id) {
-                await deleteRunRole(guild, run.role_id);
-                logger.debug(`Deleted run role`, { runId: run.id, roleId: run.role_id });
+                const roleDeleted = await deleteRunRole(guild, run.role_id);
+                if (roleDeleted) {
+                    logger.debug(`Deleted run role`, { runId: run.id, roleId: run.role_id });
+                } else {
+                    logger.warn(`Failed to delete run role - role may persist in Discord`, { 
+                        runId: run.id, 
+                        roleId: run.role_id,
+                        guildId: run.guild_id,
+                        guildName: guild.name
+                    });
+                }
             }
 
             // Delete the ping message if it exists
@@ -335,6 +344,98 @@ async function checkExpiredVerificationSessions(client: Client): Promise<void> {
     }
 }
 
+/**
+ * Cleanup orphaned run roles
+ * This runs periodically to clean up run roles that failed to delete when their run ended.
+ * Orphaned roles are roles that exist in Discord but are not associated with any active run.
+ */
+async function cleanupOrphanedRunRoles(client: Client): Promise<void> {
+    logger.debug('Starting orphaned run roles cleanup');
+    
+    let totalChecked = 0;
+    let totalDeleted = 0;
+    let totalFailed = 0;
+    
+    // Process each guild the bot is in
+    for (const [guildId, guild] of client.guilds.cache) {
+        try {
+            // Fetch all active runs for this guild
+            const activeRuns = await getJSON<{
+                runs: Array<{ id: number; role_id: string | null }>
+            }>(`/runs/active`, { guildId });
+            
+            const activeRoleIds = new Set(
+                activeRuns.runs
+                    .filter(run => run.role_id)
+                    .map(run => run.role_id!)
+            );
+            
+            // Fetch all roles in the guild
+            await guild.roles.fetch();
+            
+            // Find roles that match the run role pattern (username's dungeon)
+            const runRolePattern = /'s\s+/; // Pattern: "username's dungeon"
+            const potentialRunRoles = guild.roles.cache.filter(role => 
+                runRolePattern.test(role.name) && 
+                !role.managed && // Exclude bot-managed roles
+                role.name.length < 100 // Reasonable length for run roles
+            );
+            
+            totalChecked += potentialRunRoles.size;
+            
+            // Check each potential run role
+            for (const [roleId, role] of potentialRunRoles) {
+                // Skip if this role is associated with an active run
+                if (activeRoleIds.has(roleId)) {
+                    logger.debug('Role is associated with active run, skipping', {
+                        guildId,
+                        roleId,
+                        roleName: role.name
+                    });
+                    continue;
+                }
+                
+                // This is an orphaned run role - delete it
+                try {
+                    await role.delete('Cleanup: Orphaned run role (no active run)');
+                    totalDeleted++;
+                    
+                    logger.info('Deleted orphaned run role', {
+                        guildId,
+                        guildName: guild.name,
+                        roleId,
+                        roleName: role.name
+                    });
+                } catch (err) {
+                    totalFailed++;
+                    logger.warn('Failed to delete orphaned run role', {
+                        guildId,
+                        roleId,
+                        roleName: role.name,
+                        error: err instanceof Error ? err.message : String(err)
+                    });
+                }
+            }
+        } catch (err) {
+            logger.error('Failed to cleanup orphaned roles for guild', {
+                guildId,
+                guildName: guild.name,
+                error: err instanceof Error ? err.message : String(err)
+            });
+        }
+    }
+    
+    if (totalDeleted > 0 || totalFailed > 0) {
+        logger.info('Completed orphaned run roles cleanup', {
+            totalChecked,
+            totalDeleted,
+            totalFailed
+        });
+    } else {
+        logger.debug('No orphaned run roles found');
+    }
+}
+
 // ============================================================================
 // Task Scheduler
 // ============================================================================
@@ -382,6 +483,11 @@ export function startScheduledTasks(client: Client): () => void {
             name: 'Expired Verification Sessions',
             intervalMinutes: 5,
             handler: checkExpiredVerificationSessions
+        },
+        {
+            name: 'Orphaned Run Roles',
+            intervalMinutes: 15,
+            handler: cleanupOrphanedRunRoles
         }
     ];
 

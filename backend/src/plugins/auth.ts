@@ -4,6 +4,9 @@ import { Errors } from '../lib/errors/errors';
 declare module 'fastify' {
     interface FastifyRequest {
         apiKeyValid?: boolean;
+        guildContext?: {
+            guildId: string;
+        };
     }
     interface FastifyContextConfig {
         public?: boolean;
@@ -23,5 +26,11 @@ export default fp(async (fastify) => {
             return Errors.unauthorized(reply);
         }
         req.apiKeyValid = true;
+
+        // Extract guild context from x-guild-id header (if present)
+        const guildId = req.headers['x-guild-id'];
+        if (typeof guildId === 'string' && guildId.length > 0) {
+            req.guildContext = { guildId };
+        }
     });
 });

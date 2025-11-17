@@ -20,7 +20,9 @@ import { handleLeave } from './interactions/buttons/raids/leave.js';
 import { handleStatus } from './interactions/buttons/raids/run-status.js';
 import { handleClassSelection } from './interactions/buttons/raids/class-selection.js';
 import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
-import { handleSetParty, handleSetLocation, handleSetChainAmount } from './interactions/buttons/raids/party-location.js';
+import { handleRealmScore } from './interactions/buttons/raids/realm-score.js';
+import { handleSetParty, handleSetLocation, handleSetChainAmount, handleSetPartyLocation } from './interactions/buttons/raids/party-location.js';
+import { handleScreenshotButton } from './interactions/buttons/raids/screenshot-submit.js';
 import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
 import { handlePingRaiders } from './interactions/buttons/raids/ping-raiders.js';
 import { handleHeadcountJoin } from './interactions/buttons/raids/headcount-join.js';
@@ -52,6 +54,11 @@ import {
     handleKeyPopPointsDungeonModal,
 } from './interactions/buttons/config/key-pop-points-config.js';
 import {
+    handleRolePingToggle,
+    handleRolePingAddAll,
+    handleRolePingRemoveAll,
+} from './interactions/buttons/config/roleping-panel.js';
+import {
     handleGetVerified,
     handleRealmEyeVerification,
     handleVerificationDone,
@@ -73,6 +80,7 @@ import { syncTeamRoleForMember } from './lib/team/team-role-manager.js';
 import { logCommandExecution, createSuccessResult, createErrorResult } from './lib/logging/command-logging.js';
 import { BackendError } from './lib/utilities/http.js';
 import { applyButtonRateLimit } from './lib/utilities/rate-limit-middleware.js';
+import { safeHandleInteraction } from './lib/interactions/safe-handle-interaction.js';
 
 const client = new Client({
     intents: [
@@ -110,57 +118,71 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-    try {
-        if (interaction.isAutocomplete()) {
+    // Autocomplete doesn't need the full wrapper (ultra-fast, no deferral)
+    if (interaction.isAutocomplete()) {
+        try {
             const cmd = commands.find(c => c.data.name === interaction.commandName);
             if (cmd?.autocomplete) await cmd.autocomplete(interaction);
             else await interaction.respond([]);
-            return;
+        } catch (error) {
+            console.error('[Autocomplete] Error:', error);
         }
+        return;
+    }
 
-        if (interaction.isChatInputCommand()) {
+    if (interaction.isChatInputCommand()) {
             const cmd = commands.find(c => c.data.name === interaction.commandName);
             if (cmd) {
                 const startTime = Date.now();
                 let commandSuccess = true;
                 let errorCode: string | undefined;
 
-                try {
-                    await cmd.run(interaction);
-                } catch (err) {
-                    commandSuccess = false;
+                // Use safe handler wrapper for consistent error handling and deferral
+                await safeHandleInteraction(
+                    interaction,
+                    async () => {
+                        try {
+                            await cmd.run(interaction);
+                        } catch (err) {
+                            commandSuccess = false;
 
-                    // Categorize the error
-                    if (err instanceof BackendError) {
-                        errorCode = err.code || 'BACKEND_ERROR';
-                    } else if (err instanceof Error) {
-                        // Try to infer error type from message
-                        const msg = err.message.toLowerCase();
-                        if (msg.includes('permission')) {
-                            errorCode = 'MISSING_PERMISSIONS';
-                        } else if (msg.includes('timeout')) {
-                            errorCode = 'TIMEOUT';
-                        } else {
-                            errorCode = 'UNKNOWN_ERROR';
+                            // Categorize the error for logging
+                            if (err instanceof BackendError) {
+                                errorCode = err.code || 'BACKEND_ERROR';
+                            } else if (err instanceof Error) {
+                                // Try to infer error type from message
+                                const msg = err.message.toLowerCase();
+                                if (msg.includes('permission')) {
+                                    errorCode = 'MISSING_PERMISSIONS';
+                                } else if (msg.includes('timeout')) {
+                                    errorCode = 'TIMEOUT';
+                                } else {
+                                    errorCode = 'UNKNOWN_ERROR';
+                                }
+                            } else {
+                                errorCode = 'UNKNOWN_ERROR';
+                            }
+
+                            // Re-throw so safeHandleInteraction can handle it
+                            throw err;
                         }
-                    } else {
-                        errorCode = 'UNKNOWN_ERROR';
+                    },
+                    {
+                        // Commands are public by default
+                        ephemeral: false,
                     }
+                );
 
-                    // Re-throw to preserve existing error handling
-                    throw err;
-                } finally {
-                    // Log command execution (success or failure)
-                    const latencyMs = Date.now() - startTime;
-                    const result = commandSuccess
-                        ? createSuccessResult(latencyMs)
-                        : createErrorResult(errorCode!, latencyMs);
+                // Log command execution (success or failure)
+                const latencyMs = Date.now() - startTime;
+                const result = commandSuccess
+                    ? createSuccessResult(latencyMs)
+                    : createErrorResult(errorCode!, latencyMs);
 
-                    // Non-blocking log - won't affect command execution
-                    logCommandExecution(interaction, result).catch(logErr => {
-                        console.warn('[CommandLogging] Failed to log command:', logErr);
-                    });
-                }
+                // Non-blocking log - won't affect command execution
+                logCommandExecution(interaction, result).catch(logErr => {
+                    console.warn('[CommandLogging] Failed to log command:', logErr);
+                });
             }
             return;
         }
@@ -169,103 +191,121 @@ client.on('interactionCreate', async (interaction) => {
             // Handle verification buttons (strict rate limiting)
             if (interaction.customId === 'verification:get_verified') {
                 if (!await applyButtonRateLimit(interaction, 'verification:start')) return;
-                await handleGetVerified(interaction);
+                await safeHandleInteraction(interaction, () => handleGetVerified(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'verification:realmeye') {
                 if (!await applyButtonRateLimit(interaction, 'verification:method')) return;
-                await handleRealmEyeVerification(interaction);
+                await safeHandleInteraction(interaction, () => handleRealmEyeVerification(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'verification:done') {
                 if (!await applyButtonRateLimit(interaction, 'verification:submit')) return;
-                await handleVerificationDone(interaction);
+                await safeHandleInteraction(interaction, () => handleVerificationDone(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'verification:cancel') {
                 if (!await applyButtonRateLimit(interaction, 'verification:cancel')) return;
-                await handleVerificationCancel(interaction);
+                await safeHandleInteraction(interaction, () => handleVerificationCancel(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'verification:manual_screenshot') {
                 if (!await applyButtonRateLimit(interaction, 'verification:method')) return;
-                await handleManualVerifyScreenshot(interaction);
+                await safeHandleInteraction(interaction, () => handleManualVerifyScreenshot(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('verification:approve:')) {
                 if (!await applyButtonRateLimit(interaction, 'verification:approve')) return;
-                await handleVerificationApprove(interaction);
+                await safeHandleInteraction(interaction, () => handleVerificationApprove(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('verification:deny:')) {
                 if (!await applyButtonRateLimit(interaction, 'verification:deny')) return;
-                await handleVerificationDeny(interaction);
+                await safeHandleInteraction(interaction, () => handleVerificationDeny(interaction), { ephemeral: true });
                 return;
             }
 
             // Handle modmail buttons
             if (interaction.customId.startsWith('modmail:confirm:')) {
                 if (!await applyButtonRateLimit(interaction, 'modmail:action')) return;
-                await handleModmailConfirm(interaction);
+                await safeHandleInteraction(interaction, () => handleModmailConfirm(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('modmail:cancel:')) {
                 if (!await applyButtonRateLimit(interaction, 'modmail:action')) return;
-                await handleModmailCancel(interaction);
+                await safeHandleInteraction(interaction, () => handleModmailCancel(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('modmail:close:')) {
                 if (!await applyButtonRateLimit(interaction, 'modmail:action')) return;
-                await handleModmailClose(interaction);
+                await safeHandleInteraction(interaction, () => handleModmailClose(interaction), { ephemeral: true });
+                return;
+            }
+
+            // Handle role ping panel buttons
+            if (interaction.customId.startsWith('roleping:toggle:')) {
+                if (!await applyButtonRateLimit(interaction, 'roleping:toggle')) return;
+                const dungeonKey = interaction.customId.split(':')[2];
+                await safeHandleInteraction(interaction, () => handleRolePingToggle(interaction, dungeonKey), { ephemeral: true });
+                return;
+            }
+            if (interaction.customId === 'roleping:addall') {
+                if (!await applyButtonRateLimit(interaction, 'roleping:bulk')) return;
+                await safeHandleInteraction(interaction, () => handleRolePingAddAll(interaction), { ephemeral: true });
+                return;
+            }
+            if (interaction.customId === 'roleping:removeall') {
+                if (!await applyButtonRateLimit(interaction, 'roleping:bulk')) return;
+                await safeHandleInteraction(interaction, () => handleRolePingRemoveAll(interaction), { ephemeral: true });
                 return;
             }
 
             // Handle quota config buttons (restrictive rate limiting)
             if (interaction.customId.startsWith('quota_config_basic:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaConfigBasic(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaConfigBasic(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_config_moderation:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaConfigModeration(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaConfigModeration(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_config_dungeons:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaConfigDungeons(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaConfigDungeons(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_refresh_panel:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaRefreshPanel(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaRefreshPanel(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_reset_panel:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaResetPanel(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaResetPanel(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_config_stop:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
-                await handleQuotaConfigStop(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaConfigStop(interaction), { ephemeral: true });
                 return;
             }
 
             // Handle points config buttons
             if (interaction.customId === 'points_config_dungeons' || interaction.customId.startsWith('points_config_dungeons:')) {
                 if (!await applyButtonRateLimit(interaction, 'points_config_panel')) return;
-                await handlePointsConfigDungeons(interaction);
+                await safeHandleInteraction(interaction, () => handlePointsConfigDungeons(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'points_config_keys' || interaction.customId.startsWith('points_config_keys:')) {
                 if (!await applyButtonRateLimit(interaction, 'points_config_panel')) return;
-                await handlePointsConfigKeys(interaction);
+                await safeHandleInteraction(interaction, () => handlePointsConfigKeys(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId === 'points_config_stop' || interaction.customId.startsWith('points_config_stop:')) {
                 if (!await applyButtonRateLimit(interaction, 'points_config_panel')) return;
-                await handlePointsConfigStop(interaction);
+                await safeHandleInteraction(interaction, () => handlePointsConfigStop(interaction), { ephemeral: true });
                 return;
             }
 
@@ -273,13 +313,13 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.customId.startsWith('headcount:join:')) {
                 if (!await applyButtonRateLimit(interaction, 'run:participation')) return;
                 const panelTimestamp = interaction.customId.split(':')[2];
-                await handleHeadcountJoin(interaction, panelTimestamp);
+                await safeHandleInteraction(interaction, () => handleHeadcountJoin(interaction, panelTimestamp), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('headcount:key:')) {
                 if (!await applyButtonRateLimit(interaction, 'run:key:headcount')) return;
                 const [, , panelTimestamp, dungeonCode] = interaction.customId.split(':');
-                await handleHeadcountKey(interaction, panelTimestamp, dungeonCode);
+                await safeHandleInteraction(interaction, () => handleHeadcountKey(interaction, panelTimestamp, dungeonCode), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('headcount:org:')) {
@@ -289,28 +329,28 @@ client.on('interactionCreate', async (interaction) => {
                 const identifier = parts[3]; // publicMessageId if confirm/deny
 
                 if (action === 'confirm' && identifier) {
-                    await handleHeadcountOrganizerPanelConfirm(interaction, identifier);
+                    await safeHandleInteraction(interaction, () => handleHeadcountOrganizerPanelConfirm(interaction, identifier), { ephemeral: true });
                     return;
                 }
                 if (action === 'deny' && identifier) {
-                    await handleHeadcountOrganizerPanelDeny(interaction, identifier);
+                    await safeHandleInteraction(interaction, () => handleHeadcountOrganizerPanelDeny(interaction, identifier), { ephemeral: true });
                     return;
                 }
                 // Regular headcount organizer panel access
                 const panelTimestamp = action; // The timestamp is in the action position
-                await handleHeadcountOrganizerPanel(interaction, panelTimestamp);
+                await safeHandleInteraction(interaction, () => handleHeadcountOrganizerPanel(interaction, panelTimestamp), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('headcount:end:')) {
                 if (!await applyButtonRateLimit(interaction, 'headcount:organizer')) return;
                 const publicMessageId = interaction.customId.split(':')[2];
-                await handleHeadcountEnd(interaction, publicMessageId);
+                await safeHandleInteraction(interaction, () => handleHeadcountEnd(interaction, publicMessageId), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('headcount:convert:')) {
                 if (!await applyButtonRateLimit(interaction, 'headcount:organizer')) return;
                 const publicMessageId = interaction.customId.split(':')[2];
-                await handleHeadcountConvert(interaction, publicMessageId);
+                await safeHandleInteraction(interaction, () => handleHeadcountConvert(interaction, publicMessageId), { ephemeral: true });
                 return;
             }
 
@@ -322,77 +362,92 @@ client.on('interactionCreate', async (interaction) => {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
                 // Check if this is a confirmation action
                 if (runId === 'confirm' && rest.length > 0) {
-                    await handleOrganizerPanelConfirm(interaction, rest.join(':'));
+                    await safeHandleInteraction(interaction, () => handleOrganizerPanelConfirm(interaction, rest.join(':')), { ephemeral: true });
                     return;
                 }
                 if (runId === 'deny' && rest.length > 0) {
-                    await handleOrganizerPanelDeny(interaction, rest.join(':'));
+                    await safeHandleInteraction(interaction, () => handleOrganizerPanelDeny(interaction, rest.join(':')), { ephemeral: true });
                     return;
                 }
                 // Regular organizer panel access
-                await handleOrganizerPanel(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleOrganizerPanel(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'join') {
                 if (!await applyButtonRateLimit(interaction, 'run:participation')) return;
-                await handleJoin(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleJoin(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'leave') {
                 if (!await applyButtonRateLimit(interaction, 'run:participation')) return;
-                await handleLeave(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleLeave(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'class') {
                 if (!await applyButtonRateLimit(interaction, 'run:class_selection')) return;
-                await handleClassSelection(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleClassSelection(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'key') {
                 if (!await applyButtonRateLimit(interaction, 'run:key:reaction')) return;
                 // Key reaction: run:key:runId:keyType
                 const keyType = rest.join(':'); // In case keyType contains colons
-                await handleKeyReaction(interaction, runId, keyType);
+                await safeHandleInteraction(interaction, () => handleKeyReaction(interaction, runId, keyType), { ephemeral: true });
                 return;
             }
             if (action === 'start') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleStatus(interaction, runId, 'live');
+                await safeHandleInteraction(interaction, () => handleStatus(interaction, runId, 'live'), { ephemeral: true });
                 return;
             }
             if (action === 'end') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleStatus(interaction, runId, 'ended');
+                await safeHandleInteraction(interaction, () => handleStatus(interaction, runId, 'ended'), { ephemeral: true });
                 return;
             }
             if (action === 'cancel') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleStatus(interaction, runId, 'cancelled');
+                await safeHandleInteraction(interaction, () => handleStatus(interaction, runId, 'cancelled'), { ephemeral: true });
                 return;
             }
             if (action === 'keypop') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleKeyWindow(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleKeyWindow(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'realmscore') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleRealmScore(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'setpartyloc') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleSetPartyLocation(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'setparty') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleSetParty(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleSetParty(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'setlocation') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleSetLocation(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleSetLocation(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'screenshot') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleScreenshotButton(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'setchain') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handleSetChainAmount(interaction, runId);
+                await safeHandleInteraction(interaction, () => handleSetChainAmount(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'ping') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
-                await handlePingRaiders(interaction, runId);
+                await safeHandleInteraction(interaction, () => handlePingRaiders(interaction, runId), { ephemeral: true });
                 return;
             }
 
@@ -403,27 +458,27 @@ client.on('interactionCreate', async (interaction) => {
         // Handle modal submissions
         if (interaction.isModalSubmit()) {
             if (interaction.customId.startsWith('verification:approve_modal:')) {
-                await handleVerificationApproveModal(interaction);
+                await safeHandleInteraction(interaction, () => handleVerificationApproveModal(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_basic_modal:')) {
-                await handleQuotaBasicModal(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaBasicModal(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_moderation_modal:')) {
-                await handleQuotaModerationModal(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaModerationModal(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_dungeon_modal:')) {
-                await handleQuotaDungeonModal(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaDungeonModal(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('points_dungeon_modal:')) {
-                await handlePointsDungeonModal(interaction);
+                await safeHandleInteraction(interaction, () => handlePointsDungeonModal(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('key_pop_points_dungeon_modal:')) {
-                await handleKeyPopPointsDungeonModal(interaction);
+                await safeHandleInteraction(interaction, () => handleKeyPopPointsDungeonModal(interaction), { ephemeral: true });
                 return;
             }
         }
@@ -439,30 +494,22 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.customId.startsWith('quota_select_dungeon_exalt:') ||
                 interaction.customId.startsWith('quota_select_dungeon_misc1:') ||
                 interaction.customId.startsWith('quota_select_dungeon_misc2:')) {
-                await handleQuotaSelectDungeon(interaction);
+                await safeHandleInteraction(interaction, () => handleQuotaSelectDungeon(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('points_select_dungeon_exalt') ||
                 interaction.customId.startsWith('points_select_dungeon_misc1') ||
                 interaction.customId.startsWith('points_select_dungeon_misc2')) {
-                await handlePointsSelectDungeon(interaction);
+                await safeHandleInteraction(interaction, () => handlePointsSelectDungeon(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('key_pop_points_select_dungeon_exalt') ||
                 interaction.customId.startsWith('key_pop_points_select_dungeon_misc1') ||
                 interaction.customId.startsWith('key_pop_points_select_dungeon_misc2')) {
-                await handleKeyPopPointsSelectDungeon(interaction);
+                await safeHandleInteraction(interaction, () => handleKeyPopPointsSelectDungeon(interaction), { ephemeral: true });
                 return;
             }
         }
-    } catch (e) {
-        console.error(e);
-        if ('isRepliable' in interaction && interaction.isRepliable()) {
-            interaction.deferred || interaction.replied
-                ? await interaction.followUp({ content: 'Something went wrong.', flags: MessageFlags.Ephemeral })
-                : await interaction.reply({ content: 'Something went wrong.', flags: MessageFlags.Ephemeral });
-        }
-    }
 });
 
 

@@ -97,9 +97,9 @@ export const RateLimitPresets = {
         errorMessage: '⏱️ **Verification rate limit.** Please wait before continuing the verification process.'
     } as RateLimitConfig,
 
-    /** Organizer panel actions - prevent accidental spam (3 per 10s) */
+    /** Organizer panel actions - prevent accidental spam (6 per 10s) */
     BUTTON_ORGANIZER_PANEL: {
-        maxRequests: 3,
+        maxRequests: 6,
         windowMs: 10_000,
         errorMessage: '⏱️ **Too many panel actions.** Please wait before performing more organizer actions.'
     } as RateLimitConfig,

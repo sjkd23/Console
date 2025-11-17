@@ -4,8 +4,21 @@ import { randomUUID } from 'crypto';
 import { backendConfig } from '../config.js';
 import { logger } from '../lib/logging/logger.js';
 
+const isTest = process.env.NODE_ENV === 'test';
+
+const connectionString =
+    isTest && backendConfig.TEST_DATABASE_URL
+        ? backendConfig.TEST_DATABASE_URL
+        : backendConfig.DATABASE_URL;
+
+if (!connectionString) {
+    // Fail fast with a clear log message
+    logger.error('No database connection string configured. DATABASE_URL or TEST_DATABASE_URL must be set.');
+    throw new Error('Database connection string is not configured');
+}
+
 export const pool = new Pool({
-    connectionString: backendConfig.DATABASE_URL,
+    connectionString,
     // optional: ssl: { rejectUnauthorized: false }
 });
 

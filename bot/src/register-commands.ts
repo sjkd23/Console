@@ -9,8 +9,18 @@ import { registerAll } from './commands/index.js';
 const rest = new REST({ version: '10' }).setToken(botConfig.SECRET_KEY);
 
 async function main() {
-    const names = await registerAll(rest, botConfig.APPLICATION_ID, botConfig.DISCORD_DEV_GUILD_ID);
-    console.log('Registered dev guild commands:', names.join(', '));
+    console.log(`📝 Registering commands to ${botConfig.GUILD_IDS.length} guild(s)...`);
+    
+    for (const guildId of botConfig.GUILD_IDS) {
+        try {
+            const names = await registerAll(rest, botConfig.APPLICATION_ID, guildId);
+            console.log(`✅ Guild ${guildId}: Registered ${names.length} commands`);
+        } catch (err) {
+            console.error(`❌ Guild ${guildId}: Failed to register commands:`, err);
+        }
+    }
+    
+    console.log('\n🎉 Command registration complete!');
 }
 
 main().catch(err => {

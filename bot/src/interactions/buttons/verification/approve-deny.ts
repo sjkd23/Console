@@ -11,6 +11,9 @@ import {
     TextInputStyle,
     ActionRowBuilder,
     ModalSubmitInteraction,
+    Collection,
+    TextBasedChannel,
+    ReadonlyCollection,
 } from 'discord.js';
 import {
     getSessionByUserId,
@@ -335,6 +338,11 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
 
     try {
         // Check if user has security+ role
+        if (!interaction.guild) {
+            await interaction.editReply('❌ This command can only be used in a server.');
+            return;
+        }
+
         const member = await interaction.guild.members.fetch(interaction.user.id);
         const hasPermission = await hasInternalRole(member, 'security');
 
@@ -388,6 +396,15 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         if (!channel || !channel.isTextBased()) {
             await interaction.followUp({
                 content: '❌ Could not set up message collector.',
+                ephemeral: true,
+            });
+            return;
+        }
+
+        // Type guard: ensure channel supports message collection
+        if (!('createMessageCollector' in channel)) {
+            await interaction.followUp({
+                content: '❌ This channel type does not support message collection.',
                 ephemeral: true,
             });
             return;
@@ -473,7 +490,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
             }, 60000);
         });
 
-        collector.on('end', async (collected, reason) => {
+        collector.on('end', async (collected: ReadonlyCollection<string, Message>, reason: string) => {
             if (reason === 'time' && collected.size === 0) {
                 // No reason provided within timeout
                 await updateSession(guildId, userId, {

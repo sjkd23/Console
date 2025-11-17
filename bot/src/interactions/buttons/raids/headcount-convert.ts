@@ -26,6 +26,7 @@ import { fetchGuildMember } from '../../../lib/utilities/interaction-helpers.js'
 import { logRaidCreation } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { withButtonLock, getHeadcountLockKey } from '../../../lib/utilities/button-mutex.js';
+import { getDefaultAutoEndMinutes } from '../../../config/raid-config.js';
 
 export async function handleHeadcountConvert(btn: ButtonInteraction, publicMessageId: string) {
     // CRITICAL: Wrap in mutex to prevent concurrent conversion
@@ -233,6 +234,7 @@ async function convertHeadcountToRun(
     const keyOffers = getKeyOffers(publicMsg.id);
     const dungeonKeys = keyOffers.get(dungeonCode);
     const keyUserIds = dungeonKeys ? Array.from(dungeonKeys) : [];
+    const guildId = interaction.guildId!;
 
     // Create the run in the backend (use the channel where the headcount was posted)
     const { runId } = await postJSON<{ runId: number }>('/runs', {
@@ -244,8 +246,8 @@ async function convertHeadcountToRun(
         channelId: publicMsg.channelId, // Use the channel where headcount was posted (should be raid channel)
         dungeonKey: dungeon.codeName,
         dungeonLabel: dungeon.dungeonName,
-        autoEndMinutes: 120
-    });
+        autoEndMinutes: getDefaultAutoEndMinutes()
+    }, { guildId });
 
     // If there are key reactions, register them with the backend
     if (keyUserIds.length > 0 && dungeon.keyReactions && dungeon.keyReactions.length > 0) {
@@ -254,10 +256,10 @@ async function convertHeadcountToRun(
         
         for (const userId of keyUserIds) {
             try {
-                await postJSON(`/runs/${runId}/key-reaction`, {
+                await postJSON(`/runs/${runId}/key-reactions`, {
                     userId,
                     keyType
-                });
+                }, { guildId });
             } catch (err) {
                 console.error(`Failed to register key reaction for user ${userId}:`, err);
             }
@@ -267,7 +269,7 @@ async function convertHeadcountToRun(
     // Build the run embed
     const runEmbed = new EmbedBuilder()
         .setTitle(`⏳ Starting Soon: ${dungeon.dungeonName}`)
-        .setDescription(`Organizer: <@${organizerId}>\n\n**Status:** Waiting for organizer to start`)
+        .setDescription(`Organizer: <@${organizerId}>`)
         .addFields(
             { name: 'Raiders', value: '0', inline: false }
         )
@@ -301,10 +303,6 @@ async function convertHeadcountToRun(
             .setCustomId(`run:leave:${runId}`)
             .setLabel('Leave')
             .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-            .setCustomId(`run:class:${runId}`)
-            .setLabel('Class')
-            .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId(`run:org:${runId}`)
             .setLabel('Organizer Panel')
@@ -346,7 +344,7 @@ async function convertHeadcountToRun(
 
     // Store the message ID in the backend
     try {
-        await postJSON(`/runs/${runId}/message`, { postMessageId: publicMsg.id });
+        await postJSON(`/runs/${runId}/message`, { postMessageId: publicMsg.id }, { guildId });
     } catch (e) {
         console.error('Failed to store post_message_id:', e);
     }
