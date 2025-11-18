@@ -4,8 +4,8 @@
  */
 
 import { ChatInputCommandInteraction } from 'discord.js';
-import { getActiveRunsByOrganizer } from './http.js';
-import { hasActiveHeadcount, getActiveHeadcount } from '../state/active-headcount-tracker.js';
+import { getActiveRunsByOrganizer, patchJSON, deleteJSON } from './http.js';
+import { hasActiveHeadcount, getActiveHeadcount, unregisterHeadcount } from '../state/active-headcount-tracker.js';
 import { buildDiscordMessageLink } from './discord-link-helpers.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -28,6 +28,7 @@ export interface ActivityCheckResult {
 
 /**
  * Checks if an organizer has any active runs or headcounts and builds appropriate error messages
+ * Automatically clears stale activities if their messages no longer exist
  * @param interaction - The command interaction
  * @param guildId - The guild ID to check in
  * @param organizerId - The organizer's user ID
@@ -38,18 +39,72 @@ export async function checkOrganizerActiveActivities(
     guildId: string,
     organizerId: string
 ): Promise<ActivityCheckResult> {
+    logger.debug('Checking for active activities', { guildId, organizerId });
+    
     // Check for active runs
     try {
         const { activeRuns } = await getActiveRunsByOrganizer(guildId, organizerId);
         
+        logger.debug('Active runs check result', { 
+            guildId, 
+            organizerId, 
+            activeRunCount: activeRuns.length,
+            activeRuns: activeRuns.map(r => ({ id: r.id, status: r.status, dungeonLabel: r.dungeonLabel }))
+        });
+        
         if (activeRuns.length > 0) {
             const activeRun = activeRuns[0] as ActiveRunInfo;
-            const errorMessage = buildActiveRunErrorMessage(guildId, activeRun);
-            return {
-                hasActiveRun: true,
-                hasActiveHeadcount: false,
-                errorMessage
-            };
+            
+            logger.debug('Verifying run message exists', {
+                guildId,
+                organizerId,
+                runId: activeRun.id,
+                channelId: activeRun.channelId,
+                messageId: activeRun.postMessageId
+            });
+            
+            // Verify the run message actually exists
+            const messageExists = await verifyMessageExists(
+                interaction,
+                activeRun.channelId,
+                activeRun.postMessageId
+            );
+            
+            logger.debug('Message verification result', {
+                guildId,
+                organizerId,
+                runId: activeRun.id,
+                messageExists
+            });
+            
+            if (!messageExists) {
+                // Message doesn't exist - clear the stale run
+                logger.warn('Active run message no longer exists, clearing stale run', {
+                    guildId,
+                    organizerId,
+                    runId: activeRun.id,
+                    channelId: activeRun.channelId,
+                    messageId: activeRun.postMessageId
+                });
+                
+                await clearStaleRun(guildId, activeRun.id, organizerId);
+                
+                // Continue checking for other activities
+            } else {
+                // Message exists - return error to block creation
+                logger.debug('Run message exists, blocking new run creation', {
+                    guildId,
+                    organizerId,
+                    runId: activeRun.id
+                });
+                
+                const errorMessage = buildActiveRunErrorMessage(guildId, activeRun);
+                return {
+                    hasActiveRun: true,
+                    hasActiveHeadcount: false,
+                    errorMessage
+                };
+            }
         }
     } catch (err) {
         logger.error('Failed to check for active runs', {
@@ -65,12 +120,34 @@ export async function checkOrganizerActiveActivities(
     if (hasActiveHeadcount(guildId, organizerId)) {
         const activeHeadcount = getActiveHeadcount(guildId, organizerId);
         if (activeHeadcount) {
-            const errorMessage = buildActiveHeadcountErrorMessage(guildId, activeHeadcount);
-            return {
-                hasActiveRun: false,
-                hasActiveHeadcount: true,
-                errorMessage
-            };
+            // Verify the headcount message actually exists
+            const messageExists = await verifyMessageExists(
+                interaction,
+                activeHeadcount.channelId,
+                activeHeadcount.messageId
+            );
+            
+            if (!messageExists) {
+                // Message doesn't exist - clear the stale headcount
+                logger.warn('Active headcount message no longer exists, clearing stale headcount', {
+                    guildId,
+                    organizerId,
+                    channelId: activeHeadcount.channelId,
+                    messageId: activeHeadcount.messageId
+                });
+                
+                unregisterHeadcount(guildId, organizerId);
+                
+                // Continue - no active activities blocking
+            } else {
+                // Message exists - return error to block creation
+                const errorMessage = buildActiveHeadcountErrorMessage(guildId, activeHeadcount);
+                return {
+                    hasActiveRun: false,
+                    hasActiveHeadcount: true,
+                    errorMessage
+                };
+            }
         }
     }
 
@@ -79,6 +156,73 @@ export async function checkOrganizerActiveActivities(
         hasActiveHeadcount: false,
         errorMessage: null
     };
+}
+
+/**
+ * Verifies if a Discord message exists and is accessible
+ * @param interaction - The command interaction
+ * @param channelId - The channel ID where the message should be
+ * @param messageId - The message ID to check
+ * @returns true if message exists and is accessible, false otherwise
+ */
+async function verifyMessageExists(
+    interaction: ChatInputCommandInteraction,
+    channelId: string | null,
+    messageId: string | null
+): Promise<boolean> {
+    // If we don't have channel or message ID, consider it non-existent
+    if (!channelId || !messageId) {
+        return false;
+    }
+    
+    try {
+        const channel = await interaction.client.channels.fetch(channelId);
+        
+        if (!channel || !channel.isTextBased()) {
+            return false;
+        }
+        
+        // Try to fetch the message with force: true to bypass cache
+        const message = await channel.messages.fetch({ message: messageId, force: true });
+        
+        return !!message;
+    } catch (err) {
+        // Message fetch failed (404, permissions, etc.) - treat as non-existent
+        logger.debug('Message verification failed', {
+            channelId,
+            messageId,
+            error: err instanceof Error ? err.message : String(err)
+        });
+        return false;
+    }
+}
+
+/**
+ * Clears a stale run by marking it as ended in the backend
+ * @param guildId - The guild ID
+ * @param runId - The run ID to clear
+ * @param organizerId - The organizer's user ID (used to authorize the cancellation)
+ */
+async function clearStaleRun(guildId: string, runId: number, organizerId: string): Promise<void> {
+    try {
+        await deleteJSON(
+            `/runs/${runId}`,
+            {
+                actorId: organizerId,
+                actorRoles: []
+            },
+            { guildId }
+        );
+        
+        logger.info('Successfully cleared stale run', { guildId, runId });
+    } catch (err) {
+        logger.error('Failed to clear stale run', {
+            guildId,
+            runId,
+            error: err instanceof Error ? err.message : String(err)
+        });
+        // Don't throw - we've done our best to clean up
+    }
 }
 
 /**
@@ -98,8 +242,7 @@ function buildActiveRunErrorMessage(guildId: string, activeRun: ActiveRunInfo): 
     message += `Please end or cancel your current run before starting a new one.\n\n`;
     message += `**To end your run:**\n`;
     message += `• Click the "Organizer Panel" button on your active run\n`;
-    message += `• Use the "End Run" or "Cancel Run" button\n\n`;
-    message += `*If your run is glitched and you can't end it, contact a server admin for help.*`;
+    message += `• Use the "End Run" or "Cancel Run" button`;
     
     return message;
 }
