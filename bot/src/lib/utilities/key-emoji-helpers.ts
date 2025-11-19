@@ -8,7 +8,7 @@ import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 export function formatKeyLabel(keyType: string): string {
     // Special cases for common abbreviations
     const specialCases: Record<string, string> = {
-        'WC_INC': 'WC Inc',
+        'WC_INC': 'Inc',
         'SHIELD_RUNE': 'Shield Rune',
         'SWORD_RUNE': 'Sword Rune',
         'HELM_RUNE': 'Helm Rune',

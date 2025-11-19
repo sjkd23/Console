@@ -430,10 +430,45 @@ async function handleStatusInternal(
         }
 
         // If run ended, show key logging panel
-        // Always log at least 1 key (the organizer's key to start the run)
-        // If they clicked "Key Popped", use that count instead
+        // Calculate total keys based on key reactions:
+        // - For dungeons with multiple key types (e.g., Oryx 3): count unique users across ALL key types
+        // - For regular dungeons: use key_pop_count (number of times "Key Popped" was clicked)
+        // - Always log at least 1 key (the organizer's key to start the run)
         if (status === 'ended') {
-            const totalKeys = Math.max(1, run.keyPopCount);
+            let totalKeys = Math.max(1, run.keyPopCount);
+            
+            // Check if this dungeon has multiple distinct key types
+            const dungeonData = await import('../../../constants/dungeons/dungeon-helpers.js')
+                .then(m => m.dungeonByCode[run.dungeonKey]);
+            
+            if (dungeonData?.keyReactions && dungeonData.keyReactions.length > 1) {
+                // For dungeons with multiple key types (like Oryx 3), fetch ALL key reactions
+                // and count the TOTAL number of unique key clicks across all types
+                try {
+                    const keyReactionData = await getJSON<{ keyUsers: Record<string, string[]> }>(
+                        `/runs/${runId}/key-reaction-users`,
+                        { guildId }
+                    );
+                    
+                    // Count total unique key reactions across all key types
+                    let totalKeyReactions = 0;
+                    for (const userIds of Object.values(keyReactionData.keyUsers)) {
+                        totalKeyReactions += userIds.length;
+                    }
+                    
+                    // Use the total key reactions if greater than 1
+                    if (totalKeyReactions > 0) {
+                        totalKeys = totalKeyReactions;
+                    }
+                } catch (err) {
+                    logger.warn('Failed to fetch key reactions for multi-key dungeon', {
+                        runId,
+                        dungeonKey: run.dungeonKey,
+                        error: err
+                    });
+                    // Fall back to key_pop_count
+                }
+            }
             
             logger.info('Run ended, showing key logging panel', {
                 runId,

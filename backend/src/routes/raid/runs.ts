@@ -612,6 +612,59 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * PATCH /runs/:id/o3-stage
+     * Update O3 progression stage for a run.
+     * Body: { o3Stage: 'closed' | 'miniboss' | 'third_room' }
+     * Authorization: Must be the organizer or have organizer role.
+     */
+    app.patch('/runs/:id/o3-stage', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            o3Stage: z.enum(['closed', 'miniboss', 'third_room']),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) {
+            return Errors.validation(reply, 'Invalid o3Stage or missing parameters');
+        }
+        const runId = Number(p.data.id);
+        const { o3Stage } = b.data;
+
+        // Read current run details for authorization and validation
+        const cur = await query<{
+            status: string;
+            organizer_id: string;
+            guild_id: string;
+            dungeon_key: string;
+        }>(
+            `SELECT status, organizer_id, guild_id, dungeon_key FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
+        const run = cur.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Only allow O3 runs to have O3 stages
+        if (run.dungeon_key !== 'ORYX_3') {
+            return Errors.validation(reply, 'O3 progression is only available for Oryx 3 runs');
+        }
+
+        // Update O3 stage
+        await query(
+            `UPDATE run SET o3_stage = $2 WHERE id = $1::bigint`,
+            [runId, o3Stage]
+        );
+
+        logger.info({ runId, guildId: run.guild_id, o3Stage }, 
+            'O3 progression stage updated');
+
+        return reply.send({ ok: true });
+    });
+
+    /**
      * GET /runs/:id
      * Minimal getter to locate message + surface basic fields.
      */
@@ -641,10 +694,11 @@ export default async function runsRoutes(app: FastifyInstance) {
             key_pop_count: number;
             chain_amount: number | null;
             screenshot_url: string | null;
+            o3_stage: string | null;
         }>(
             `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
                     started_at, ended_at, key_window_ends_at, party, location, description, role_id, ping_message_id,
-                    key_pop_count, chain_amount, screenshot_url
+                    key_pop_count, chain_amount, screenshot_url, o3_stage
          FROM run
         WHERE id = $1::bigint`,
             [runId]
@@ -676,6 +730,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             keyPopCount: r.key_pop_count,
             chainAmount: r.chain_amount,
             screenshotUrl: r.screenshot_url,
+            o3Stage: r.o3_stage,
         });
     });
 

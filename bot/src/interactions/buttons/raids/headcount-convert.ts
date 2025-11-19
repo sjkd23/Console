@@ -263,22 +263,8 @@ async function convertHeadcountToRun(
         roleId: role?.id // Store the created role ID
     }, { guildId });
 
-    // If there are key reactions, register them with the backend
-    if (keyUserIds.length > 0 && dungeon.keyReactions && dungeon.keyReactions.length > 0) {
-        // Use the first key type from the dungeon's key reactions
-        const keyType = dungeon.keyReactions[0].mapKey;
-        
-        for (const userId of keyUserIds) {
-            try {
-                await postJSON(`/runs/${runId}/key-reactions`, {
-                    userId,
-                    keyType
-                }, { guildId });
-            } catch (err) {
-                console.error(`Failed to register key reaction for user ${userId}:`, err);
-            }
-        }
-    }
+    // NOTE: We intentionally DO NOT transfer key reactions from headcount to run
+    // The run starts fresh - raiders need to click the key buttons again on the run panel
 
     // Build the run embed
     const runEmbed = new EmbedBuilder()
@@ -289,18 +275,9 @@ async function convertHeadcountToRun(
         )
         .setTimestamp(new Date());
 
-    // Add Keys field if the dungeon has key reactions
+    // Add Keys field if the dungeon has key reactions (starting fresh - no keys from headcount)
     if (dungeon.keyReactions && dungeon.keyReactions.length > 0) {
-        // Format keys field to match run panel style (count only, no user mentions)
-        if (keyUserIds.length > 0) {
-            // Get the dungeon-specific key emoji
-            const dungeonKeyEmoji = getDungeonKeyEmoji(dungeon.codeName);
-            const keyLabel = formatKeyLabel(dungeon.keyReactions[0].mapKey);
-            const keysText = `${dungeonKeyEmoji} ${keyLabel}: **${keyUserIds.length}**`;
-            runEmbed.addFields({ name: 'Keys', value: keysText, inline: false });
-        } else {
-            runEmbed.addFields({ name: 'Keys', value: 'None', inline: false });
-        }
+        runEmbed.addFields({ name: 'Keys', value: 'None', inline: false });
     }
 
     // Color & thumbnail
@@ -396,20 +373,8 @@ async function convertHeadcountToRun(
         .setTitle(`Organizer Panel — ${dungeon.dungeonName}`)
         .setTimestamp(new Date());
 
-    // Build description with key reaction users if any
+    // Build description - no keys transferred from headcount
     let description = 'Manage the raid with the controls below.';
-
-    if (keyUserIds.length > 0) {
-        description += '\n\n**Key Reacts:**';
-        
-        // Get the dungeon-specific key emoji
-        const dungeonKeyEmoji = getDungeonKeyEmoji(dungeon.codeName);
-        const keyLabel = formatKeyLabel(dungeon.keyReactions![0].mapKey);
-        
-        // Create user mentions
-        const mentions = keyUserIds.map(id => `<@${id}>`).join(', ');
-        description += `\n${dungeonKeyEmoji} **${keyLabel}** (${keyUserIds.length}): ${mentions}`;
-    }
 
     runOrgPanelEmbed.setDescription(description);
 

@@ -28,6 +28,7 @@ async function showOrganizerPanel(
         dungeonKey: string;
         organizerId: string;
         screenshotUrl?: string | null;
+        o3Stage?: string | null; // Track O3 progression: null -> 'closed' -> 'miniboss' -> 'third_room'
     }, 
     confirmationMessage?: string
 ) {
@@ -124,27 +125,58 @@ async function showOrganizerPanel(
     } else if (run.status === 'live') {
         // Live phase: End, Ping Raiders, Update Note, Key popped/Realm Score (row 1) + Set Party/Loc, Chain Amount, Cancel (row 2)
 
-        // For Oryx 3, use "Realm Score %" instead of "Key popped"
-        const actionButton = run.dungeonKey === 'ORYX_3'
-            ? new ButtonBuilder()
-                .setCustomId(`run:realmscore:${runId}`)
-                .setLabel('Realm Score %')
-                .setStyle(ButtonStyle.Success)
-            : (() => {
-                // Build the "Key popped" button with the appropriate emoji
-                const keyPoppedButton = new ButtonBuilder()
-                    .setCustomId(`run:keypop:${runId}`)
-                    .setLabel('Key popped')
-                    .setStyle(ButtonStyle.Success);
+        // For Oryx 3, show progression buttons based on current stage
+        const actionButtons: ButtonBuilder[] = [];
+        
+        if (run.dungeonKey === 'ORYX_3') {
+            // Oryx 3 progression flow based on stage
+            const o3Stage = run.o3Stage || null;
+            
+            if (!o3Stage) {
+                // Initial stage: Show Realm Score % and Realm Closed buttons
+                actionButtons.push(
+                    new ButtonBuilder()
+                        .setCustomId(`run:realmscore:${runId}`)
+                        .setLabel('Realm Score %')
+                        .setStyle(ButtonStyle.Success),
+                    new ButtonBuilder()
+                        .setCustomId(`run:realmclosed:${runId}`)
+                        .setLabel('Realm Closed')
+                        .setStyle(ButtonStyle.Primary)
+                );
+            } else if (o3Stage === 'closed') {
+                // After Realm Closed: Show Miniboss button
+                actionButtons.push(
+                    new ButtonBuilder()
+                        .setCustomId(`run:miniboss:${runId}`)
+                        .setLabel('Miniboss')
+                        .setStyle(ButtonStyle.Primary)
+                );
+            } else if (o3Stage === 'miniboss') {
+                // After Miniboss selected: Show Third Room button
+                actionButtons.push(
+                    new ButtonBuilder()
+                        .setCustomId(`run:thirdroom:${runId}`)
+                        .setLabel('Third Room')
+                        .setStyle(ButtonStyle.Success)
+                );
+            }
+            // After Third Room is clicked, no more progression buttons (o3Stage === 'third_room')
+        } else {
+            // Build the "Key popped" button with the appropriate emoji
+            const keyPoppedButton = new ButtonBuilder()
+                .setCustomId(`run:keypop:${runId}`)
+                .setLabel('Key popped')
+                .setStyle(ButtonStyle.Success);
 
-                // Add emoji from the dungeon's first key reaction if available
-                const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
-                if (keyEmojiIdentifier) {
-                    keyPoppedButton.setEmoji(keyEmojiIdentifier);
-                }
-                
-                return keyPoppedButton;
-            })();
+            // Add emoji from the dungeon's first key reaction if available
+            const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
+            if (keyEmojiIdentifier) {
+                keyPoppedButton.setEmoji(keyEmojiIdentifier);
+            }
+            
+            actionButtons.push(keyPoppedButton);
+        }
 
         const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
@@ -155,7 +187,7 @@ async function showOrganizerPanel(
                 .setCustomId(`run:ping:${runId}`)
                 .setLabel('Ping Raiders')
                 .setStyle(ButtonStyle.Primary),
-            actionButton
+            ...actionButtons
         );
         
         // For Oryx 3, don't show Chain Amount button
@@ -241,6 +273,7 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
         dungeonKey: string;
         organizerId: string;
         screenshotUrl?: string | null;
+        o3Stage?: string | null;
     }>(
         `/runs/${runId}`,
         { guildId }
@@ -322,6 +355,7 @@ export async function handleOrganizerPanelConfirm(btn: ButtonInteraction, runId:
         dungeonKey: string;
         organizerId: string;
         screenshotUrl?: string | null;
+        o3Stage?: string | null;
     }>(`/runs/${runId}`, { guildId }).catch(() => null);
 
     if (!run) {
@@ -388,6 +422,7 @@ export async function refreshOrganizerPanel(
         dungeonKey: string;
         organizerId: string;
         screenshotUrl?: string | null;
+        o3Stage?: string | null;
     }>(`/runs/${runId}`, { guildId }).catch(() => null);
 
     if (!run) {

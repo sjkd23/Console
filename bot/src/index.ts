@@ -21,6 +21,7 @@ import { handleStatus } from './interactions/buttons/raids/run-status.js';
 import { handleClassSelection } from './interactions/buttons/raids/class-selection.js';
 import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
 import { handleRealmScore } from './interactions/buttons/raids/realm-score.js';
+import { handleRealmClosed, handleMiniboss, handleThirdRoom } from './interactions/buttons/raids/o3-progression.js';
 import { handleSetParty, handleSetLocation, handleSetChainAmount, handleSetPartyLocation } from './interactions/buttons/raids/party-location.js';
 import { handleScreenshotButton } from './interactions/buttons/raids/screenshot-submit.js';
 import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
@@ -481,6 +482,21 @@ client.on('interactionCreate', async (interaction) => {
                 await safeHandleInteraction(interaction, () => handleRealmScore(interaction, runId), { ephemeral: true });
                 return;
             }
+            if (action === 'realmclosed') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleRealmClosed(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'miniboss') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleMiniboss(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'thirdroom') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleThirdRoom(interaction, runId), { ephemeral: true });
+                return;
+            }
             if (action === 'setpartyloc') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
                 await safeHandleInteraction(interaction, () => handleSetPartyLocation(interaction, runId), { ephemeral: true });
@@ -558,6 +574,14 @@ client.on('interactionCreate', async (interaction) => {
 
         // Handle select menu interactions
         if (interaction.isStringSelectMenu()) {
+            // Handle O3 miniboss selection
+            if (interaction.customId.startsWith('run:miniboss_select:')) {
+                const runId = interaction.customId.split(':')[2];
+                const { handleMinibossSelect } = await import('./interactions/buttons/raids/o3-progression.js');
+                await safeHandleInteraction(interaction, () => handleMinibossSelect(interaction, runId), { ephemeral: true });
+                return;
+            }
+
             // Handle key logging select menus
             if (interaction.customId.startsWith('keylog:selectuser:')) {
                 const runId = interaction.customId.split(':')[2];
