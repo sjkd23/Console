@@ -175,7 +175,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 .setDisabled(!config) // Only enable if config exists
         );
 
-    // Second row with Reset Panel and Stop buttons
+    // Second row with Reset Panel, Delete Quota, and Stop buttons
     const buttons2 = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
             new ButtonBuilder()
@@ -183,6 +183,12 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 .setLabel('Reset Panel')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🔁')
+                .setDisabled(!config), // Only enable if config exists
+            new ButtonBuilder()
+                .setCustomId(`quota_delete_config:${roleId}${userIdSuffix}`)
+                .setLabel('Delete Quota')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🗑️')
                 .setDisabled(!config), // Only enable if config exists
             new ButtonBuilder()
                 .setCustomId(`quota_config_stop:${roleId}${userIdSuffix}`)

@@ -13,6 +13,7 @@ import {
     getQuotaRoleConfig,
     getAllQuotaRoleConfigs,
     upsertQuotaRoleConfig,
+    deleteQuotaRoleConfig,
     getDungeonOverrides,
     setDungeonOverride,
     deleteDungeonOverride,
@@ -596,6 +597,67 @@ export default async function quotaRoutes(app: FastifyInstance) {
         } catch (err) {
             console.error(`[Quota] Failed to delete dungeon override:`, err);
             return Errors.internal(reply, 'Failed to delete dungeon override');
+        }
+    });
+
+    /**
+     * DELETE /quota/config/:guild_id/:role_id
+     * Delete entire quota configuration for a role (including all overrides and events)
+     * Body: { actor_user_id, actor_roles?, actor_has_admin_permission? }
+     */
+    app.delete('/quota/config/:guild_id/:role_id', async (req, reply) => {
+        const Params = z.object({
+            guild_id: zSnowflake,
+            role_id: zSnowflake,
+        });
+
+        const Body = z.object({
+            actor_user_id: zSnowflake,
+            actor_roles: z.array(zSnowflake).optional(),
+            actor_has_admin_permission: z.boolean().optional(),
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+
+        if (!p.success || !b.success) {
+            return Errors.validation(reply, 'Invalid request');
+        }
+
+        const { guild_id, role_id } = p.data;
+        const { actor_user_id, actor_roles, actor_has_admin_permission } = b.data;
+
+        // Authorization
+        let authorized = false;
+        if (actor_has_admin_permission) {
+            authorized = true;
+        } else {
+            authorized = await canManageGuildRoles(guild_id, actor_user_id, actor_roles);
+        }
+
+        if (!authorized) {
+            return Errors.notAuthorized(reply);
+        }
+
+        try {
+            const deleted = await deleteQuotaRoleConfig(guild_id, role_id);
+            
+            if (!deleted) {
+                return reply.code(404).send({
+                    error: {
+                        code: 'CONFIG_NOT_FOUND',
+                        message: 'No quota configuration found for this role',
+                    },
+                });
+            }
+
+            return reply.send({ 
+                success: true,
+                message: 'Quota configuration deleted successfully'
+            });
+        } catch (err) {
+            console.error(`[Quota] Failed to delete quota config:`, err);
+            return Errors.internal(reply, 'Failed to delete quota configuration');
         }
     });
 

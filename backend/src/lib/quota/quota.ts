@@ -347,6 +347,31 @@ export async function upsertQuotaRoleConfig(
 }
 
 /**
+ * Delete quota role configuration and all associated data.
+ * This will cascade delete all dungeon overrides and quota events for this role.
+ * 
+ * @param guildId - Discord guild ID
+ * @param discordRoleId - Discord role ID
+ * @returns true if a config was deleted, false if no config existed
+ */
+export async function deleteQuotaRoleConfig(
+    guildId: string,
+    discordRoleId: string
+): Promise<boolean> {
+    const res = await query(
+        `DELETE FROM quota_role_config
+         WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
+        [guildId, discordRoleId]
+    );
+
+    const deleted = (res.rowCount ?? 0) > 0;
+    if (deleted) {
+        logger.info({ guildId, discordRoleId }, 'Deleted quota role config');
+    }
+    return deleted;
+}
+
+/**
  * Get dungeon point overrides for a specific role
  */
 export async function getDungeonOverrides(

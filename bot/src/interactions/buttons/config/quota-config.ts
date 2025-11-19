@@ -12,7 +12,7 @@ import {
     StringSelectMenuInteraction,
     ComponentType,
 } from 'discord.js';
-import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, getGuildChannels, BackendError } from '../../../lib/utilities/http.js';
+import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError } from '../../../lib/utilities/http.js';
 import { DUNGEON_DATA } from '../../../constants/dungeons/DungeonData.js';
 import { updateQuotaPanel } from '../../../lib/ui/quota-panel.js';
 import { formatPoints } from '../../../lib/utilities/format-helpers.js';
@@ -1005,6 +1005,97 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
         console.error('Failed to reset quota panel:', err);
         const msg = err instanceof BackendError ? err.message : 'Unknown error';
         await interaction.editReply(`❌ Failed to reset panel: ${msg}`);
+    }
+}
+
+/**
+ * Handle quota_delete_config button
+ * Deletes the entire quota configuration for this role, including the panel
+ */
+export async function handleQuotaDeleteConfig(interaction: ButtonInteraction) {
+    const customIdParts = interaction.customId.split(':');
+    const roleId = customIdParts[1];
+    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+
+    if (!roleId) {
+        await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    // Check if only the command user can interact (only if user ID is specified)
+    if (authorizedUserId && interaction.user.id !== authorizedUserId) {
+        await interaction.reply({ 
+            content: '❌ Only the user who ran the command can use these buttons.', 
+            flags: MessageFlags.Ephemeral 
+        });
+        return;
+    }
+
+    // Check permissions (required even if no specific user restriction)
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: '❌ Administrator permission required', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+        // Get current config to find panel message ID
+        const result = await getQuotaRoleConfig(interaction.guildId!, roleId);
+        const config = result.config;
+
+        // Delete the panel message if it exists
+        if (config?.panel_message_id) {
+            try {
+                const channels = await getGuildChannels(interaction.guildId!);
+                const quotaChannelId = channels.channels['quota'];
+                
+                if (quotaChannelId) {
+                    const quotaChannel = await interaction.guild?.channels.fetch(quotaChannelId);
+                    if (quotaChannel?.isTextBased()) {
+                        const panelMessage = await quotaChannel.messages.fetch(config.panel_message_id);
+                        await panelMessage.delete();
+                    }
+                }
+            } catch (err) {
+                // Panel message might already be deleted, that's okay
+                console.warn('Failed to delete panel message:', err);
+            }
+        }
+
+        // Delete the quota configuration from the database
+        const hasAdminPerm = member?.permissions.has(PermissionFlagsBits.Administrator);
+        await deleteQuotaRoleConfig(interaction.guildId!, roleId, {
+            actor_user_id: interaction.user.id,
+            actor_has_admin_permission: hasAdminPerm,
+        });
+
+        // Update the config panel to show no config exists
+        const { embed, buttons } = await buildQuotaConfigPanel(interaction.guildId!, roleId, authorizedUserId || undefined);
+        
+        await interaction.message.edit({
+            embeds: [embed],
+            components: buttons,
+        });
+
+        await interaction.editReply({
+            content: '✅ Quota configuration deleted successfully. The panel will not be recreated on quota updates.',
+        });
+
+    } catch (err) {
+        console.error('Failed to delete quota config:', err);
+        
+        let errorMsg = '❌ Failed to delete quota configuration.';
+        if (err instanceof BackendError) {
+            if (err.status === 404) {
+                errorMsg = '❌ No quota configuration found for this role.';
+            } else if (err.status === 403) {
+                errorMsg = '❌ You do not have permission to delete this quota configuration.';
+            }
+        }
+        
+        await interaction.editReply({ content: errorMsg });
     }
 }
 

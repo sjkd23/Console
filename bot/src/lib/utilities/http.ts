@@ -718,6 +718,22 @@ export async function deleteDungeonOverride(
     return makeRequest('DELETE', `/quota/config/${guildId}/${roleId}/dungeon/${dungeonKey}`, payload);
 }
 
+/** Delete quota role configuration (DELETE /quota/config/:guild_id/:role_id) */
+export async function deleteQuotaRoleConfig(
+    guildId: string,
+    roleId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+    }
+): Promise<{
+    success: boolean;
+    message: string;
+}> {
+    return makeRequest('DELETE', `/quota/config/${guildId}/${roleId}`, payload);
+}
+
 /** Get quota leaderboard (POST /quota/leaderboard/:guild_id/:role_id) */
 export async function getQuotaLeaderboard(
     guildId: string,
