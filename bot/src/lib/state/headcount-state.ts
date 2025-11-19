@@ -16,10 +16,28 @@ export interface HeadcountState {
 }
 
 /**
- * Extract participant user IDs from the embed description.
- * Participants are listed as user mentions in a "**Joined:**" section.
+ * In-memory storage for headcount participants.
+ * Map structure: messageId -> Set<userId>
+ * This prevents participant names from appearing on the public panel.
  */
-export function getParticipants(embed: EmbedBuilder): Set<string> {
+const participantsStore = new Map<string, Set<string>>();
+
+/**
+ * Get participants for a specific headcount panel.
+ * Now uses in-memory storage instead of parsing the embed description.
+ */
+export function getParticipants(embed: EmbedBuilder, messageId?: string): Set<string> {
+    if (messageId) {
+        // Use in-memory store if messageId is provided
+        let participants = participantsStore.get(messageId);
+        if (!participants) {
+            participants = new Set<string>();
+            participantsStore.set(messageId, participants);
+        }
+        return participants;
+    }
+    
+    // Fallback: try to extract from embed description for backwards compatibility
     const data = embed.toJSON();
     const description = data.description || '';
     
@@ -29,6 +47,14 @@ export function getParticipants(embed: EmbedBuilder): Set<string> {
     // Extract user IDs from mentions like <@123456789>
     const mentions = match[1].matchAll(/<@(\d+)>/g);
     return new Set(Array.from(mentions, m => m[1]));
+}
+
+/**
+ * Clear participants for a specific headcount panel.
+ * Used when ending or converting a headcount.
+ */
+export function clearParticipants(messageId: string): void {
+    participantsStore.delete(messageId);
 }
 
 /**
@@ -57,20 +83,20 @@ export function getDungeonCodes(embed: EmbedBuilder): string[] {
 }
 
 /**
- * Update the embed description to show the list of participants.
+ * Update the embed description to remove the list of participants.
+ * Participants should only be visible in the organizer panel, not on the public embed.
+ * The public embed only shows the count in the "Interested" or "Participants" field.
+ * 
+ * Note: This function now only cleans up any legacy "Joined:" sections.
+ * Participants are stored in memory via getParticipants() instead.
  */
 export function updateParticipantsList(embed: EmbedBuilder, participants: Set<string>): EmbedBuilder {
     const data = embed.toJSON();
     let description = data.description || '';
     
     // Remove existing "Joined:" section if present
+    // This ensures participant names are never shown on the public panel
     description = description.replace(/\n\n\*\*Joined:\*\*\s*[^\n]*/, '');
-    
-    // Add updated "Joined:" section if there are participants
-    if (participants.size > 0) {
-        const mentions = Array.from(participants).map(id => `<@${id}>`).join(', ');
-        description += `\n\n**Joined:** ${mentions}`;
-    }
     
     return new EmbedBuilder(data).setDescription(description);
 }

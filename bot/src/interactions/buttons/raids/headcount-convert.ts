@@ -15,7 +15,7 @@ import {
     ChannelType,
     type GuildTextBasedChannel
 } from 'discord.js';
-import { getOrganizerId, getParticipants } from '../../../lib/state/headcount-state.js';
+import { getOrganizerId, getParticipants, clearParticipants } from '../../../lib/state/headcount-state.js';
 import { getKeyOffers, clearKeyOffers } from './headcount-key.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { postJSON } from '../../../lib/utilities/http.js';
@@ -385,6 +385,7 @@ async function convertHeadcountToRun(
 
     // Clear headcount state from memory
     clearKeyOffers(publicMsg.id);
+    clearParticipants(publicMsg.id);
     
     // CRITICAL: Unregister the headcount from active tracking
     // This prevents the "multiple runs" error when using /taken after converting a headcount

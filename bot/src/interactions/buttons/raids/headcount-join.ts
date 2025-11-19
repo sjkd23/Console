@@ -22,7 +22,7 @@ export async function handleHeadcountJoin(btn: ButtonInteraction, panelTimestamp
     }
 
     const embed = EmbedBuilder.from(embeds[0]);
-    const participants = getParticipants(embed);
+    const participants = getParticipants(embed, msg.id);
 
     // Toggle participation
     const userId = btn.user.id;
@@ -36,7 +36,7 @@ export async function handleHeadcountJoin(btn: ButtonInteraction, panelTimestamp
         message = '✅ **You have joined the headcount!**\n\nThe organizer will use this to plan upcoming runs.';
     }
 
-    // Update embed
+    // Update embed - this now only cleans up any legacy "Joined:" sections
     let updatedEmbed = updateParticipantsList(embed, participants);
     
     // Update the participant count - check for both "Participants" and "Interested" field names

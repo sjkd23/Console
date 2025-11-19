@@ -62,8 +62,8 @@ async function showHeadcountPanel(
     organizerId: string,
     dungeonCodes: string[]
 ) {
-    // Get headcount state
-    const participants = getParticipants(embed);
+    // Get headcount state - pass message ID to retrieve from in-memory store
+    const participants = getParticipants(embed, publicMsg.id);
     const keyOffers = getKeyOffers(publicMsg.id);
 
     // Build organizer panel embed
@@ -72,15 +72,8 @@ async function showHeadcountPanel(
         .setColor(0x5865F2)
         .setTimestamp(new Date());
 
-    // Build description with participants and key offers
-    let description = `**Participants:** ${participants.size}\n`;
-    
-    if (participants.size > 0) {
-        const mentions = Array.from(participants).map(id => `<@${id}>`).join(', ');
-        description += `\n${mentions}\n`;
-    }
-
-    description += '\n**Key Offers by Dungeon:**\n';
+    // Build description with participant count and key offers
+    let description = `**Participants:** ${participants.size}\n\n**Key Offers by Dungeon:**\n`;
 
     if (dungeonCodes.length === 0) {
         description += '_No dungeons found_';

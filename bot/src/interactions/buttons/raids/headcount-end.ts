@@ -8,7 +8,7 @@ import {
     EmbedBuilder,
     ChannelType
 } from 'discord.js';
-import { getOrganizerId } from '../../../lib/state/headcount-state.js';
+import { getOrganizerId, clearParticipants } from '../../../lib/state/headcount-state.js';
 import { clearKeyOffers } from './headcount-key.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
@@ -86,10 +86,9 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
     const data = embed.toJSON();
     let description = data.description || '';
     
-    // Extract just the organizer line and participants
+    // Extract just the organizer line
     const lines = description.split('\n');
     const organizerLine = lines.find(l => l.includes('Organizer:')) || '';
-    const joinedLine = lines.find(l => l.includes('**Joined:**')) || '';
     
     // For multi-dungeon, keep the dungeons list
     const dungeonsLine = lines.find(l => l.includes('**Dungeons:**')) || '';
@@ -100,10 +99,6 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
     // Add dungeons for multi-dungeon headcounts
     if (dungeonsLine) {
         cleanDescription += `\n\n${dungeonsLine}`;
-    }
-    
-    if (joinedLine) {
-        cleanDescription += `\n\n${joinedLine}`;
     }
     
     endedEmbed.setDescription(cleanDescription);
@@ -160,8 +155,9 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
         }
     }
 
-    // Clear key offers from memory
+    // Clear key offers and participants from memory
     clearKeyOffers(publicMsg.id);
+    clearParticipants(publicMsg.id);
 
     // Close the organizer panel
     const closureEmbed = new EmbedBuilder()

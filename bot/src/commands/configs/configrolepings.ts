@@ -48,7 +48,7 @@ export const configrolepings: SlashCommand = {
             }
 
             // ACK ASAP (permission check done by middleware)
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            await interaction.deferReply();
 
             // Fetch member for actor_roles
             let member: GuildMember;
@@ -144,7 +144,7 @@ export const configrolepings: SlashCommand = {
                 if (interaction.deferred || interaction.replied) {
                     await interaction.editReply(errorMsg);
                 } else {
-                    await interaction.reply({ content: errorMsg, flags: MessageFlags.Ephemeral });
+                    await interaction.reply(errorMsg);
                 }
             } catch { }
         }
