@@ -241,7 +241,10 @@ function buildLeaderboardEmbed(
         .setColor(0x5865F2)
         .setTimestamp();
 
-    if (leaderboard.length === 0) {
+    // Filter to only show members with more than 0 points
+    const activeMembers = leaderboard.filter(entry => entry.points > 0);
+
+    if (activeMembers.length === 0) {
         embed.addFields({
             name: 'No Activity',
             value: 'No one has earned points this period yet.',
@@ -249,7 +252,7 @@ function buildLeaderboardEmbed(
         });
     } else {
         // Build leaderboard text
-        const leaderboardText = leaderboard
+        const leaderboardText = activeMembers
             .slice(0, 25) // Top 25
             .map((entry, index) => {
                 const position = index + 1;
@@ -260,14 +263,14 @@ function buildLeaderboardEmbed(
             .join('\n');
 
         embed.addFields({
-            name: `Top ${Math.min(leaderboard.length, 25)} Members`,
+            name: `Top ${Math.min(activeMembers.length, 25)} Members`,
             value: leaderboardText,
             inline: false,
         });
 
         // Show stats
-        const metQuota = leaderboard.filter(e => e.points >= requiredPoints).length;
-        const totalMembers = leaderboard.length;
+        const metQuota = activeMembers.filter(e => e.points >= requiredPoints).length;
+        const totalMembers = activeMembers.length;
         
         embed.setFooter({
             text: `${metQuota}/${totalMembers} members have met quota | Auto-updates periodically`,
