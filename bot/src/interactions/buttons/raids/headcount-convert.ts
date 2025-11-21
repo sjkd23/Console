@@ -263,8 +263,29 @@ async function convertHeadcountToRun(
         roleId: role?.id // Store the created role ID
     }, { guildId });
 
-    // NOTE: We intentionally DO NOT transfer key reactions from headcount to run
-    // The run starts fresh - raiders need to click the key buttons again on the run panel
+    // Transfer headcount key reactions to the run database
+    // These will be stored as key_reactions in the database and displayed as "Headcount Keys"
+    if (dungeonKeyMap && dungeonKeyMap.size > 0) {
+        try {
+            // Flatten the key offers for this dungeon into user-key pairs
+            const keyReactions: Array<{ userId: string; keyType: string }> = [];
+            for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
+                for (const userId of userIds) {
+                    keyReactions.push({ userId, keyType: mapKey });
+                }
+            }
+
+            // Send to backend to store in key_reaction table
+            if (keyReactions.length > 0) {
+                await postJSON(`/runs/${runId}/keys/bulk`, {
+                    keys: keyReactions
+                }, { guildId });
+            }
+        } catch (err) {
+            console.error('Failed to transfer headcount keys to run:', err);
+            // Don't fail the conversion if key transfer fails
+        }
+    }
 
     // Build the run embed
     const runEmbed = new EmbedBuilder()
@@ -275,9 +296,29 @@ async function convertHeadcountToRun(
         )
         .setTimestamp(new Date());
 
-    // Add Keys field if the dungeon has key reactions (starting fresh - no keys from headcount)
+    // Add Headcount Keys field if there were keys from the headcount
+    if (dungeonKeyMap && dungeonKeyMap.size > 0) {
+        // Format headcount keys by type
+        const headcountKeyLines: string[] = [];
+        for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
+            if (userIds.size > 0) {
+                const keyLabel = formatKeyLabel(mapKey);
+                headcountKeyLines.push(`${keyLabel}: ${userIds.size}`);
+            }
+        }
+        
+        if (headcountKeyLines.length > 0) {
+            runEmbed.addFields({
+                name: '🎯 Headcount Keys',
+                value: headcountKeyLines.join('\n'),
+                inline: false
+            });
+        }
+    }
+
+    // Add Raid Keys field if the dungeon has key reactions (starting fresh for raid phase)
     if (dungeon.keyReactions && dungeon.keyReactions.length > 0) {
-        runEmbed.addFields({ name: 'Keys', value: 'None', inline: false });
+        runEmbed.addFields({ name: '🗝️ Raid Keys', value: 'None', inline: false });
     }
 
     // Color & thumbnail
@@ -332,6 +373,45 @@ async function convertHeadcountToRun(
         embeds: [runEmbed],
         components: [row1, ...keyRows]
     });
+
+    // Send announcement message in the channel: "New Raid - Starting Soon" with pings
+    try {
+        const { getDungeonRolePings } = await import('../../../lib/utilities/http.js');
+        
+        // Build announcement message with @here, dungeon role ping (if configured), and raid role
+        let announcementContent = '🎯 **New Raid - Starting Soon!** @here';
+        
+        // Add dungeon role ping if configured
+        try {
+            const { dungeon_role_pings } = await getDungeonRolePings(interaction.guild.id);
+            const dungeonRoleId = dungeon_role_pings[dungeon.codeName];
+            if (dungeonRoleId) {
+                announcementContent += ` <@&${dungeonRoleId}>`;
+            }
+        } catch (e) {
+            console.error('Failed to fetch dungeon role pings for conversion announcement:', e);
+        }
+        
+        // Add raid role if it was created
+        if (role) {
+            announcementContent += ` <@&${role.id}>`;
+        }
+        
+        announcementContent += `\n\n**${dungeon.dungeonName}**`;
+        
+        // Add link to the raid panel
+        const raidPanelUrl = `https://discord.com/channels/${interaction.guild.id}/${publicMsg.channelId}/${publicMsg.id}`;
+        announcementContent += `\n[Jump to Raid Panel](${raidPanelUrl})`;
+        
+        // Send the announcement message
+        const channel = interaction.guild.channels.cache.get(publicMsg.channelId);
+        if (channel && channel.isTextBased()) {
+            await channel.send({ content: announcementContent });
+        }
+    } catch (e) {
+        console.error('Failed to send headcount conversion announcement:', e);
+        // Don't fail the conversion if announcement fails
+    }
 
     // Store the message ID in the backend
     try {

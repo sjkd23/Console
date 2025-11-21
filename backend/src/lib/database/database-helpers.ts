@@ -31,6 +31,63 @@ export async function ensureMemberExists(userId: string, username: string | null
 }
 
 /**
+ * Ensures a raider exists in the database for a guild.
+ * If the raider doesn't exist, creates them with status based on whether they have the verified_raider role.
+ * 
+ * @param guildId - Discord guild ID
+ * @param userId - Discord user ID
+ * @param username - Optional username (defaults to null)
+ * @param userRoleIds - Optional array of Discord role IDs the user has
+ */
+export async function ensureRaiderExists(
+    guildId: string, 
+    userId: string, 
+    username: string | null = null, 
+    userRoleIds?: string[]
+): Promise<void> {
+    // First ensure the member exists in the member table
+    await ensureMemberExists(userId, username);
+    
+    // Check if raider already exists
+    const existing = await query(
+        `SELECT 1 FROM raider WHERE guild_id = $1::bigint AND user_id = $2::bigint`,
+        [guildId, userId]
+    );
+    
+    if (existing.rowCount && existing.rowCount > 0) {
+        // Raider already exists, nothing to do
+        return;
+    }
+    
+    // Raider doesn't exist - need to create them
+    // Determine if they should be auto-verified based on having the verified_raider role
+    let status = 'pending';
+    let verifiedAt: Date | null = null;
+    
+    if (userRoleIds && userRoleIds.length > 0) {
+        // Get the verified_raider role mapping for this guild
+        const roleMapping = await getGuildRoles(guildId);
+        const verifiedRaiderRoleId = roleMapping['verified_raider'];
+        
+        // If the guild has a verified_raider role configured and the user has it
+        if (verifiedRaiderRoleId && userRoleIds.includes(verifiedRaiderRoleId)) {
+            status = 'approved';
+            verifiedAt = new Date();
+        }
+    }
+    
+    // Insert the new raider
+    await query(
+        `INSERT INTO raider (guild_id, user_id, nickname, status, verified_at, notes)
+         VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6)
+         ON CONFLICT (guild_id, user_id) DO NOTHING`,
+        [guildId, userId, username, status, verifiedAt, null]
+    );
+    
+    console.log(`[Database] Created raider ${userId} in guild ${guildId} with status: ${status}`);
+}
+
+/**
  * Get all guild role mappings from DB.
  * Returns Record<role_key, discord_role_id | null>
  * 

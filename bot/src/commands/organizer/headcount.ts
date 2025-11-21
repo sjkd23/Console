@@ -440,8 +440,20 @@ async function createHeadcountPanel(
             }
             
             rolePings.push(...Array.from(rolePingSet));
+            
+            // Log for debugging
+            if (rolePings.length > 0) {
+                logger.info('Adding role pings to headcount', {
+                    guildId: guild.id,
+                    dungeons: selectedDungeons.map(d => d.codeName),
+                    rolePings
+                });
+            }
         } catch (e) {
-            console.error('Failed to fetch dungeon role pings:', e);
+            logger.error('Failed to fetch dungeon role pings for headcount', {
+                guildId: guild.id,
+                error: e instanceof Error ? e.message : String(e)
+            });
             // Continue without custom role pings
         }
         

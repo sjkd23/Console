@@ -1089,3 +1089,27 @@ export async function getActiveRunsByOrganizer(
 }> {
     return getJSON(`/runs/active-by-organizer/${organizerId}`, { guildId });
 }
+
+/** Bulk sync members' IGNs (POST /sync/bulk) */
+export async function bulkSyncMembers(
+    guildId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        members: Array<{
+            user_id: string;
+            main_ign: string;
+            alt_ign?: string;
+        }>;
+    }
+): Promise<{
+    synced: Array<{ user_id: string; status: 'synced'; ign: string }>;
+    skipped: Array<{ user_id: string; status: 'skipped'; reason: string }>;
+    failed: Array<{ user_id: string; status: 'failed'; reason: string }>;
+}> {
+    return postJSON('/sync/bulk', {
+        guild_id: guildId,
+        ...payload,
+    }, { guildId });
+}

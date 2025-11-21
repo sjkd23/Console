@@ -1,5 +1,5 @@
 import { Client, Guild, type GuildTextBasedChannel } from 'discord.js';
-import { getJSON, postJSON } from './http.js';
+import { getJSON, postJSON, getDungeonRolePings } from './http.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('RunPing');
@@ -68,10 +68,10 @@ export async function sendRunPing(
         let content = '';
         
         if (messageType === 'starting') {
-            // Automatic ping when run goes live
-            content = '🔔 **Raid Starting!**';
+            // Automatic ping when run goes live - include @here, dungeon role, and raid role
+            content = '� **Raid Starting!**';
         } else {
-            // Manual ping by organizer
+            // Manual ping by organizer - only ping raid role (not @here or dungeon role)
             if (run.status === 'open') {
                 content = '🔔 **Raid Starting Soon!**';
             } else if (run.status === 'live') {
@@ -81,7 +81,30 @@ export async function sendRunPing(
             }
         }
         
-        // Add role mention if available
+        // For automatic "starting" ping: add @here, dungeon role ping, and raid role
+        // For manual ping: only add raid role (not @here or dungeon role)
+        if (messageType === 'starting') {
+            // Add @here for starting message
+            content += ' @here';
+            
+            // Add dungeon-specific role ping if configured
+            try {
+                const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
+                const dungeonRoleId = dungeon_role_pings[run.dungeonKey];
+                if (dungeonRoleId) {
+                    content += ` <@&${dungeonRoleId}>`;
+                }
+            } catch (e) {
+                logger.warn('Failed to fetch dungeon role pings', { 
+                    guildId: guild.id, 
+                    dungeonKey: run.dungeonKey,
+                    error: e instanceof Error ? e.message : String(e)
+                });
+                // Continue without custom role ping
+            }
+        }
+        
+        // Always add run role mention if available
         if (run.roleId) {
             content += ` <@&${run.roleId}>`;
         }
@@ -189,7 +212,7 @@ export async function sendKeyPoppedPing(
         // Build the ping message
         let content = '🔑 **Key Popped!**';
         
-        // Add role mention if available
+        // Only ping raid role (not @here or dungeon role ping)
         if (run.roleId) {
             content += ` <@&${run.roleId}>`;
         }
@@ -298,7 +321,7 @@ export async function sendRealmScorePing(
         // Build the ping message (NO TIMER - that's the key difference!)
         let content = `**Realm Score: ${realmScore}%**`;
         
-        // Add role mention if available
+        // Only ping raid role (not @here or dungeon role ping)
         if (run.roleId) {
             content += ` <@&${run.roleId}>`;
         }

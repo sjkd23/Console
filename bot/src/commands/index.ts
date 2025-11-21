@@ -22,6 +22,7 @@ import { logrun } from './organizer/logrun.js';
 import { logkey } from './organizer/logkey.js';
 import { stats } from './stats.js';
 import { syncteam } from './moderation/administrator/syncteam.js';
+import { forcesync } from './moderation/administrator/forcesync.js';
 import { configquota } from './configs/configquota.js';
 import { configpoints } from './configs/configpoints.js';
 import { configverification } from './configs/configverification.js';
@@ -74,6 +75,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(logkey),
     withMiddleware(stats),
     withMiddleware(syncteam),
+    withMiddleware(forcesync),
     withMiddleware(configquota),
     withMiddleware(configpoints),
     withMiddleware(configverification),

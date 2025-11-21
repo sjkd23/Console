@@ -557,6 +557,54 @@ function buildLiveEmbed(
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
 
+    // Merge Headcount Keys and Raid Keys into a single Keys field when going live
+    const headcountKeysIdx = fields.findIndex(f => (f.name ?? '').includes('Headcount Keys'));
+    const raidKeysIdx = fields.findIndex(f => (f.name ?? '').includes('Raid Keys'));
+    const keysIdx = fields.findIndex(f => (f.name ?? '') === 'Keys');
+
+    if (headcountKeysIdx >= 0 || raidKeysIdx >= 0) {
+        // We have separate key fields - merge them into one "Keys" field
+        const mergedKeyLines: string[] = [];
+
+        // Add headcount keys if present
+        if (headcountKeysIdx >= 0) {
+            const headcountValue = fields[headcountKeysIdx].value;
+            if (headcountValue && headcountValue !== 'None') {
+                mergedKeyLines.push(headcountValue);
+            }
+        }
+
+        // Add raid keys if present
+        if (raidKeysIdx >= 0) {
+            const raidValue = fields[raidKeysIdx].value;
+            if (raidValue && raidValue !== 'None') {
+                mergedKeyLines.push(raidValue);
+            }
+        }
+
+        // Determine final value
+        const finalValue = mergedKeyLines.length > 0 
+            ? mergedKeyLines.join('\n') 
+            : 'None';
+
+        // Remove both separate key fields if they exist
+        const indicesToRemove = [headcountKeysIdx, raidKeysIdx].filter(i => i >= 0).sort((a, b) => b - a);
+        for (const idx of indicesToRemove) {
+            fields.splice(idx, 1);
+        }
+
+        // Add or update the single "Keys" field
+        const newKeysIdx = fields.findIndex(f => (f.name ?? '') === 'Keys');
+        if (newKeysIdx >= 0) {
+            fields[newKeysIdx] = { ...fields[newKeysIdx], value: finalValue };
+        } else {
+            // Insert Keys field after Raiders field
+            const raidersIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'raiders');
+            const insertIdx = raidersIdx >= 0 ? raidersIdx + 1 : fields.length;
+            fields.splice(insertIdx, 0, { name: 'Keys', value: finalValue, inline: false });
+        }
+    }
+
     // Remove Party field if present
     const partyIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
     if (partyIdx >= 0) {

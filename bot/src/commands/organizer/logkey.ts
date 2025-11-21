@@ -94,6 +94,16 @@ export const logkey: SlashCommand = {
             return;
         }
 
+        // Fetch target member to get their information and roles
+        const targetMember = await fetchGuildMember(guild, targetUser.id);
+        if (!targetMember) {
+            await interaction.reply({
+                content: `❌ ${targetUser} is not a member of this server.`,
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
+
         // Defer reply (backend call may take a moment)
         await interaction.deferReply();
 
@@ -103,6 +113,9 @@ export const logkey: SlashCommand = {
 
             // Get actor's role IDs for authorization
             const actorRoles = getMemberRoleIds(invokerMember);
+            
+            // Get target member's role IDs to determine verification status
+            const targetRoles = getMemberRoleIds(targetMember);
             
             // Call backend to log key pop
             const result = await postJSON<{
@@ -115,6 +128,8 @@ export const logkey: SlashCommand = {
                 actorRoles,
                 guildId: guild.id,
                 userId: targetUser.id,
+                username: targetUser.username,
+                userRoles: targetRoles,
                 dungeonKey: dungeonCode,
                 amount,
             });

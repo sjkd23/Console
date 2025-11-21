@@ -123,6 +123,47 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * GET /runs/active
+     * Get all active (open or live) runs for the current guild.
+     * Used for cleanup tasks (e.g., orphaned role detection).
+     * Returns { runs: Array<{ id, role_id }> }
+     */
+    app.get('/runs/active', async (req, reply) => {
+        // Get guild context (required for this endpoint)
+        const guildContext = (req as any).guildContext;
+        const callerGuildId = guildContext?.guildId;
+
+        if (!callerGuildId) {
+            return reply.code(400).send({
+                error: {
+                    code: 'MISSING_GUILD_CONTEXT',
+                    message: 'This endpoint requires guild context (x-guild-id header)',
+                },
+            });
+        }
+
+        // Query for all active runs (status = 'open' or 'live') in this guild
+        const res = await query<{
+            id: number;
+            role_id: string | null;
+        }>(
+            `SELECT id, role_id
+             FROM run
+             WHERE guild_id = $1::bigint
+               AND status IN ('open', 'live')
+             ORDER BY created_at DESC`,
+            [callerGuildId]
+        );
+
+        const runs = res.rows.map(r => ({
+            id: r.id,
+            role_id: r.role_id,
+        }));
+
+        return reply.send({ runs });
+    });
+
+    /**
      * POST /runs
      * Create a new run record (status=open) and upsert guild/member.
      */
@@ -1325,6 +1366,87 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         return reply.send({ keyCounts });
+    });
+
+    /**
+     * POST /runs/:id/keys/bulk
+     * Bulk import key reactions (used when converting headcount to run).
+     * Body: { keys: Array<{ userId: string, keyType: string }> }
+     * Returns: { imported: number }
+     */
+    app.post('/runs/:id/keys/bulk', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            keys: z.array(z.object({
+                userId: zSnowflake,
+                keyType: z.string()
+            }))
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+
+        if (!p.success || !b.success) {
+            return Errors.validation(reply, 'Invalid request parameters');
+        }
+
+        const runId = Number(p.data.id);
+        const { keys } = b.data;
+
+        // Load run to check guild_id and authorization
+        const runRes = await query<{ guild_id: string; organizer_id: string; status: string }>(
+            `SELECT guild_id, organizer_id, status FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Only allow importing keys during "open" status (not after run has started)
+        if (run.status !== 'open') {
+            return reply.code(400).send({
+                error: {
+                    code: 'INVALID_STATUS',
+                    message: 'Keys can only be imported before the run starts'
+                }
+            });
+        }
+
+        // Ensure all user members exist
+        for (const key of keys) {
+            await ensureMemberExists(key.userId);
+        }
+
+        // Bulk insert key reactions (ignore duplicates)
+        let imported = 0;
+        for (const key of keys) {
+            try {
+                const insertRes = await query(
+                    `INSERT INTO key_reaction (run_id, user_id, key_type)
+                     VALUES ($1::bigint, $2::bigint, $3)
+                     ON CONFLICT (run_id, user_id, key_type) DO NOTHING
+                     RETURNING key_type`,
+                    [runId, key.userId, key.keyType]
+                );
+                
+                if (insertRes.rowCount && insertRes.rowCount > 0) {
+                    imported++;
+                }
+            } catch (err) {
+                logger.error({ runId, userId: key.userId, keyType: key.keyType, err }, 
+                    'Failed to import key reaction');
+                // Continue with other keys
+            }
+        }
+
+        logger.info({ runId, imported, total: keys.length }, 
+            'Bulk imported key reactions from headcount');
+
+        return reply.send({ imported });
     });
 
     /**

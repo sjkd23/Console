@@ -5,7 +5,7 @@ import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole, hasRequiredRoleOrHigher, requireSecurity, canManageGuildRoles } from '../../lib/auth/authorization.js';
-import { ensureGuildExists, ensureMemberExists } from '../../lib/database/database-helpers.js';
+import { ensureGuildExists, ensureMemberExists, ensureRaiderExists } from '../../lib/database/database-helpers.js';
 import { 
     logQuotaEvent, 
     isRunAlreadyLogged, 
@@ -52,6 +52,8 @@ const LogKeyBody = z.object({
     actorRoles: z.array(zSnowflake).optional(),
     guildId: zSnowflake,
     userId: zSnowflake, // The user who popped the key
+    username: z.string().optional(), // Optional username for the user
+    userRoles: z.array(zSnowflake).optional(), // Optional roles for the user (to check verification status)
     dungeonKey: z.string(), // The dungeon the key is for
     amount: z.number().int().default(1), // Can be negative to remove key pops
 });
@@ -181,7 +183,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             return Errors.validation(reply, msg);
         }
 
-        const { actorId, actorRoles, guildId, userId, dungeonKey, amount } = parsed.data;
+        const { actorId, actorRoles, guildId, userId, username, userRoles, dungeonKey, amount } = parsed.data;
 
         // Authorization: actor must have organizer role or higher
         const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
@@ -198,6 +200,31 @@ export default async function quotaRoutes(app: FastifyInstance) {
         // Validate amount is not zero
         if (amount === 0) {
             return Errors.validation(reply, 'Amount cannot be zero');
+        }
+
+        // Ensure guild exists
+        try {
+            await ensureGuildExists(guildId);
+        } catch (err) {
+            console.error(`[Quota] Failed to ensure guild exists:`, err);
+            return Errors.internal(reply, 'Failed to process key pop logging');
+        }
+
+        // Ensure actor exists
+        try {
+            await ensureMemberExists(actorId);
+        } catch (err) {
+            console.error(`[Quota] Failed to ensure actor exists:`, err);
+            return Errors.internal(reply, 'Failed to process key pop logging');
+        }
+
+        // Ensure target user exists in member table AND raider table
+        // This will auto-verify them if they have the verified_raider role
+        try {
+            await ensureRaiderExists(guildId, userId, username || null, userRoles);
+        } catch (err) {
+            console.error(`[Quota] Failed to ensure raider exists:`, err);
+            return Errors.internal(reply, 'Failed to process key pop logging');
         }
 
         try {
