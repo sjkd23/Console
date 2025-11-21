@@ -952,94 +952,68 @@ export async function getUserQuotaStats(
     // Get per-dungeon breakdown showing completed, organized, and keys popped
     // For manual logs, parse the run count from subject_id
     const dungeonsRes = await query<{ dungeon_key: string; completed: string; organized: string; keys_popped: string }>(
-        `SELECT 
-            COALESCE(qe.dungeon_key, kp.dungeon_key) AS dungeon_key,
-            COALESCE(
-                SUM(
-                    CASE 
-                        WHEN qe.points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(qe.subject_id, ':', 4)::int)
-                        WHEN qe.points > 0 
-                        THEN 1
-                        ELSE 0
-                    END
-                ), 
-                0
-            )::text AS completed,
-            COALESCE(
-                SUM(
-                    CASE 
-                        WHEN qe.quota_points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(qe.subject_id, ':', 4)::int)
-                        WHEN qe.quota_points > 0 
-                        THEN 1
-                        ELSE 0
-                    END
-                ), 
-                0
-            )::text AS organized,
-            COALESCE(MAX(kp.count), 0)::text AS keys_popped
-         FROM quota_event qe
-         FULL OUTER JOIN (
+        `WITH all_dungeons AS (
+            -- Get all dungeons from key_pop
+            SELECT DISTINCT dungeon_key
+            FROM key_pop
+            WHERE guild_id = $1::bigint AND user_id = $2::bigint
+            UNION
+            -- Get all dungeons from quota_event
+            SELECT DISTINCT dungeon_key
+            FROM quota_event
+            WHERE guild_id = $1::bigint 
+              AND actor_user_id = $2::bigint 
+              AND action_type = 'run_completed'
+              AND dungeon_key IS NOT NULL
+         ),
+         key_pop_agg AS (
             SELECT dungeon_key, SUM(count) AS count
             FROM key_pop
             WHERE guild_id = $1::bigint AND user_id = $2::bigint
             GROUP BY dungeon_key
-         ) kp ON qe.dungeon_key = kp.dungeon_key
-         WHERE (qe.guild_id = $1::bigint AND qe.actor_user_id = $2::bigint AND qe.action_type = 'run_completed')
-            OR kp.dungeon_key IS NOT NULL
-         GROUP BY COALESCE(qe.dungeon_key, kp.dungeon_key)
-         HAVING COALESCE(
-                    SUM(
-                        CASE 
-                            WHEN qe.points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                            THEN (split_part(qe.subject_id, ':', 4)::int)
-                            WHEN qe.points > 0 
-                            THEN 1
-                            ELSE 0
-                        END
-                    ), 
-                    0
-                ) > 0 
-             OR COALESCE(
-                    SUM(
-                        CASE 
-                            WHEN qe.quota_points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                            THEN (split_part(qe.subject_id, ':', 4)::int)
-                            WHEN qe.quota_points > 0 
-                            THEN 1
-                            ELSE 0
-                        END
-                    ), 
-                    0
-                ) > 0
-             OR COALESCE(MAX(kp.count), 0) > 0
+         ),
+         quota_event_agg AS (
+            SELECT 
+                dungeon_key,
+                SUM(
+                    CASE 
+                        WHEN points > 0 AND subject_id LIKE 'manual_log_run:%' 
+                        THEN (split_part(subject_id, ':', 4)::int)
+                        WHEN points > 0 
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS completed,
+                SUM(
+                    CASE 
+                        WHEN quota_points > 0 AND subject_id LIKE 'manual_log_run:%' 
+                        THEN (split_part(subject_id, ':', 4)::int)
+                        WHEN quota_points > 0 
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS organized
+            FROM quota_event
+            WHERE guild_id = $1::bigint 
+              AND actor_user_id = $2::bigint 
+              AND action_type = 'run_completed'
+            GROUP BY dungeon_key
+         )
+         SELECT 
+            ad.dungeon_key,
+            COALESCE(qea.completed, 0)::text AS completed,
+            COALESCE(qea.organized, 0)::text AS organized,
+            COALESCE(kpa.count, 0)::text AS keys_popped
+         FROM all_dungeons ad
+         LEFT JOIN quota_event_agg qea ON ad.dungeon_key = qea.dungeon_key
+         LEFT JOIN key_pop_agg kpa ON ad.dungeon_key = kpa.dungeon_key
+         WHERE COALESCE(qea.completed, 0) > 0 
+            OR COALESCE(qea.organized, 0) > 0
+            OR COALESCE(kpa.count, 0) > 0
          ORDER BY (
-            COALESCE(
-                SUM(
-                    CASE 
-                        WHEN qe.points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(qe.subject_id, ':', 4)::int)
-                        WHEN qe.points > 0 
-                        THEN 1
-                        ELSE 0
-                    END
-                ), 
-                0
-            ) + 
-            COALESCE(
-                SUM(
-                    CASE 
-                        WHEN qe.quota_points > 0 AND qe.subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(qe.subject_id, ':', 4)::int)
-                        WHEN qe.quota_points > 0 
-                        THEN 1
-                        ELSE 0
-                    END
-                ), 
-                0
-            ) + 
-            COALESCE(MAX(kp.count), 0)
+            COALESCE(qea.completed, 0) + 
+            COALESCE(qea.organized, 0) + 
+            COALESCE(kpa.count, 0)
          ) DESC`,
         [guildId, userId]
     );

@@ -56,8 +56,8 @@ function createLeaderboardButtons(
             .setDisabled(disabled || currentPage === totalPages - 1 || totalPages === 0)
     );
 
-    // Add stop button
-    navigationRow.addComponents(
+    // Stop button in separate row (Discord limits 5 buttons per row)
+    const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
             .setCustomId('lb_stop')
             .setLabel('Stop')
@@ -65,7 +65,7 @@ function createLeaderboardButtons(
             .setDisabled(disabled)
     );
 
-    return [navigationRow];
+    return [navigationRow, controlRow];
 }
 
 /**
