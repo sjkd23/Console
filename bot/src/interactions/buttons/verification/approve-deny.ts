@@ -388,7 +388,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         // Ask for denial reason
         await interaction.editReply(
             '📝 **Provide Denial Reason**\n\n' +
-            'Please type a message explaining why this verification was denied.\n' +
+            'Please type a message in **this channel** explaining why this verification was denied.\n' +
             'The user will receive this message.\n\n' +
             '⏱️ You have 5 minutes to respond.'
         );
@@ -396,8 +396,9 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         // Collect reason from staff member
         const channel = interaction.channel;
         if (!channel || !channel.isTextBased()) {
+            console.error('[VerificationDeny] Channel is not text-based or null');
             await interaction.followUp({
-                content: '❌ Could not set up message collector.',
+                content: '❌ Could not set up message collector - invalid channel type.',
                 ephemeral: true,
             });
             return;
@@ -405,6 +406,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
 
         // Type guard: ensure channel supports message collection
         if (!('createMessageCollector' in channel)) {
+            console.error('[VerificationDeny] Channel does not support createMessageCollector');
             await interaction.followUp({
                 content: '❌ This channel type does not support message collection.',
                 ephemeral: true,
@@ -412,13 +414,21 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
             return;
         }
 
+        console.log(`[VerificationDeny] Creating message collector for user ${interaction.user.id} in channel ${channel.id}`);
+
         const collector = channel.createMessageCollector({
-            filter: (m: Message) => m.author.id === interaction.user.id,
+            filter: (m: Message) => {
+                console.log(`[VerificationDeny] Message received from ${m.author.id}, expecting ${interaction.user.id}, match: ${m.author.id === interaction.user.id}`);
+                return m.author.id === interaction.user.id && !m.author.bot;
+            },
             time: DENIAL_REASON_TIMEOUT,
             max: 1,
         });
 
+        console.log('[VerificationDeny] Message collector created successfully');
+
         collector.on('collect', async (message: Message) => {
+            console.log(`[VerificationDeny] Collected message from ${message.author.tag}: "${message.content}"`);
             const reason = message.content.trim();
 
             // Update session with denial
@@ -493,6 +503,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         });
 
         collector.on('end', async (collected: ReadonlyCollection<string, Message>, reason: string) => {
+            console.log(`[VerificationDeny] Collector ended. Reason: ${reason}, Collected: ${collected.size}`);
             if (reason === 'time' && collected.size === 0) {
                 // No reason provided within timeout
                 await updateSession(guildId, userId, {

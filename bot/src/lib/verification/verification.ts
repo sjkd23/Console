@@ -470,15 +470,15 @@ export function createRealmEyeInstructionsEmbed(
 /**
  * Create buttons for RealmEye verification step
  */
-export function createRealmEyeButtons(): ActionRowBuilder<ButtonBuilder> {
+export function createRealmEyeButtons(guildId: string): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-            .setCustomId('verification:done')
+            .setCustomId(`verification:done:${guildId}`)
             .setLabel('Done')
             .setEmoji('✅')
             .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-            .setCustomId('verification:cancel')
+            .setCustomId(`verification:cancel:${guildId}`)
             .setLabel('Cancel')
             .setEmoji('❌')
             .setStyle(ButtonStyle.Danger)
@@ -488,20 +488,20 @@ export function createRealmEyeButtons(): ActionRowBuilder<ButtonBuilder> {
 /**
  * Create verification method selection buttons
  */
-export function createVerificationMethodButtons(): ActionRowBuilder<ButtonBuilder> {
+export function createVerificationMethodButtons(guildId: string): ActionRowBuilder<ButtonBuilder> {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-            .setCustomId('verification:realmeye')
+            .setCustomId(`verification:realmeye:${guildId}`)
             .setLabel('RealmEye')
             .setEmoji('🔄')
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-            .setCustomId('verification:manual_screenshot')
+            .setCustomId(`verification:manual_screenshot:${guildId}`)
             .setLabel('Manual Screenshot')
             .setEmoji('📷')
             .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-            .setCustomId('verification:cancel')
+            .setCustomId(`verification:cancel:${guildId}`)
             .setLabel('Cancel')
             .setEmoji('❌')
             .setStyle(ButtonStyle.Danger)
@@ -614,7 +614,7 @@ export function createSuccessEmbed(
 
 /**
  * Log a verification event to the veri_log channel in a dedicated thread
- * Creates a thread for the user if it doesn't exist yet
+ * Creates a NEW thread for each verification session (identified by session start)
  */
 export async function logVerificationEvent(
     guild: Guild,
@@ -623,6 +623,7 @@ export async function logVerificationEvent(
     options?: {
         embed?: EmbedBuilder;
         error?: boolean;
+        sessionThreadId?: string; // Store thread ID in session to reuse for same attempt
     }
 ): Promise<void> {
     try {
@@ -641,47 +642,82 @@ export async function logVerificationEvent(
 
         // Get user info for thread name
         const user = await guild.client.users.fetch(userId);
-        const threadName = `Verification - ${user.tag}`;
-
-        // Try to find existing thread for this user
+        
+        const isSessionStart = message.toLowerCase().includes('verification started');
+        
         let thread;
-        if ('threads' in veriLogChannel) {
-            const activeThreads = await veriLogChannel.threads.fetchActive();
-            thread = activeThreads.threads.find(t => t.name === threadName);
 
-            // If not in active, check archived
-            if (!thread) {
-                const archivedThreads = await veriLogChannel.threads.fetchArchived();
-                thread = archivedThreads.threads.find(t => t.name === threadName);
-                
-                // Unarchive if found
-                if (thread && thread.archived) {
-                    await thread.setArchived(false);
+        if (isSessionStart) {
+            // NEW SESSION - Create a brand new thread with timestamp
+            const timestamp = Math.floor(Date.now() / 1000);
+            const threadName = `Verification - ${user.tag} - <t:${timestamp}:t>`;
+            
+            console.log(`[VerificationLog] Creating NEW thread for session: "${threadName}"`);
+
+            if ('threads' in veriLogChannel) {
+                thread = await veriLogChannel.threads.create({
+                    name: threadName,
+                    autoArchiveDuration: 60, // 1 hour
+                    reason: `Verification tracking for ${user.tag}`,
+                });
+
+                // Send initial session start message
+                const initialEmbed = new EmbedBuilder()
+                    .setTitle('🎮 Verification Session Started')
+                    .setDescription(
+                        `**User:** <@${userId}> (${user.tag})\n` +
+                        `**User ID:** ${userId}\n` +
+                        `**Started:** <t:${timestamp}:F>`
+                    )
+                    .setColor(0x00AE86)
+                    .setTimestamp();
+
+                await thread.send({ embeds: [initialEmbed] });
+            }
+        } else {
+            // EXISTING SESSION - Try to find the most recent thread for this user
+            const threadNamePrefix = `Verification - ${user.tag}`;
+            
+            console.log(`[VerificationLog] Looking for recent thread starting with: "${threadNamePrefix}"`);
+
+            if ('threads' in veriLogChannel) {
+                const activeThreads = await veriLogChannel.threads.fetchActive();
+                // Find most recent thread by sorting by creation time
+                const userThreads = activeThreads.threads.filter(t => t.name.startsWith(threadNamePrefix));
+                thread = userThreads.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0)).first();
+
+                console.log(`[VerificationLog] Found in active threads: ${!!thread}`);
+
+                // If not in active, check archived
+                if (!thread) {
+                    const archivedThreads = await veriLogChannel.threads.fetchArchived();
+                    const archivedUserThreads = archivedThreads.threads.filter(t => t.name.startsWith(threadNamePrefix));
+                    thread = archivedUserThreads.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0)).first();
+                    
+                    console.log(`[VerificationLog] Found in archived threads: ${!!thread}`);
+                    
+                    // Unarchive if found
+                    if (thread && thread.archived) {
+                        console.log(`[VerificationLog] Unarchiving thread`);
+                        await thread.setArchived(false);
+                    }
                 }
+            }
+
+            // If we still can't find a thread, create one (shouldn't happen in normal flow)
+            if (!thread && 'threads' in veriLogChannel) {
+                console.warn(`[VerificationLog] No existing thread found for ongoing session, creating new one`);
+                const timestamp = Math.floor(Date.now() / 1000);
+                const threadName = `Verification - ${user.tag} - <t:${timestamp}:t>`;
+                thread = await veriLogChannel.threads.create({
+                    name: threadName,
+                    autoArchiveDuration: 60,
+                    reason: `Verification tracking for ${user.tag}`,
+                });
             }
         }
 
-        // Create thread if it doesn't exist
-        if (!thread && 'threads' in veriLogChannel) {
-            thread = await veriLogChannel.threads.create({
-                name: threadName,
-                autoArchiveDuration: 60, // 1 hour
-                reason: `Verification tracking for ${user.tag}`,
-            });
-
-            // Send initial message
-            const initialEmbed = new EmbedBuilder()
-                .setTitle('🎮 Verification Session Started')
-                .setDescription(
-                    `**User:** <@${userId}> (${user.tag})\n` +
-                    `**User ID:** ${userId}\n` +
-                    `**Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
-                )
-                .setColor(0x00AE86)
-                .setTimestamp();
-
-            await thread.send({ embeds: [initialEmbed] });
-        }
+        console.log(`[VerificationLog] Using thread: ${thread?.name || 'none'}, ID: ${thread?.id || 'none'}`);
 
         // Send the log message to the thread
         if (thread) {

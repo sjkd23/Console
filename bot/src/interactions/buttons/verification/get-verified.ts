@@ -29,6 +29,7 @@ import {
     createVerificationTicketButtons,
     deleteSession,
     logVerificationEvent,
+    type VerificationSession,
 } from '../../../lib/verification/verification.js';
 import { getJSON, getGuildVerificationConfig, getGuildChannels } from '../../../lib/utilities/http.js';
 
@@ -122,7 +123,7 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
             .setColor(0x00AE86)
             .setFooter({ text: 'Choose your method' });
 
-        const buttons = createVerificationMethodButtons();
+        const buttons = createVerificationMethodButtons(interaction.guildId!);
         
         try {
             await dmChannel.send({ 
@@ -146,7 +147,7 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
         await logVerificationEvent(
             interaction.guild,
             interaction.user.id,
-            '**User clicked "Get Verified"** button and received DM with verification method options.'
+            '**Verification started** - User clicked "Get Verified" button and received DM with verification method options.'
         );
 
         // Don't start any collectors yet - wait for button click
@@ -241,7 +242,7 @@ async function collectIGN(
             guildName,
             config.realmeye_instructions_image
         );
-        const buttons = createRealmEyeButtons();
+        const buttons = createRealmEyeButtons(guildId);
 
         await dmChannel.send({
             embeds: [instructionsEmbed],
@@ -267,8 +268,22 @@ export async function handleVerificationDone(interaction: ButtonInteraction): Pr
     await interaction.deferReply();
 
     try {
-        // Get session by user ID (works in DMs where guildId is null)
-        const session = await getSessionByUserId(interaction.user.id);
+        // Extract guild ID from button custom ID (verification:done:GUILD_ID)
+        const parts = interaction.customId.split(':');
+        const guildId = parts[2];
+
+        if (!guildId) {
+            await interaction.editReply(
+                '❌ **Session Error**\n\n' +
+                'Invalid button data. Please restart verification from the server.'
+            );
+            return;
+        }
+
+        // Get session with guild ID
+        const session = await getJSON<VerificationSession>(
+            `/verification/session/${guildId}/${interaction.user.id}`
+        );
 
         if (!session) {
             await interaction.editReply(
@@ -293,9 +308,6 @@ export async function handleVerificationDone(interaction: ButtonInteraction): Pr
             );
             return;
         }
-
-        // Extract guildId from session
-        const guildId = session.guild_id;
 
         // Get guild for logging
         const guild = interaction.client.guilds.cache.get(guildId);
@@ -431,8 +443,24 @@ export async function handleVerificationCancel(interaction: ButtonInteraction): 
     await interaction.deferReply();
 
     try {
-        // Get session by user ID (works in DMs where guildId is null)
-        const session = await getSessionByUserId(interaction.user.id);
+        // Extract guild ID from button custom ID (verification:cancel:GUILD_ID)
+        const parts = interaction.customId.split(':');
+        const guildId = parts[2];
+
+        if (!guildId) {
+            await interaction.editReply({
+                content:
+                    '❌ **Session Error**\n\n' +
+                    'Invalid button data. Please restart verification from the server.',
+                components: [],
+            });
+            return;
+        }
+
+        // Get session with guild ID
+        const session = await getJSON<VerificationSession>(
+            `/verification/session/${guildId}/${interaction.user.id}`
+        );
 
         if (!session) {
             await interaction.editReply({
@@ -443,9 +471,6 @@ export async function handleVerificationCancel(interaction: ButtonInteraction): 
             });
             return;
         }
-
-        // Extract guildId from session
-        const guildId = session.guild_id;
 
         await updateSession(guildId, interaction.user.id, { status: 'cancelled' });
 
@@ -475,8 +500,22 @@ export async function handleRealmEyeVerification(interaction: ButtonInteraction)
     await interaction.deferReply();
 
     try {
-        // Get session by user ID (works in DMs)
-        const session = await getSessionByUserId(interaction.user.id);
+        // Extract guild ID from button custom ID (verification:realmeye:GUILD_ID)
+        const parts = interaction.customId.split(':');
+        const guildId = parts[2];
+
+        if (!guildId) {
+            await interaction.editReply(
+                '❌ **Session Error**\n\n' +
+                'Invalid button data. Please restart verification from the server.'
+            );
+            return;
+        }
+
+        // Get session with guild ID
+        const session = await getJSON<VerificationSession>(
+            `/verification/session/${guildId}/${interaction.user.id}`
+        );
 
         if (!session) {
             await interaction.editReply(
@@ -494,8 +533,6 @@ export async function handleRealmEyeVerification(interaction: ButtonInteraction)
             );
             return;
         }
-
-        const guildId = session.guild_id;
 
         // Get DM channel and guild
         const dmChannel = await interaction.user.createDM();
@@ -540,8 +577,22 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
     await interaction.deferReply();
 
     try {
-        // Get session by user ID (works in DMs)
-        const session = await getSessionByUserId(interaction.user.id);
+        // Extract guild ID from button custom ID (verification:manual_screenshot:GUILD_ID)
+        const parts = interaction.customId.split(':');
+        const guildId = parts[2];
+
+        if (!guildId) {
+            await interaction.editReply(
+                '❌ **Session Error**\n\n' +
+                'Invalid button data. Please restart verification from the server.'
+            );
+            return;
+        }
+
+        // Get session with guild ID
+        const session = await getJSON<VerificationSession>(
+            `/verification/session/${guildId}/${interaction.user.id}`
+        );
 
         if (!session) {
             await interaction.editReply(
@@ -560,8 +611,6 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
             );
             return;
         }
-
-        const guildId = session.guild_id;
 
         // Get DM channel
         const dmChannel = await interaction.user.createDM();
@@ -669,10 +718,19 @@ async function collectScreenshot(
 
         // Log screenshot submission
         if (guild) {
+            // Create embed with the screenshot image
+            const screenshotEmbed = new EmbedBuilder()
+                .setTitle('📷 Screenshot Submitted')
+                .setDescription('User submitted screenshot for manual verification')
+                .setImage(attachment.url)
+                .setColor(0xFFA500)
+                .setTimestamp();
+
             await logVerificationEvent(
                 guild,
                 userId,
-                `**Screenshot submitted** for manual verification. Creating ticket for Security+ review...`
+                `**Screenshot submitted** for manual verification. Creating ticket for Security+ review...`,
+                { embed: screenshotEmbed }
             );
         }
 

@@ -89,6 +89,7 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers, // Required for guildMemberUpdate event
+        GatewayIntentBits.GuildMessages, // Required for message collectors in guild channels
         GatewayIntentBits.GuildEmojisAndStickers, // Required for emoji cache
         GatewayIntentBits.DirectMessages, // Required for DM-based verification
         GatewayIntentBits.MessageContent, // Required to read message content in DMs
@@ -202,19 +203,24 @@ client.on('interactionCreate', async (interaction) => {
                 await safeHandleInteraction(interaction, () => handleRealmEyeVerification(interaction), { ephemeral: true });
                 return;
             }
-            if (interaction.customId === 'verification:done') {
+            if (interaction.customId === 'verification:done' || interaction.customId.startsWith('verification:done:')) {
                 if (!await applyButtonRateLimit(interaction, 'verification:submit')) return;
                 await safeHandleInteraction(interaction, () => handleVerificationDone(interaction), { ephemeral: true });
                 return;
             }
-            if (interaction.customId === 'verification:cancel') {
+            if (interaction.customId === 'verification:cancel' || interaction.customId.startsWith('verification:cancel:')) {
                 if (!await applyButtonRateLimit(interaction, 'verification:cancel')) return;
                 await safeHandleInteraction(interaction, () => handleVerificationCancel(interaction), { ephemeral: true });
                 return;
             }
-            if (interaction.customId === 'verification:manual_screenshot') {
+            if (interaction.customId === 'verification:manual_screenshot' || interaction.customId.startsWith('verification:manual_screenshot:')) {
                 if (!await applyButtonRateLimit(interaction, 'verification:method')) return;
                 await safeHandleInteraction(interaction, () => handleManualVerifyScreenshot(interaction), { ephemeral: true });
+                return;
+            }
+            if (interaction.customId === 'verification:realmeye' || interaction.customId.startsWith('verification:realmeye:')) {
+                if (!await applyButtonRateLimit(interaction, 'verification:method')) return;
+                await safeHandleInteraction(interaction, () => handleRealmEyeVerification(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('verification:approve:')) {
