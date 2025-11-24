@@ -202,6 +202,17 @@ export const leaderboard: SlashCommand = {
         )
         .addStringOption(option =>
             option
+                .setName('sort')
+                .setDescription('How to sort the results')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Highest to Lowest (Default)', value: 'desc' },
+                    { name: 'Lowest to Highest', value: 'asc' },
+                    { name: 'Alphabetically', value: 'alpha' }
+                )
+        )
+        .addStringOption(option =>
+            option
                 .setName('since')
                 .setDescription('Start date (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)')
                 .setRequired(false)
@@ -244,6 +255,7 @@ export const leaderboard: SlashCommand = {
         // Get options
         const category = interaction.options.getString('category', true) as 'runs_organized' | 'keys_popped' | 'dungeon_completions' | 'points' | 'quota_points';
         const dungeonKey = interaction.options.getString('dungeon', true);
+        const sortOrder = interaction.options.getString('sort') || 'desc';
         const since = interaction.options.getString('since');
         const until = interaction.options.getString('until');
 
@@ -277,7 +289,36 @@ export const leaderboard: SlashCommand = {
             // Fetch leaderboard from backend
             const result = await getLeaderboard(guild.id, category, dungeonKey, since || undefined, until || undefined);
 
-            if (result.leaderboard.length === 0) {
+            // Apply sorting
+            let sortedLeaderboard = [...result.leaderboard];
+            if (sortOrder === 'asc') {
+                // Lowest to highest
+                sortedLeaderboard.sort((a, b) => a.count - b.count);
+            } else if (sortOrder === 'alpha') {
+                // Alphabetically by display name (nickname or username)
+                // Fetch all members and create a map of user_id -> display name
+                const displayNameMap = new Map<string, string>();
+                
+                for (const entry of sortedLeaderboard) {
+                    try {
+                        const member = await interaction.guild?.members.fetch(entry.user_id);
+                        // Use displayName which returns nickname if set, otherwise username
+                        displayNameMap.set(entry.user_id, member?.displayName.toLowerCase() || entry.user_id);
+                    } catch (err) {
+                        // If member can't be fetched, use user_id as fallback
+                        displayNameMap.set(entry.user_id, entry.user_id);
+                    }
+                }
+                
+                sortedLeaderboard.sort((a, b) => {
+                    const nameA = displayNameMap.get(a.user_id) || a.user_id;
+                    const nameB = displayNameMap.get(b.user_id) || b.user_id;
+                    return nameA.localeCompare(nameB);
+                });
+            }
+            // 'desc' is the default from backend, so no need to sort
+
+            if (sortedLeaderboard.length === 0) {
                 const dungeonName = dungeonKey === 'all' ? 'any dungeon' : (dungeonByCode[dungeonKey]?.dungeonName || dungeonKey);
                 const categoryName = category === 'runs_organized' ? 'runs organized' 
                     : category === 'keys_popped' ? 'keys popped' 
@@ -307,7 +348,7 @@ export const leaderboard: SlashCommand = {
 
             // Create embeds for pagination (25 entries per page)
             const embeds: EmbedBuilder[] = [];
-            const totalEntries = result.leaderboard.length;
+            const totalEntries = sortedLeaderboard.length;
             const totalPages = Math.ceil(totalEntries / ENTRIES_PER_PAGE);
 
             const dungeonName = dungeonKey === 'all' ? 'All Dungeons' : (dungeonByCode[dungeonKey]?.dungeonName || dungeonKey);
@@ -333,10 +374,15 @@ export const leaderboard: SlashCommand = {
                 dateRangeText = `\n**Until:** ${until}`;
             }
 
+            // Build sort order text
+            const sortText = sortOrder === 'asc' ? 'Lowest to Highest' 
+                : sortOrder === 'alpha' ? 'Alphabetically' 
+                : 'Highest to Lowest';
+
             for (let page = 0; page < totalPages; page++) {
                 const start = page * ENTRIES_PER_PAGE;
                 const end = Math.min(start + ENTRIES_PER_PAGE, totalEntries);
-                const pageEntries = result.leaderboard.slice(start, end);
+                const pageEntries = sortedLeaderboard.slice(start, end);
 
                 // Build leaderboard text
                 const leaderboardLines = pageEntries.map((entry, index) => {
@@ -348,7 +394,7 @@ export const leaderboard: SlashCommand = {
                 const embed = new EmbedBuilder()
                     .setTitle(`${categoryEmoji} ${categoryName} Leaderboard`)
                     .setDescription(
-                        `**Dungeon:** ${dungeonName}${dateRangeText}\n\n${leaderboardLines.join('\n')}`
+                        `**Dungeon:** ${dungeonName}${dateRangeText}\n**Sort:** ${sortText}\n\n${leaderboardLines.join('\n')}`
                     )
                     .setColor(0x3498db)
                     .setFooter({ 
