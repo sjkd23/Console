@@ -600,17 +600,9 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
             config.manual_verify_instructions,
             config.manual_verify_instructions_image
         );
-        const cancelButton = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId('verification:cancel')
-                .setLabel('Cancel')
-                .setEmoji('❌')
-                .setStyle(ButtonStyle.Danger)
-        );
 
         await dmChannel.send({
             embeds: [embed],
-            components: [cancelButton],
         });
 
         // Start screenshot collection (no IGN needed)
