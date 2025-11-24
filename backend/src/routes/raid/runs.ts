@@ -819,6 +819,61 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * GET /runs/:id/raiders
+     * Get raider count and class distribution for a run.
+     * Returns the total number of joined raiders and their class counts.
+     */
+    app.get('/runs/:id/raiders', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const p = Params.safeParse(req.params);
+        if (!p.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+
+        // Load run to check guild_id
+        const runRes = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Get total join count
+        const joinRes = await query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
+             FROM reaction
+             WHERE run_id = $1::bigint AND state = 'join'`,
+            [runId]
+        );
+
+        // Get class counts (only for joined users with classes set)
+        const classRes = await query<{ class: string | null; count: string }>(
+            `SELECT class, COUNT(*)::text AS count
+             FROM reaction
+             WHERE run_id = $1::bigint AND state = 'join' AND class IS NOT NULL
+             GROUP BY class`,
+            [runId]
+        );
+
+        const classCounts: Record<string, number> = {};
+        for (const row of classRes.rows) {
+            if (row.class) {
+                classCounts[row.class] = Number(row.count);
+            }
+        }
+
+        return reply.send({
+            joinCount: Number(joinRes.rows[0].count),
+            classCounts
+        });
+    });
+
+    /**
      * GET /runs/expired
      * Get all runs that have exceeded their auto_end_minutes and should be auto-ended
      * Returns runs that are not 'ended' and have existed longer than auto_end_minutes

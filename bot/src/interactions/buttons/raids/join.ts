@@ -3,6 +3,8 @@ import { postJSON, getJSON } from '../../../lib/utilities/http.js';
 import { logRaidJoin } from '../../../lib/logging/raid-logger.js';
 import { assignRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { updateRunParticipation } from '../../../lib/utilities/run-embed-helpers.js';
+import { getAllOrganizerPanelsForRun } from '../../../lib/state/organizer-panel-tracker.js';
+import { showOrganizerPanel } from './organizer-panel.js';
 
 export async function handleJoin(btn: ButtonInteraction, runId: string) {
     // Defer the reply so we can send a follow-up message
@@ -95,6 +97,29 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
             );
         } catch (e) {
             console.error('Failed to log join to raid-log:', e);
+        }
+    }
+
+    // Auto-refresh any active organizer panels for this run
+    const activePanels = getAllOrganizerPanelsForRun(runId);
+    for (const { interaction } of activePanels) {
+        try {
+            // Fetch fresh run data for organizer panel
+            const runData = await getJSON<{
+                status: string;
+                dungeonLabel: string;
+                dungeonKey: string;
+                organizerId: string;
+                screenshotUrl?: string | null;
+                o3Stage?: string | null;
+            }>(`/runs/${runId}`, { guildId }).catch(() => null);
+            
+            if (runData) {
+                await showOrganizerPanel(interaction, parseInt(runId), guildId, runData);
+            }
+        } catch (err) {
+            // Silently fail - organizer panel might be closed or expired
+            console.log('Failed to auto-refresh organizer panel on join:', err);
         }
     }
 

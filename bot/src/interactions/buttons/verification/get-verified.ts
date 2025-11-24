@@ -721,8 +721,11 @@ async function collectScreenshot(
                 return;
             }
 
+            // Fetch user to get their Discord tag
+            const user = await guild.client.users.fetch(userId);
+            
             // Send ticket (no IGN yet, staff will provide it)
-            const ticketEmbed = createVerificationTicketEmbed(userId, attachment.url);
+            const ticketEmbed = createVerificationTicketEmbed(userId, attachment.url, user.tag);
             const ticketButtons = createVerificationTicketButtons(userId);
 
             const ticketMessage = await channel.send({

@@ -545,12 +545,14 @@ export function createManualVerificationEmbed(
  */
 export function createVerificationTicketEmbed(
     userId: string,
-    screenshotUrl: string
+    screenshotUrl: string,
+    userTag?: string
 ): EmbedBuilder {
     return new EmbedBuilder()
         .setTitle('🎫 Manual Verification Request')
         .setDescription(
             `**User:** <@${userId}>\n` +
+            `**Discord Tag:** ${userTag || 'Unknown'}\n` +
             `**User ID:** ${userId}\n\n` +
             '**Screenshot submitted for review:**\n' +
             '⚠️ **Staff must provide the IGN when approving**'

@@ -57,6 +57,7 @@ export async function showOrganizerPanel(
         joinCount = countResponse.joinCount || 0;
     } catch (e) {
         // If endpoint fails, default to 0
+        console.error('Failed to fetch raider count:', e);
         joinCount = 0;
     }
 
