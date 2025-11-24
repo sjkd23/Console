@@ -1,8 +1,3 @@
-/**
- * Handles organizer panel interactions for headcount panels.
- * Shows organizer-only controls for managing headcounts and converting to runs.
- */
-
 import {
     ButtonInteraction,
     ActionRowBuilder,
@@ -12,7 +7,9 @@ import {
     MessageFlags,
     StringSelectMenuBuilder,
     ComponentType,
-    Message
+    Message,
+    ChatInputCommandInteraction,
+    ModalSubmitInteraction
 } from 'discord.js';
 import { getParticipants, getOrganizerId } from '../../../lib/state/headcount-state.js';
 import { getKeyOffers } from './headcount-key.js';
@@ -20,6 +17,7 @@ import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
+import { registerHeadcountPanel } from '../../../lib/state/headcount-panel-tracker.js';
 
 /**
  * Format key type for user-friendly display
@@ -52,11 +50,12 @@ function getEmojiDisplayForKeyType(keyType: string): string {
 }
 
 /**
- * Internal function to build and show the headcount organizer panel.
- * Used by both initial access and confirmed access.
+ * Build and show the headcount organizer panel.
+ * Used by button handler and auto-refresh system.
+ * EXPORTED for use by headcount-key.ts to refresh panels when keys are reacted.
  */
-async function showHeadcountPanel(
-    btn: ButtonInteraction, 
+export async function showHeadcountPanel(
+    interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction,
     publicMsg: Message,
     embed: EmbedBuilder,
     organizerId: string,
@@ -73,11 +72,13 @@ async function showHeadcountPanel(
         .setTimestamp(new Date());
 
     // Build description with participant count and key offers
-    let description = `**Participants:** ${participants.size}\n\n**Key Offers by Dungeon:**\n`;
+    let description = `**Participants:** ${participants.size}\n\n**Keys:**\n`;
 
     if (dungeonCodes.length === 0) {
         description += '_No dungeons found_';
     } else {
+        let hasAnyKeys = false;
+        
         for (const dungeonCode of dungeonCodes) {
             const dungeon = dungeonByCode[dungeonCode];
             const dungeonName = dungeon?.dungeonName || dungeonCode;
@@ -88,29 +89,31 @@ async function showHeadcountPanel(
             // Get all key types for this dungeon
             const dungeonKeyMap = keyOffers.get(dungeonCode);
             
-            if (!dungeonKeyMap || dungeonKeyMap.size === 0) {
-                // No keys for this dungeon
-                const keyEmoji = getDungeonKeyEmoji(dungeonCode);
-                description += `\n${keyEmoji} **${dungeonName}**: _No keys_`;
-            } else {
+            if (dungeonKeyMap && dungeonKeyMap.size > 0) {
                 // Show each key type separately
                 for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
-                    const keyEmoji = getEmojiDisplayForKeyType(mapKey);
-                    const keyTypeName = formatKeyTypeForDisplay(mapKey);
                     const count = userIds.size;
                     
-                    // For dungeons with multiple key types (like Oryx 3), show just "Key Type"
-                    // For single-key dungeons, show "Dungeon"
-                    const label = dungeonHasMultipleKeyTypes ? keyTypeName : dungeonName;
-                    
+                    // Only show keys that have a count > 0
                     if (count > 0) {
+                        hasAnyKeys = true;
+                        const keyEmoji = getEmojiDisplayForKeyType(mapKey);
+                        const keyTypeName = formatKeyTypeForDisplay(mapKey);
+                        
+                        // For dungeons with multiple key types (like Oryx 3), show just "Key Type"
+                        // For single-key dungeons, show "Dungeon"
+                        const label = dungeonHasMultipleKeyTypes ? keyTypeName : dungeonName;
+                        
                         const mentions = Array.from(userIds).map(id => `<@${id}>`).join(', ');
                         description += `\n${keyEmoji} **${label}** (${count}): ${mentions}`;
-                    } else {
-                        description += `\n${keyEmoji} **${label}**: _No keys_`;
                     }
                 }
             }
+        }
+        
+        // If no keys at all, show a message
+        if (!hasAnyKeys) {
+            description += '_No keys yet_';
         }
     }
 
@@ -131,17 +134,25 @@ async function showHeadcountPanel(
             .setDisabled(dungeonCodes.length === 0)
     );
 
-    if (btn.deferred || btn.replied) {
-        await btn.editReply({
+    // Update the panel - works for both button interactions and followUp messages
+    if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({
             embeds: [panelEmbed],
             components: [row1]
         });
     } else {
-        await btn.reply({
+        await interaction.reply({
             embeds: [panelEmbed],
             components: [row1],
             flags: MessageFlags.Ephemeral
         });
+    }
+    
+    // Register this panel for auto-refresh when keys are reacted
+    if (interaction instanceof ButtonInteraction) {
+        registerHeadcountPanel(publicMsg.id, interaction);
+    } else if (interaction instanceof ChatInputCommandInteraction) {
+        registerHeadcountPanel(publicMsg.id, interaction);
     }
 }
 

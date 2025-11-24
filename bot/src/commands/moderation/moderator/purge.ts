@@ -10,13 +10,14 @@ import type { SlashCommand } from '../../_types.js';
 
 /**
  * /purge - Delete messages in the current channel
- * Moderator+ command
+ * Security+ command
+ * Rate limited: 3 uses per minute, 10 uses per hour
  */
 export const purge: SlashCommand = {
-    requiredRole: 'moderator',
+    requiredRole: 'security',
     data: new SlashCommandBuilder()
         .setName('purge')
-        .setDescription('Delete messages in this channel (Moderator+)')
+        .setDescription('Delete messages in this channel (Security+)')
         .addIntegerOption(option =>
             option
                 .setName('amount')

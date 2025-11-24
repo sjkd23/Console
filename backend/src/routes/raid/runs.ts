@@ -1274,10 +1274,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         let added = false;
 
         try {
-            // Step 1: Try to delete the existing key reaction
+            // Step 1: Try to delete the existing key reaction (only from 'run' source)
+            // This prevents deleting headcount keys when toggling run keys
             const deleteRes = await query(
                 `DELETE FROM key_reaction
-                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3
+                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3 AND source = 'run'
                  RETURNING key_type`,
                 [runId, userId, keyType]
             );
@@ -1286,12 +1287,12 @@ export default async function runsRoutes(app: FastifyInstance) {
                 // Successfully deleted - user had the key, now removed
                 added = false;
             } else {
-                // Nothing deleted - user didn't have the key, add it now
+                // Nothing deleted - user didn't have the key, add it now with 'run' source
                 // Use INSERT with ON CONFLICT DO NOTHING for extra safety (handles concurrent inserts)
                 await query(
-                    `INSERT INTO key_reaction (run_id, user_id, key_type)
-                     VALUES ($1::bigint, $2::bigint, $3)
-                     ON CONFLICT (run_id, user_id, key_type) DO NOTHING`,
+                    `INSERT INTO key_reaction (run_id, user_id, key_type, source)
+                     VALUES ($1::bigint, $2::bigint, $3, 'run')
+                     ON CONFLICT (run_id, user_id, key_type, source) DO NOTHING`,
                     [runId, userId, keyType]
                 );
                 added = true;
@@ -1309,11 +1310,11 @@ export default async function runsRoutes(app: FastifyInstance) {
             }
         }
 
-        // Get updated key counts
+        // Get updated key counts (only from 'run' source for public display)
         const keyRes = await query<{ key_type: string; count: string }>(
             `SELECT key_type, COUNT(*)::text AS count
              FROM key_reaction
-             WHERE run_id = $1::bigint
+             WHERE run_id = $1::bigint AND source = 'run'
              GROUP BY key_type`,
             [runId]
         );
@@ -1351,11 +1352,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        // Get key counts
+        // Get key counts (only from 'run' source for public display)
         const keyRes = await query<{ key_type: string; count: string }>(
             `SELECT key_type, COUNT(*)::text AS count
              FROM key_reaction
-             WHERE run_id = $1::bigint
+             WHERE run_id = $1::bigint AND source = 'run'
              GROUP BY key_type`,
             [runId]
         );
@@ -1371,7 +1372,7 @@ export default async function runsRoutes(app: FastifyInstance) {
     /**
      * POST /runs/:id/keys/bulk
      * Bulk import key reactions (used when converting headcount to run).
-     * Body: { keys: Array<{ userId: string, keyType: string }> }
+     * Body: { keys: Array<{ userId: string, keyType: string }>, source?: 'headcount' | 'run' }
      * Returns: { imported: number }
      */
     app.post('/runs/:id/keys/bulk', async (req, reply) => {
@@ -1380,7 +1381,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             keys: z.array(z.object({
                 userId: zSnowflake,
                 keyType: z.string()
-            }))
+            })),
+            source: z.enum(['headcount', 'run']).optional().default('headcount')
         });
 
         const p = Params.safeParse(req.params);
@@ -1391,7 +1393,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         const runId = Number(p.data.id);
-        const { keys } = b.data;
+        const { keys, source } = b.data;
 
         // Load run to check guild_id and authorization
         const runRes = await query<{ guild_id: string; organizer_id: string; status: string }>(
@@ -1426,24 +1428,24 @@ export default async function runsRoutes(app: FastifyInstance) {
         for (const key of keys) {
             try {
                 const insertRes = await query(
-                    `INSERT INTO key_reaction (run_id, user_id, key_type)
-                     VALUES ($1::bigint, $2::bigint, $3)
-                     ON CONFLICT (run_id, user_id, key_type) DO NOTHING
+                    `INSERT INTO key_reaction (run_id, user_id, key_type, source)
+                     VALUES ($1::bigint, $2::bigint, $3, $4)
+                     ON CONFLICT (run_id, user_id, key_type, source) DO NOTHING
                      RETURNING key_type`,
-                    [runId, key.userId, key.keyType]
+                    [runId, key.userId, key.keyType, source]
                 );
                 
                 if (insertRes.rowCount && insertRes.rowCount > 0) {
                     imported++;
                 }
             } catch (err) {
-                logger.error({ runId, userId: key.userId, keyType: key.keyType, err }, 
+                logger.error({ runId, userId: key.userId, keyType: key.keyType, source, err }, 
                     'Failed to import key reaction');
                 // Continue with other keys
             }
         }
 
-        logger.info({ runId, imported, total: keys.length }, 
+        logger.info({ runId, imported, total: keys.length, source }, 
             'Bulk imported key reactions from headcount');
 
         return reply.send({ imported });
@@ -1451,8 +1453,12 @@ export default async function runsRoutes(app: FastifyInstance) {
 
     /**
      * GET /runs/:id/key-reaction-users
-     * Get key reaction users grouped by key type for a run.
-     * Returns { keyUsers: Record<string, string[]> } where each key type maps to an array of user IDs.
+     * Get key reaction users grouped by key type for a run, separated by source.
+     * Returns { 
+     *   headcountKeys: Record<string, string[]>,
+     *   raidKeys: Record<string, string[]>,
+     *   keyUsers: Record<string, string[]> // Legacy combined view
+     * }
      */
     app.get('/runs/:id/key-reaction-users', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -1474,25 +1480,92 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        // Get all key reactions with user IDs
-        const keyRes = await query<{ key_type: string; user_id: string }>(
-            `SELECT key_type, user_id
+        // Get all key reactions with user IDs and source
+        const keyRes = await query<{ key_type: string; user_id: string; source: string }>(
+            `SELECT key_type, user_id, source
              FROM key_reaction
              WHERE run_id = $1::bigint
-             ORDER BY key_type, user_id`,
+             ORDER BY source, key_type, user_id`,
             [runId]
         );
 
-        // Group users by key type
-        const keyUsers: Record<string, string[]> = {};
+        // Group users by key type and source
+        const headcountKeys: Record<string, string[]> = {};
+        const raidKeys: Record<string, string[]> = {};
+        const keyUsers: Record<string, string[]> = {}; // Legacy combined view
+        
         for (const row of keyRes.rows) {
+            // Add to legacy combined view
             if (!keyUsers[row.key_type]) {
                 keyUsers[row.key_type] = [];
             }
             keyUsers[row.key_type].push(row.user_id);
+            
+            // Add to source-specific views
+            if (row.source === 'headcount') {
+                if (!headcountKeys[row.key_type]) {
+                    headcountKeys[row.key_type] = [];
+                }
+                headcountKeys[row.key_type].push(row.user_id);
+            } else {
+                if (!raidKeys[row.key_type]) {
+                    raidKeys[row.key_type] = [];
+                }
+                raidKeys[row.key_type].push(row.user_id);
+            }
         }
 
-        return reply.send({ keyUsers });
+        return reply.send({ headcountKeys, raidKeys, keyUsers });
+    });
+
+    /**
+     * GET /runs/:id/key-reactors
+     * Get list of all users who have reacted with keys for a run (from 'run' source only).
+     * Used for sending DM notifications when party/location are set.
+     * Returns { keyReactors: Array<{ user_id: string, key_type: string }>, organizerIgn: string | null }
+     */
+    app.get('/runs/:id/key-reactors', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const p = Params.safeParse(req.params);
+        if (!p.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+
+        // Load run to check guild_id and get organizer info
+        const runRes = await query<{ guild_id: string; organizer_id: string }>(
+            `SELECT guild_id, organizer_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (runRes.rowCount === 0) {
+            return Errors.runNotFound(reply, runId);
+        }
+        const run = runRes.rows[0];
+
+        // Enforce guild scoping
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+
+        // Get organizer IGN from raider table
+        const organizerRes = await query<{ ign: string | null }>(
+            `SELECT ign FROM raider WHERE guild_id = $1::bigint AND user_id = $2::bigint`,
+            [run.guild_id, run.organizer_id]
+        );
+        const organizerIgn = (organizerRes.rowCount && organizerRes.rowCount > 0) ? organizerRes.rows[0].ign : null;
+
+        // Get all key reactions from 'run' source (not headcount keys)
+        const keyRes = await query<{ user_id: string; key_type: string }>(
+            `SELECT user_id, key_type
+             FROM key_reaction
+             WHERE run_id = $1::bigint AND source = 'run'
+             ORDER BY user_id, key_type`,
+            [runId]
+        );
+
+        const keyReactors = keyRes.rows.map(row => ({
+            user_id: row.user_id,
+            key_type: row.key_type
+        }));
+
+        return reply.send({ keyReactors, organizerIgn });
     });
 }
 

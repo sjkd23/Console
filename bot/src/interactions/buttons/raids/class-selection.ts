@@ -132,7 +132,7 @@ export async function handleClassSelection(btn: ButtonInteraction, runId: string
 
         // Confirm to user
         await selectInteraction.editReply({
-            content: `✅ Class set to **${selectedClass}**`,
+            content: `✅ **${selectedClass}** selected`,
             components: []
         });
     } catch (error) {

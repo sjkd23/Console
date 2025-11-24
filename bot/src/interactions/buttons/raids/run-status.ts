@@ -11,6 +11,7 @@ import { createLogger } from '../../../lib/logging/logger.js';
 import { clearRunReactions } from '../../../lib/utilities/run-reactions.js';
 import { updateQuotaPanelsForUser } from '../../../lib/ui/quota-panel.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
+import { clearOrganizerPanelsForRun } from '../../../lib/state/organizer-panel-tracker.js';
 
 const logger = createLogger('RunStatus');
 
@@ -302,10 +303,6 @@ async function handleStatusInternal(
                 .setCustomId(`run:end:${runId}`)
                 .setLabel('End Run')
                 .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setCustomId(`run:ping:${runId}`)
-                .setLabel('Ping Raiders')
-                .setStyle(ButtonStyle.Primary),
             actionButton
         );
 
@@ -386,6 +383,9 @@ async function handleStatusInternal(
             });
             // Don't fail the end operation if reaction clearing fails
         }
+
+        // Clear all active organizer panels for this run
+        clearOrganizerPanelsForRun(runId);
 
         // Log status change to raid-log
         try {
@@ -557,7 +557,7 @@ function buildLiveEmbed(
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
 
-    // Merge Headcount Keys and Raid Keys into a single Keys field when going live
+    // Merge separate key fields into a single Keys field when going live
     const headcountKeysIdx = fields.findIndex(f => (f.name ?? '').includes('Headcount Keys'));
     const raidKeysIdx = fields.findIndex(f => (f.name ?? '').includes('Raid Keys'));
     const keysIdx = fields.findIndex(f => (f.name ?? '') === 'Keys');

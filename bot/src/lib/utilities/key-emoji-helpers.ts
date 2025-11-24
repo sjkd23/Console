@@ -97,6 +97,9 @@ export function getEmojiDisplayFromCache(keyType: string, btn: ButtonInteraction
  * This is the SINGLE SOURCE OF TRUTH for which key emoji to display.
  * Uses the same logic as the working key buttons.
  * 
+ * NOTE: For dungeons with multiple key types (like Oryx 3), this returns the FIRST key's emoji.
+ * Use getEmojiDisplayForKeyType(keyType) for key-specific emojis.
+ * 
  * @param dungeonKey The dungeon code name (e.g., "FUNGAL_CAVERN", "NEST")
  * @returns The emoji string ready for display, or '🗝️' fallback if not found
  */

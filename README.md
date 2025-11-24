@@ -53,7 +53,7 @@ It’s designed for large raiding guilds that need:
 
 ### Run & Headcount Management
 
-- Interactive raid panels with **join buttons** and **class selection**
+- Interactive raid panels with **join buttons** for raiders
 - Headcount panels with **up to 10 dungeons** per headcount
 - Key pop windows with **30-second countdown**
 - Automatic run ending after a set duration (currently 2 hours)
@@ -283,8 +283,7 @@ Create a test run:
 You should see:
 
 - An embed in your raid channel  
-- Buttons for Join / Organizer Panel  
-- Class selection working when you join  
+- Buttons for Join / Leave / Organizer Panel  
 
 If that works, basic setup is good.
 
@@ -304,7 +303,7 @@ Flow:
 
 1. Bot creates a run in the backend  
 2. Posts an embed with buttons  
-3. Raiders click **Join** and pick their class  
+3. Raiders click **Join** to participate  
 4. Organizer clicks **Organizer Panel** for:
    - Start  
    - End  

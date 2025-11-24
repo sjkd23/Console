@@ -9,6 +9,9 @@ import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyReaction } from '../../../lib/logging/raid-logger.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
+import { getActiveHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
+import { showHeadcountPanel } from './headcount-organizer-panel.js';
+import { getOrganizerId, getParticipants } from '../../../lib/state/headcount-state.js';
 
 /**
  * In-memory storage for key offers per headcount panel.
@@ -210,10 +213,10 @@ export async function handleHeadcountKey(
 
     if (keyTypeSet.has(userId)) {
         keyTypeSet.delete(userId);
-        message = `✅ **${keyTypeDisplay} offer removed for ${dungeonName}**`;
+        message = `✅ **${keyTypeDisplay} removed for ${dungeonName}.**`;
     } else {
         keyTypeSet.add(userId);
-        message = `✅ **You have offered a ${keyTypeDisplay} for ${dungeonName}!**\n\nThe organizer can see your key offer.`;
+        message = `✅ **${keyTypeDisplay} added for ${dungeonName}!** Click again to remove.\n\n⚠️ **Important:** Please make sure to re-react with your key/rune when the raid starts to receive the party and location information.`;
     }
 
     // Update embed description with new state
@@ -259,4 +262,35 @@ export async function handleHeadcountKey(
     }
 
     await btn.editReply(message);
+    
+    // Auto-refresh all active headcount organizer panels for this message
+    const activePanels = getActiveHeadcountPanels(msg.id);
+    if (activePanels.length > 0) {
+        // Extract dungeon codes from the button components (same way as handleHeadcountOrganizerPanel)
+        const dungeonCodes: string[] = [];
+        for (const row of msg.components) {
+            if ('components' in row) {
+                for (const component of row.components) {
+                    if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
+                        const parts = component.customId.split(':');
+                        const dungeonCode = parts[3];
+                        if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
+                            dungeonCodes.push(dungeonCode);
+                        }
+                    }
+                }
+            }
+        }
+        
+        const organizerId = getOrganizerId(embed);
+        if (organizerId) {
+            for (const panelInteraction of activePanels) {
+                try {
+                    await showHeadcountPanel(panelInteraction, msg, embed, organizerId, dungeonCodes);
+                } catch (e) {
+                    console.error('Failed to refresh headcount organizer panel:', e);
+                }
+            }
+        }
+    }
 }

@@ -51,7 +51,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
 
     if (existingReaction.state !== 'join') {
         await btn.editReply({
-            content: 'You aren\'t in this raid.'
+            content: '✅ **You aren\'t in this raid.**'
         });
         return;
     }
@@ -109,6 +109,6 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
 
     // Send ephemeral confirmation message
     await btn.editReply({
-        content: 'Left the raid. Role removed.'
+        content: '✅ **Left the raid.**'
     });
 }

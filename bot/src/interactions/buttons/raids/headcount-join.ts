@@ -30,23 +30,23 @@ export async function handleHeadcountJoin(btn: ButtonInteraction, panelTimestamp
 
     if (participants.has(userId)) {
         participants.delete(userId);
-        message = '✅ **You have left the headcount.**';
+        message = '✅ **You left the headcount.**';
     } else {
         participants.add(userId);
-        message = '✅ **You have joined the headcount!**\n\nThe organizer will use this to plan upcoming runs.';
+        message = '✅ **You joined the headcount!** Click Join again to leave.';
     }
 
     // Update embed - this now only cleans up any legacy "Joined:" sections
     let updatedEmbed = updateParticipantsList(embed, participants);
     
-    // Update the participant count - check for both "Participants" and "Interested" field names
-    const participantsFieldIdx = updatedEmbed.data.fields?.findIndex(f => 
-        f.name === 'Participants' || f.name === 'Interested'
-    ) ?? -1;
-    
-    if (participantsFieldIdx >= 0 && updatedEmbed.data.fields) {
-        updatedEmbed.data.fields[participantsFieldIdx].value = String(participants.size);
-    }
+    // Participant count field hidden from public panel (only shown in organizer panel)
+    // const participantsFieldIdx = updatedEmbed.data.fields?.findIndex(f => 
+    //     f.name === 'Participants' || f.name === 'Interested'
+    // ) ?? -1;
+    // 
+    // if (participantsFieldIdx >= 0 && updatedEmbed.data.fields) {
+    //     updatedEmbed.data.fields[participantsFieldIdx].value = String(participants.size);
+    // }
 
     await msg.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
 

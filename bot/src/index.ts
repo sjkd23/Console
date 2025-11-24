@@ -18,7 +18,6 @@ import { handleOrganizerPanel, handleOrganizerPanelConfirm, handleOrganizerPanel
 import { handleJoin } from './interactions/buttons/raids/join.js';
 import { handleLeave } from './interactions/buttons/raids/leave.js';
 import { handleStatus } from './interactions/buttons/raids/run-status.js';
-import { handleClassSelection } from './interactions/buttons/raids/class-selection.js';
 import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
 import { handleRealmScore } from './interactions/buttons/raids/realm-score.js';
 import { handleRealmClosed, handleMiniboss, handleThirdRoom } from './interactions/buttons/raids/o3-progression.js';
@@ -443,11 +442,6 @@ client.on('interactionCreate', async (interaction) => {
             if (action === 'leave') {
                 if (!await applyButtonRateLimit(interaction, 'run:participation')) return;
                 await safeHandleInteraction(interaction, () => handleLeave(interaction, runId), { ephemeral: true });
-                return;
-            }
-            if (action === 'class') {
-                if (!await applyButtonRateLimit(interaction, 'run:class_selection')) return;
-                await safeHandleInteraction(interaction, () => handleClassSelection(interaction, runId), { ephemeral: true });
                 return;
             }
             if (action === 'key') {

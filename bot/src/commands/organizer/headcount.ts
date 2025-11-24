@@ -16,7 +16,7 @@ import { ensureGuildContext } from '../../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { dungeonByCode, getCategorizedDungeons } from '../../constants/dungeons/dungeon-helpers.js';
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
-import { getDungeonKeyEmojiIdentifier } from '../../lib/utilities/key-emoji-helpers.js';
+import { getDungeonKeyEmojiIdentifier, getDungeonKeyEmoji } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
 import { getDungeonRolePings } from '../../lib/utilities/http.js';
 import { registerHeadcount } from '../../lib/state/active-headcount-tracker.js';
@@ -273,7 +273,8 @@ async function createHeadcountPanel(
             embed = new EmbedBuilder()
                 .setTitle(`🎯 Headcount: ${dungeon.dungeonName}`)
                 .setDescription(`Organizer: <@${interaction.user.id}>`)
-                .addFields({ name: 'Interested', value: '0', inline: false })
+                // Interested count hidden from public panel - shown in organizer panel only
+                // .addFields({ name: 'Interested', value: '0', inline: false })
                 .setTimestamp(new Date());
             
             // Add color and thumbnail if available
@@ -301,10 +302,11 @@ async function createHeadcountPanel(
                     `Organizer: <@${interaction.user.id}>\n\n` +
                     `**Dungeons:**\n${dungeonList}`
                 )
-                .addFields(
-                    { name: 'Interested', value: '0', inline: true },
-                    { name: 'Total Keys', value: '0', inline: true }
-                )
+                // Interested count hidden from public panel - shown in organizer panel only
+                // .addFields(
+                //     { name: 'Interested', value: '0', inline: true },
+                //     { name: 'Total Keys', value: '0', inline: true }
+                // )
                 .setTimestamp(new Date());
         }
 

@@ -69,7 +69,7 @@ export async function sendRunPing(
         
         if (messageType === 'starting') {
             // Automatic ping when run goes live - include @here, dungeon role, and raid role
-            content = '� **Raid Starting!**';
+            content = '**Raid Starting!**';
         } else {
             // Manual ping by organizer - only ping raid role (not @here or dungeon role)
             if (run.status === 'open') {

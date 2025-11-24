@@ -30,7 +30,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     // Check if run is still joinable
     if (run.status === 'ended' || run.status === 'cancelled') {
-        await btn.editReply({ content: '❌ This run has ended. You cannot join it anymore.' });
+        await btn.editReply({ content: '❌ **This run has ended.**' });
         return;
     }
 
@@ -42,7 +42,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     if (existingReaction.state === 'join') {
         await btn.editReply({
-            content: 'You already joined this raid. Click Leave if you want to drop out.'
+            content: '✅ **Already joined!** Click Leave to drop out.'
         });
         return;
     }
@@ -100,6 +100,6 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
 
     // Send ephemeral confirmation message
     await btn.editReply({
-        content: 'Joined the raid! Check above for party and location.'
+        content: '✅ **Raid joined!** Click Leave to drop out.'
     });
 }

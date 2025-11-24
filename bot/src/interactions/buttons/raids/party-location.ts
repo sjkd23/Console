@@ -14,6 +14,7 @@ import {
 } from '../../../lib/utilities/modal-helpers.js';
 import { buildRunMessageContent } from '../../../lib/utilities/run-message-helpers.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
+import { notifyKeyReactors } from '../../../lib/utilities/key-reactor-notifications.js';
 
 interface RunDetails {
     channelId: string | null;
@@ -26,6 +27,37 @@ interface RunDetails {
     party: string | null;
     location: string | null;
     description: string | null;
+}
+
+/**
+ * Notifies key reactors if both party and location are now set
+ * @param btn - The button interaction
+ * @param runId - The run ID
+ * @param run - The run details
+ * @param isUpdate - Whether this is an update (true) or initial set (false)
+ */
+async function notifyKeyReactorsIfReady(
+    btn: ButtonInteraction,
+    runId: string,
+    run: RunDetails,
+    isUpdate: boolean
+): Promise<void> {
+    // Only notify if both party and location are set
+    if (!run.party || !run.location) {
+        return;
+    }
+
+    // Send DMs to all key reactors
+    await notifyKeyReactors(
+        btn.client,
+        runId,
+        btn.guildId!,
+        run.dungeonLabel,
+        run.organizerId,
+        run.party,
+        run.location,
+        isUpdate
+    );
 }
 
 /**
@@ -93,6 +125,10 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     const values = getModalFieldValues(submitted, ['party', 'location']);
     const party = values.party;
     const location = values.location;
+
+    // Fetch run details BEFORE updating to check if party/location were already set
+    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
+    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
 
     // Both fields are now required, so we always update both
     try {
@@ -177,6 +213,13 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     // Build confirmation message
     const confirmMsg = `✅ **Updated:**\n• Party: **${party}**\n• Location: **${location}**`;
 
+    // Notify key reactors now that both party and location are set
+    // Determine if this is an update (both were already set) or initial notification
+    const isUpdate = wasPartyAndLocationSet;
+    notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
+        console.error('Failed to notify key reactors:', err);
+    });
+
     // Refresh organizer panel with confirmation message
     await refreshOrganizerPanel(submitted, runId, confirmMsg);
 }
@@ -216,6 +259,10 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
 
     const values = getModalFieldValues(submitted, ['party']);
     const party = values.party;
+
+    // Fetch current run details BEFORE update to check if party/location were previously set
+    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
+    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
 
     // Update backend
     try {
@@ -269,6 +316,17 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
 
     // Refresh organizer panel with confirmation message
     const confirmMsg = party ? `✅ **Updated Party:** ${party}` : '✅ Party cleared';
+    
+    // Notify key reactors if both party and location are NOW set (and weren't both set before)
+    const isNowBothSet = !!(run.party && run.location);
+    if (isNowBothSet) {
+        // Determine if this is an update (both were set before) or initial notification
+        const isUpdate = wasPartyAndLocationSet;
+        notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
+            console.error('Failed to notify key reactors:', err);
+        });
+    }
+    
     await refreshOrganizerPanel(submitted, runId, confirmMsg);
 }
 
@@ -307,6 +365,10 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
 
     const values = getModalFieldValues(submitted, ['location']);
     const location = values.location;
+
+    // Fetch current run details BEFORE update to check if party/location were previously set
+    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
+    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
 
     // Update backend
     try {
@@ -360,6 +422,17 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
 
     // Refresh organizer panel with confirmation message
     const confirmMsg = location ? `✅ **Updated Location:** ${location}` : '✅ Location cleared';
+    
+    // Notify key reactors if both party and location are NOW set (and weren't both set before)
+    const isNowBothSet = !!(run.party && run.location);
+    if (isNowBothSet) {
+        // Determine if this is an update (both were set before) or initial notification
+        const isUpdate = wasPartyAndLocationSet;
+        notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
+            console.error('Failed to notify key reactors:', err);
+        });
+    }
+    
     await refreshOrganizerPanel(submitted, runId, confirmMsg);
 }
 

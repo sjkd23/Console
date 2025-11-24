@@ -10,15 +10,16 @@ import {
 } from 'discord.js';
 import { getJSON } from '../../../lib/utilities/http.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
+import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logButtonClick } from '../../../lib/logging/raid-logger.js';
+import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-tracker.js';
 
 /**
  * Internal function to build and show the organizer panel.
  * Used by both initial access and confirmed access.
  * @param confirmationMessage Optional message to show at the top of the panel (e.g., "✅ Party set to: USW3")
  */
-async function showOrganizerPanel(
+export async function showOrganizerPanel(
     btn: ButtonInteraction | ModalSubmitInteraction, 
     runId: number, 
     guildId: string, 
@@ -33,12 +34,31 @@ async function showOrganizerPanel(
     confirmationMessage?: string
 ) {
     // Fetch key reaction users if there are key reactions for this dungeon
-    let keyUsers: Record<string, string[]> = {};
-    const keyUsersResponse = await getJSON<{ keyUsers: Record<string, string[]> }>(
+    let headcountKeys: Record<string, string[]> = {};
+    let raidKeys: Record<string, string[]> = {};
+    const keyUsersResponse = await getJSON<{ 
+        headcountKeys: Record<string, string[]>; 
+        raidKeys: Record<string, string[]>;
+        keyUsers: Record<string, string[]>;
+    }>(
         `/runs/${runId}/key-reaction-users`,
         { guildId }
-    ).catch(() => ({ keyUsers: {} }));
-    keyUsers = keyUsersResponse.keyUsers;
+    ).catch(() => ({ headcountKeys: {}, raidKeys: {}, keyUsers: {} }));
+    headcountKeys = keyUsersResponse.headcountKeys;
+    raidKeys = keyUsersResponse.raidKeys;
+
+    // Fetch raider count from backend
+    let joinCount = 0;
+    try {
+        const countResponse = await getJSON<{ joinCount: number; classCounts: Record<string, number> }>(
+            `/runs/${runId}/raiders`,
+            { guildId }
+        );
+        joinCount = countResponse.joinCount || 0;
+    } catch (e) {
+        // If endpoint fails, default to 0
+        joinCount = 0;
+    }
 
     // Use dungeonLabel from run data instead of trying to parse from embed
     // (which might be the confirmation embed if coming from confirm button)
@@ -48,7 +68,7 @@ async function showOrganizerPanel(
             .setTitle(`Organizer Panel — ${dungeonTitle}`)
             .setTimestamp(new Date());
 
-        // Build description with key reaction users if any
+        // Build description with join count, key reaction users, and confirmation message
         let description = '';
         
         // Add confirmation message at the top if provided
@@ -56,21 +76,40 @@ async function showOrganizerPanel(
             description += `${confirmationMessage}\n\n`;
         }
         
+        // Show raider count
+        description += `**Raiders Joined:** ${joinCount}\n\n`;
+        
         description += 'Manage the raid with the controls below.';
 
-        if (Object.keys(keyUsers).length > 0) {
-            description += '\n\n**Key Reacts:**';        // Get the dungeon-specific key emoji (all keys for this dungeon use the same emoji)
-        const dungeonKeyEmoji = getDungeonKeyEmoji(run.dungeonKey);
+        // Show Headcount Keys (from headcount phase before conversion)
+        if (Object.keys(headcountKeys).length > 0) {
+            description += '\n\n**Headcount Keys:**';
         
-        for (const [keyType, userIds] of Object.entries(keyUsers)) {
-            const keyLabel = formatKeyLabel(keyType);
+            for (const [keyType, userIds] of Object.entries(headcountKeys)) {
+                const keyLabel = formatKeyLabel(keyType);
+                // Use key-specific emoji for each key type (important for Oryx 3 with multiple key types)
+                const keyEmoji = getEmojiDisplayForKeyType(keyType);
 
-            // Create user mentions
-            const mentions = userIds.map(id => `<@${id}>`).join(', ');
-            description += `\n${dungeonKeyEmoji} **${keyLabel}** (${userIds.length}): ${mentions}`;
-
+                // Create user mentions
+                const mentions = userIds.map(id => `<@${id}>`).join(', ');
+                description += `\n${keyEmoji} **${keyLabel}** (${userIds.length}): ${mentions}`;
+            }
         }
-    }
+
+        // Show Raid Keys (from run phase after conversion)
+        if (Object.keys(raidKeys).length > 0) {
+            description += '\n\n**Raid Keys:**';
+        
+            for (const [keyType, userIds] of Object.entries(raidKeys)) {
+                const keyLabel = formatKeyLabel(keyType);
+                // Use key-specific emoji for each key type (important for Oryx 3 with multiple key types)
+                const keyEmoji = getEmojiDisplayForKeyType(keyType);
+
+                // Create user mentions
+                const mentions = userIds.map(id => `<@${id}>`).join(', ');
+                description += `\n${keyEmoji} **${keyLabel}** (${userIds.length}): ${mentions}`;
+            }
+        }
 
     panelEmbed.setDescription(description);
 
@@ -183,10 +222,6 @@ async function showOrganizerPanel(
                 .setCustomId(`run:end:${runId}`)
                 .setLabel('End Run')
                 .setStyle(ButtonStyle.Danger),
-            new ButtonBuilder()
-                .setCustomId(`run:ping:${runId}`)
-                .setLabel('Ping Raiders')
-                .setStyle(ButtonStyle.Primary),
             ...actionButtons
         );
         
@@ -232,6 +267,9 @@ async function showOrganizerPanel(
     } else {
         await btn.reply({ embeds: [panelEmbed], components: controls, flags: MessageFlags.Ephemeral });
     }
+
+    // Register this organizer panel for auto-refresh on key reactions
+    registerOrganizerPanel(runId.toString(), btn.user.id, btn);
 
     // Log organizer panel access
     if (btn.guild) {

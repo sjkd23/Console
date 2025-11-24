@@ -1,23 +1,24 @@
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import { postJSON, getJSON } from '../../../lib/utilities/http.js';
-import { formatKeyLabel, getKeyTypeSuffix, getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
+import { formatKeyLabel, getKeyTypeSuffix, getDungeonKeyEmoji, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyReaction } from '../../../lib/logging/raid-logger.js';
+import { getAllOrganizerPanelsForRun } from '../../../lib/state/organizer-panel-tracker.js';
+import { showOrganizerPanel } from './organizer-panel.js';
+import { sendKeyReactorDM, hasBeenNotified, markAsNotified } from '../../../lib/utilities/key-reactor-notifications.js';
 
 
 function updateKeysField(embed: EmbedBuilder, keyCounts: Record<string, number>, dungeonKey: string, btn: ButtonInteraction): EmbedBuilder {
     const data = embed.toJSON();
     let fields = [...(data.fields ?? [])];
 
-    // Get the dungeon-specific key emoji
-    const dungeonKeyEmoji = getDungeonKeyEmoji(dungeonKey);
-
     // Filter out zero-count keys and format with emojis
     const entries = Object.entries(keyCounts)
         .filter(([, count]) => count > 0)
         .map(([keyType, count]) => {
             const label = formatKeyLabel(keyType);
-            // Use the dungeon-specific emoji for all keys
-            return `${dungeonKeyEmoji} ${label}: **${count}**`;
+            // Use the key-specific emoji for each key type
+            const keyEmoji = getEmojiDisplayForKeyType(keyType);
+            return `${keyEmoji} ${label}: **${count}**`;
         });
 
 
@@ -60,6 +61,8 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
         dungeonKey: string; 
         dungeonLabel: string;
         organizerId: string;
+        party: string | null;
+        location: string | null;
     }>(`/runs/${runId}`, { guildId }).catch(() => null);
     if (!run) {
         await btn.editReply({ content: 'Could not fetch run details.' });
@@ -84,6 +87,29 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
     const updatedWithKeys = updateKeysField(first, result.keyCounts, run.dungeonKey, btn);
 
     await msg.edit({ embeds: [updatedWithKeys, ...embeds.slice(1)] });
+
+    // Auto-refresh any active organizer panels for this run
+    const activePanels = getAllOrganizerPanelsForRun(runId);
+    for (const { interaction } of activePanels) {
+        try {
+            // Fetch fresh run data for organizer panel
+            const runData = await getJSON<{
+                status: string;
+                dungeonLabel: string;
+                dungeonKey: string;
+                organizerId: string;
+                screenshotUrl?: string | null;
+                o3Stage?: string | null;
+            }>(`/runs/${runId}`, { guildId }).catch(() => null);
+            
+            if (runData) {
+                await showOrganizerPanel(interaction, parseInt(runId), guildId, runData);
+            }
+        } catch (err) {
+            // Silently fail - organizer panel might be closed or expired
+            console.log('Failed to auto-refresh organizer panel:', err);
+        }
+    }
 
     // Log to raid-log thread
     if (btn.guild) {
@@ -112,18 +138,58 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
     const keyTypeSuffix = getKeyTypeSuffix(keyType);
     const keyLabel = formatKeyLabel(keyType);
 
-    // Get the dungeon-specific emoji
-    const dungeonKeyEmoji = getDungeonKeyEmoji(run.dungeonKey);
+    // Get the key-specific emoji
+    const keyEmoji = getEmojiDisplayForKeyType(keyType);
+
+    // Check if party and location are both set
+    const hasPartyAndLocation = !!(run.party && run.location);
 
     if (result.keyCounts[keyType]) {
         // User added their key
-        await btn.editReply({
-            content: `${dungeonKeyEmoji} You've reacted with a **${keyLabel} ${keyTypeSuffix}**.\n\nIf this was a mistake, please click the button again to unreact!`
-        });
+        let confirmMessage = `${keyEmoji} **${keyLabel} ${keyTypeSuffix} added!** Click again to remove.`;
+        
+        if (hasPartyAndLocation) {
+            // Party and location are already set
+            // Check if we've already sent this party/location to this user
+            const alreadyNotified = hasBeenNotified(runId, btn.user.id, run.party!, run.location!);
+            
+            if (!alreadyNotified) {
+                // Send DM for the first time
+                const dmSent = await sendKeyReactorDM(
+                    btn.client,
+                    btn.user.id,
+                    guildId,
+                    runId,
+                    run.dungeonLabel,
+                    run.organizerId,
+                    [keyType],
+                    run.party!,
+                    run.location!,
+                    false
+                );
+                
+                if (dmSent) {
+                    markAsNotified(runId, btn.user.id, run.party!, run.location!);
+                    confirmMessage += `\n\n✉️ You have been sent a DM with the party and location.\n\n**Party:** ${run.party} | **Location:** ${run.location}`;
+                } else {
+                    confirmMessage += '\n\n⚠️ Could not send you a DM. Please check your privacy settings.';
+                    confirmMessage += `\n\n**Party:** ${run.party} | **Location:** ${run.location}`;
+                    confirmMessage += `\nPlease join the party and go to the location as soon as possible to confirm your ${keyLabel.toLowerCase()} with the organizer.`;
+                }
+            } else {
+                // Already sent DM for this party/location - don't spam, but still show info
+                confirmMessage += `\n\n✅ You have already been sent the party and location details via DM.\n\n**Party:** ${run.party} | **Location:** ${run.location}`;
+            }
+        } else {
+            // Party/location not set yet - notify they'll be DM'd later
+            confirmMessage += '\n\n📬 You will receive a DM when the organizer sets the party and location. Please come to the location as soon as possible to confirm your key/rune with the organizer.';
+        }
+        
+        await btn.editReply({ content: confirmMessage });
     } else {
         // User removed their key
         await btn.editReply({
-            content: `${dungeonKeyEmoji} You've removed your **${keyLabel} ${keyTypeSuffix}** reaction.`
+            content: `${keyEmoji} **${keyLabel} ${keyTypeSuffix} removed.**`
         });
     }
 }

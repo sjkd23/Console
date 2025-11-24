@@ -18,7 +18,7 @@ import {
 import { getOrganizerId, getParticipants, clearParticipants } from '../../../lib/state/headcount-state.js';
 import { getKeyOffers, clearKeyOffers } from './headcount-key.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
-import { postJSON } from '../../../lib/utilities/http.js';
+import { postJSON, getDungeonRolePings } from '../../../lib/utilities/http.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
 import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
@@ -28,7 +28,10 @@ import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permi
 import { withButtonLock, getHeadcountLockKey } from '../../../lib/utilities/button-mutex.js';
 import { getDefaultAutoEndMinutes } from '../../../config/raid-config.js';
 import { unregisterHeadcount } from '../../../lib/state/active-headcount-tracker.js';
+import { clearHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
+import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-tracker.js';
 import { createRunRole } from '../../../lib/utilities/run-role-manager.js';
+import { createLogger } from '../../../lib/logging/logger.js';
 
 export async function handleHeadcountConvert(btn: ButtonInteraction, publicMessageId: string) {
     // CRITICAL: Wrap in mutex to prevent concurrent conversion
@@ -264,7 +267,7 @@ async function convertHeadcountToRun(
     }, { guildId });
 
     // Transfer headcount key reactions to the run database
-    // These will be stored as key_reactions in the database and displayed as "Headcount Keys"
+    // These will be stored as key_reactions in the database and shown in organizer panel
     if (dungeonKeyMap && dungeonKeyMap.size > 0) {
         try {
             // Flatten the key offers for this dungeon into user-key pairs
@@ -275,10 +278,11 @@ async function convertHeadcountToRun(
                 }
             }
 
-            // Send to backend to store in key_reaction table
+            // Send to backend to store in key_reaction table with 'headcount' source
             if (keyReactions.length > 0) {
                 await postJSON(`/runs/${runId}/keys/bulk`, {
-                    keys: keyReactions
+                    keys: keyReactions,
+                    source: 'headcount'
                 }, { guildId });
             }
         } catch (err) {
@@ -291,34 +295,17 @@ async function convertHeadcountToRun(
     const runEmbed = new EmbedBuilder()
         .setTitle(`⏳ Starting Soon: ${dungeon.dungeonName}`)
         .setDescription(`Organizer: <@${organizerId}>`)
-        .addFields(
-            { name: 'Raiders', value: '0', inline: false }
-        )
+        // Raiders count hidden from public panel - shown in organizer panel only
+        // .addFields(
+        //     { name: 'Raiders', value: '0', inline: false }
+        // )
         .setTimestamp(new Date());
 
-    // Add Headcount Keys field if there were keys from the headcount
-    if (dungeonKeyMap && dungeonKeyMap.size > 0) {
-        // Format headcount keys by type
-        const headcountKeyLines: string[] = [];
-        for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
-            if (userIds.size > 0) {
-                const keyLabel = formatKeyLabel(mapKey);
-                headcountKeyLines.push(`${keyLabel}: ${userIds.size}`);
-            }
-        }
-        
-        if (headcountKeyLines.length > 0) {
-            runEmbed.addFields({
-                name: '🎯 Headcount Keys',
-                value: headcountKeyLines.join('\n'),
-                inline: false
-            });
-        }
-    }
+    // Headcount Keys are now only shown in organizer panel, removed from public panel
 
-    // Add Raid Keys field if the dungeon has key reactions (starting fresh for raid phase)
+    // Add Keys field if the dungeon has key reactions (starting fresh for raid phase)
     if (dungeon.keyReactions && dungeon.keyReactions.length > 0) {
-        runEmbed.addFields({ name: '🗝️ Raid Keys', value: 'None', inline: false });
+        runEmbed.addFields({ name: 'Keys', value: 'None', inline: false });
     }
 
     // Color & thumbnail
@@ -367,55 +354,56 @@ async function convertHeadcountToRun(
         }
     }
 
-    // Update the headcount message to become the run message
-    await publicMsg.edit({
-        content: '@here',
+    // Save the headcount message ID before deletion (needed for clearing state)
+    const headcountMessageId = publicMsg.id;
+    
+    // Delete the headcount panel message
+    try {
+        await publicMsg.delete();
+    } catch (e) {
+        console.error('Failed to delete headcount panel:', e);
+        // Continue with conversion even if deletion fails
+    }
+
+    // Build content with @here and role pings for the new run panel
+    let runPanelContent = '@here';
+    
+    // Add dungeon-specific role ping if configured
+    try {
+        const { dungeon_role_pings } = await getDungeonRolePings(interaction.guild.id);
+        const dungeonRoleId = dungeon_role_pings[dungeon.codeName];
+        if (dungeonRoleId) {
+            runPanelContent += ` <@&${dungeonRoleId}>`;
+        }
+    } catch (e) {
+        console.error('Failed to fetch dungeon role pings for conversion:', e);
+        // Continue without custom role ping
+    }
+    
+    // Add raid role if it was created
+    if (role) {
+        runPanelContent += ` <@&${role.id}>`;
+    }
+
+    // Send NEW run panel message (this allows pings to work properly)
+    const channel = interaction.guild.channels.cache.get(publicMsg.channelId);
+    if (!channel || !channel.isTextBased()) {
+        await interaction.followUp({
+            content: '❌ Could not find channel to post run panel.',
+            flags: MessageFlags.Ephemeral
+        });
+        return;
+    }
+
+    const newRunMessage = await channel.send({
+        content: runPanelContent,
         embeds: [runEmbed],
         components: [row1, ...keyRows]
     });
 
-    // Send announcement message in the channel: "New Raid - Starting Soon" with pings
+    // Store the NEW message ID in the backend
     try {
-        const { getDungeonRolePings } = await import('../../../lib/utilities/http.js');
-        
-        // Build announcement message with @here, dungeon role ping (if configured), and raid role
-        let announcementContent = '🎯 **New Raid - Starting Soon!** @here';
-        
-        // Add dungeon role ping if configured
-        try {
-            const { dungeon_role_pings } = await getDungeonRolePings(interaction.guild.id);
-            const dungeonRoleId = dungeon_role_pings[dungeon.codeName];
-            if (dungeonRoleId) {
-                announcementContent += ` <@&${dungeonRoleId}>`;
-            }
-        } catch (e) {
-            console.error('Failed to fetch dungeon role pings for conversion announcement:', e);
-        }
-        
-        // Add raid role if it was created
-        if (role) {
-            announcementContent += ` <@&${role.id}>`;
-        }
-        
-        announcementContent += `\n\n**${dungeon.dungeonName}**`;
-        
-        // Add link to the raid panel
-        const raidPanelUrl = `https://discord.com/channels/${interaction.guild.id}/${publicMsg.channelId}/${publicMsg.id}`;
-        announcementContent += `\n[Jump to Raid Panel](${raidPanelUrl})`;
-        
-        // Send the announcement message
-        const channel = interaction.guild.channels.cache.get(publicMsg.channelId);
-        if (channel && channel.isTextBased()) {
-            await channel.send({ content: announcementContent });
-        }
-    } catch (e) {
-        console.error('Failed to send headcount conversion announcement:', e);
-        // Don't fail the conversion if announcement fails
-    }
-
-    // Store the message ID in the backend
-    try {
-        await postJSON(`/runs/${runId}/message`, { postMessageId: publicMsg.id }, { guildId });
+        await postJSON(`/runs/${runId}/message`, { postMessageId: newRunMessage.id }, { guildId });
     } catch (e) {
         console.error('Failed to store post_message_id:', e);
     }
@@ -440,9 +428,10 @@ async function convertHeadcountToRun(
         console.error('Failed to log converted run creation to raid-log:', e);
     }
 
-    // Clear headcount state from memory
-    clearKeyOffers(publicMsg.id);
-    clearParticipants(publicMsg.id);
+    // Clear headcount state from memory (using the saved message ID from before deletion)
+    clearKeyOffers(headcountMessageId);
+    clearParticipants(headcountMessageId);
+    clearHeadcountPanels(headcountMessageId); // Clear tracked organizer panels
     
     // CRITICAL: Unregister the headcount from active tracking
     // This prevents the "multiple runs" error when using /taken after converting a headcount
@@ -453,8 +442,9 @@ async function convertHeadcountToRun(
         .setTitle(`Organizer Panel — ${dungeon.dungeonName}`)
         .setTimestamp(new Date());
 
-    // Build description - no keys transferred from headcount
-    let description = 'Manage the raid with the controls below.';
+    // Build description with success message and link to new run panel
+    const raidPanelUrl = `https://discord.com/channels/${interaction.guild.id}/${newRunMessage.channelId}/${newRunMessage.id}`;
+    let description = `✅ **Headcount converted to run!**\n\n[Jump to Raid Panel](${raidPanelUrl})\n\nManage the raid with the controls below.`;
 
     runOrgPanelEmbed.setDescription(description);
 
@@ -503,18 +493,45 @@ async function convertHeadcountToRun(
         controls.push(screenshotRow);
     }
 
-    // Update the organizer panel message (same ephemeral message) with the run organizer panel
+    // Update the conversion button interaction to show success message
+    const successEmbed = new EmbedBuilder()
+        .setTitle('✅ Headcount Converted!')
+        .setDescription(`Headcount converted to run. See the new organizer panel below.\n\n[Jump to Raid Panel](${raidPanelUrl})`)
+        .setColor(0x00FF00)
+        .setTimestamp(new Date());
+
     if (interaction.deferred || interaction.replied) {
         await interaction.editReply({
-            content: '', // Clear any content
-            embeds: [runOrgPanelEmbed],
-            components: controls
+            content: '',
+            embeds: [successEmbed],
+            components: []
         });
     } else {
         await interaction.reply({
-            embeds: [runOrgPanelEmbed],
-            components: controls,
+            embeds: [successEmbed],
+            components: [],
             flags: MessageFlags.Ephemeral
         });
     }
+
+    // Then send the run organizer panel as a NEW followUp
+    // This creates a proper panel that can be registered and auto-refreshed
+    const panelMessage = await interaction.followUp({
+        embeds: [runOrgPanelEmbed],
+        components: controls,
+        flags: MessageFlags.Ephemeral
+    });
+
+    // Create a wrapper interaction for the followUp so it can be registered
+    // We'll use a pseudo-interaction that points to this followUp message
+    const panelInteraction = {
+        ...interaction,
+        id: panelMessage.id, // Use the message ID as interaction ID
+        async editReply(options: any) {
+            return await panelMessage.edit(options);
+        }
+    } as any;
+    
+    // Register this panel for auto-refresh
+    registerOrganizerPanel(runId.toString(), interaction.user.id, panelInteraction);
 }

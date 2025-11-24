@@ -2,6 +2,7 @@ import { REST, Routes } from 'discord.js';
 import type { SlashCommand } from './_types.js';
 import { withPermissionCheck } from '../lib/permissions/command-middleware.js';
 import { withRateLimit } from '../lib/utilities/rate-limit-middleware.js';
+import type { RateLimitConfig } from '../lib/utilities/rate-limiter.js';
 import { runCreate } from './organizer/run.js';
 import { taken } from './organizer/taken.js';
 import { verify } from './moderation/security/verify.js';
@@ -50,7 +51,19 @@ import { modmailunblacklist } from './moderation/officer/modmailunblacklist.js';
  * Helper to apply both permission checks and rate limiting to a command.
  * Order matters: permission check first, then rate limit (no point rate limiting unauthorized users).
  */
-const withMiddleware = (cmd: SlashCommand) => withRateLimit(withPermissionCheck(cmd));
+const withMiddleware = (cmd: SlashCommand, customRateLimit?: RateLimitConfig) => 
+    withRateLimit(withPermissionCheck(cmd), customRateLimit);
+
+/**
+ * Custom rate limit for purge command:
+ * - 3 uses per minute (most restrictive)
+ * - This automatically enforces the 10 per hour limit as well
+ */
+const PURGE_RATE_LIMIT: RateLimitConfig = {
+    maxRequests: 3,
+    windowMs: 60_000, // 1 minute
+    errorMessage: '⏱️ **Purge rate limit exceeded.** You can only use this command 3 times per minute (10 times per hour). Please wait before using it again.'
+};
 
 // Apply permission middleware and rate limiting to all commands
 export const commands: SlashCommand[] = [
@@ -92,7 +105,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(mute),
     withMiddleware(unmute),
     withMiddleware(leaderboard),
-    withMiddleware(purge),
+    withMiddleware(purge, PURGE_RATE_LIMIT),
     withMiddleware(modmail),
     withMiddleware(modmailreply),
     withMiddleware(modmailblacklist),

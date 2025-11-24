@@ -27,7 +27,7 @@ function getCommandHelp(commandName: string): CommandHelp | null {
     const commandHelpMap: Record<string, CommandHelp> = {
         run: {
             name: 'run',
-            description: 'Create a new raid run in the current channel. This posts a fully interactive raid panel with reactions for class selection and controls for the run leader.',
+            description: 'Create a new raid run in the current channel. This posts a fully interactive raid panel with join/leave buttons and controls for the run leader.',
             usage: '/run dungeon:<name> [party:<name>] [location:<server>] [description:<text>]',
             examples: [
                 '/run dungeon:Void - Create a Void run',
