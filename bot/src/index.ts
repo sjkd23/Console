@@ -84,6 +84,28 @@ import { logCommandExecution, createSuccessResult, createErrorResult } from './l
 import { BackendError } from './lib/utilities/http.js';
 import { applyButtonRateLimit } from './lib/utilities/rate-limit-middleware.js';
 import { safeHandleInteraction } from './lib/utilities/safe-handle-interaction.js';
+import { createLogger } from './lib/logging/logger.js';
+
+const logger = createLogger('Bot');
+
+// Global error handlers to prevent bot crashes from unhandled rejections
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled promise rejection', {
+        reason: reason instanceof Error ? reason.message : String(reason),
+        stack: reason instanceof Error ? reason.stack : undefined,
+        promise: promise,
+    });
+});
+
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception', {
+        error: error.message,
+        stack: error.stack,
+    });
+    // For uncaught exceptions, we may want to exit gracefully
+    // Uncomment the following lines if you want the bot to restart via Docker/PM2
+    // process.exit(1);
+});
 
 const client = new Client({
     intents: [

@@ -183,7 +183,14 @@ async function collectIGN(
         // Check for cancel
         if (input.toLowerCase() === 'cancel') {
             collector.stop('cancelled');
-            await updateSession(guildId, userId, { status: 'cancelled' });
+            const cancelSession = await updateSession(guildId, userId, { status: 'cancelled' });
+            if (!cancelSession) {
+                await dmChannel.send(
+                    '❌ **Verification Session Expired**\n\n' +
+                    'Your verification session has expired or was reset. Please run the verification command again in the server.'
+                );
+                return;
+            }
             await dmChannel.send(
                 '❌ **Verification Cancelled**\n\n' +
                 'You can restart verification anytime by clicking the "Get Verified" button in the server.'
@@ -202,7 +209,8 @@ async function collectIGN(
                     'Verification cancelled due to too many invalid IGN submissions.\n' +
                     'Please click the "Get Verified" button in the server to try again.'
                 );
-                await updateSession(guildId, userId, { status: 'cancelled' });
+                const cancelSession = await updateSession(guildId, userId, { status: 'cancelled' });
+                // If session already expired, no need to handle - user already got error message
                 return;
             }
 
@@ -218,11 +226,28 @@ async function collectIGN(
         collector.stop('success');
         
         const code = generateVerificationCode();
-        await updateSession(guildId, userId, {
+        const updatedSession = await updateSession(guildId, userId, {
             rotmg_ign: input,
             verification_code: code,
             status: 'pending_realmeye',
         });
+
+        // Handle case where session no longer exists (expired/cleaned up)
+        if (!updatedSession) {
+            await dmChannel.send(
+                '❌ **Verification Session Expired**\n\n' +
+                'Your verification session has expired or was reset. Please click the "Get Verified" button in the server to start a new verification.'
+            );
+            
+            const guild = member.guild;
+            await logVerificationEvent(
+                guild,
+                userId,
+                '**Session expired** during IGN submission. User needs to restart verification.',
+                { error: true }
+            );
+            return;
+        }
 
         // Log IGN submission
         const guild = member.guild;
@@ -256,7 +281,8 @@ async function collectIGN(
                 '⏱️ **Verification Timed Out**\n\n' +
                 'You took too long to respond. Please click the "Get Verified" button in the server to try again.'
             );
-            await updateSession(guildId, userId, { status: 'expired' });
+            const expiredSession = await updateSession(guildId, userId, { status: 'expired' });
+            // If session is already gone, no need to log - it was already cleaned up
         }
     });
 }
@@ -396,7 +422,17 @@ export async function handleVerificationDone(interaction: ButtonInteraction): Pr
         );
 
         // Mark session as verified
-        await updateSession(guildId, interaction.user.id, { status: 'verified' });
+        const verifiedSession = await updateSession(guildId, interaction.user.id, { status: 'verified' });
+        
+        // If session was already gone, that's okay - verification already succeeded
+        // Just log it for debugging purposes
+        if (!verifiedSession && guild) {
+            await logVerificationEvent(
+                guild,
+                interaction.user.id,
+                '**Note:** Session was already cleaned up, but verification was successful.'
+            );
+        }
 
         // Log completion
         await logVerificationEvent(
@@ -472,8 +508,9 @@ export async function handleVerificationCancel(interaction: ButtonInteraction): 
             return;
         }
 
-        await updateSession(guildId, interaction.user.id, { status: 'cancelled' });
+        const cancelledSession = await updateSession(guildId, interaction.user.id, { status: 'cancelled' });
 
+        // Even if session was already gone, tell user it's cancelled
         await interaction.editReply({
             content:
                 '❌ **Verification Cancelled**\n\n' +
@@ -481,10 +518,12 @@ export async function handleVerificationCancel(interaction: ButtonInteraction): 
             components: [], // Remove buttons
         });
 
-        // Clean up session
-        setTimeout(() => {
-            deleteSession(guildId, interaction.user.id).catch(console.error);
-        }, 5000);
+        // Clean up session (if it still exists)
+        if (cancelledSession) {
+            setTimeout(() => {
+                deleteSession(guildId, interaction.user.id).catch(console.error);
+            }, 5000);
+        }
     } catch (err) {
         console.error('[VerificationCancel] Error:', err);
         await interaction.editReply(
@@ -638,10 +677,26 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
         );
 
         // Update session to manual verification mode
-        await updateSession(guildId, interaction.user.id, {
+        const updatedSession = await updateSession(guildId, interaction.user.id, {
             verification_method: 'manual',
             status: 'pending_screenshot',
         });
+
+        // Handle case where session no longer exists (expired/cleaned up)
+        if (!updatedSession) {
+            await interaction.editReply(
+                '❌ **Verification Session Expired**\n\n' +
+                'Your verification session has expired or was reset. Please click the "Get Verified" button in the server to start a new verification.'
+            );
+            
+            await logVerificationEvent(
+                guild,
+                interaction.user.id,
+                '**Session expired** when switching to manual mode. User needs to restart verification.',
+                { error: true }
+            );
+            return;
+        }
 
         // Send screenshot instructions
         const embed = createManualVerificationEmbed(
@@ -682,7 +737,14 @@ async function collectScreenshot(
         // Check for cancel
         if (message.content.trim().toLowerCase() === 'cancel') {
             collector.stop('cancelled');
-            await updateSession(guildId, userId, { status: 'cancelled' });
+            const cancelSession = await updateSession(guildId, userId, { status: 'cancelled' });
+            if (!cancelSession) {
+                await dmChannel.send(
+                    '❌ **Verification Session Expired**\n\n' +
+                    'Your verification session has expired or was reset. Please run the verification command again in the server.'
+                );
+                return;
+            }
             await dmChannel.send(
                 '❌ **Verification Cancelled**\n\n' +
                 'You can restart verification anytime by clicking the "Get Verified" button in the server.'
@@ -735,10 +797,28 @@ async function collectScreenshot(
         }
 
         // Update session with screenshot (no IGN yet)
-        await updateSession(guildId, userId, {
+        const updatedSession = await updateSession(guildId, userId, {
             screenshot_url: attachment.url,
             status: 'pending_review',
         });
+
+        // Handle case where session no longer exists (expired/cleaned up)
+        if (!updatedSession) {
+            await dmChannel.send(
+                '❌ **Verification Session Expired**\n\n' +
+                'Your verification session has expired or was reset. Please click the "Get Verified" button in the server to start a new verification.'
+            );
+            
+            if (guild) {
+                await logVerificationEvent(
+                    guild,
+                    userId,
+                    '**Session expired** during screenshot submission. User needs to restart verification.',
+                    { error: true }
+                );
+            }
+            return;
+        }
 
         // Create ticket in manual-verification channel
         try {
@@ -784,9 +864,16 @@ async function collectScreenshot(
             });
 
             // Update session with ticket message ID
-            await updateSession(guildId, userId, {
+            const finalSession = await updateSession(guildId, userId, {
                 ticket_message_id: ticketMessage.id,
             });
+
+            // If session expired between updates, inform user
+            if (!finalSession) {
+                await dmChannel.send(
+                    '⚠️ **Note:** Your verification session may have expired, but your ticket was created. Staff will still be able to review your submission.'
+                );
+            }
 
             // Log ticket creation
             await logVerificationEvent(
@@ -809,7 +896,8 @@ async function collectScreenshot(
                 '⏱️ **Verification Timed Out**\n\n' +
                 'You took too long to submit your screenshot. Please click the "Get Verified" button in the server to try again.'
             );
-            await updateSession(guildId, userId, { status: 'expired' });
+            const expiredSession = await updateSession(guildId, userId, { status: 'expired' });
+            // If session is already gone, no need to log - it was already cleaned up
         }
     });
 }

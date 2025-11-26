@@ -448,6 +448,23 @@ export async function removeRaiderAlt(
     return deleteJSON(`/raiders/${userId}/alt`, payload);
 }
 
+/** Unverify a raider (DELETE /raiders/:guild_id/:user_id/unverify) */
+export async function unverifyRaider(
+    guildId: string,
+    userId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        reason?: string;
+    }
+): Promise<{
+    success: boolean;
+    message: string;
+    ign: string;
+}> {
+    return deleteJSON(`/raiders/${guildId}/${userId}/unverify`, payload);
+}
+
 /** Get guild role mappings (GET /guilds/:guild_id/roles) */
 export async function getGuildRoles(
     guildId: string

@@ -194,12 +194,64 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
             actorMember
         );
 
+        // Check if verification failed completely
+        if (!applyResult.success) {
+            // Update session to show denial
+            await updateSession(guildId, userId, {
+                status: 'denied',
+                reviewed_by_user_id: interaction.user.id,
+                denial_reason: applyResult.errors.join('; '),
+            });
+
+            // Send error message to staff
+            await interaction.editReply(
+                `❌ **Verification Failed**\n\n` +
+                `Could not verify <@${userId}> as **${ign}**.\n\n` +
+                `**Errors:**\n${applyResult.errors.map(e => `• ${e}`).join('\n')}`
+            );
+
+            // Try to notify user
+            try {
+                const dmChannel = await userToVerify.createDM();
+                const failureEmbed = new EmbedBuilder()
+                    .setTitle('❌ Verification Failed')
+                    .setDescription(
+                        `**Server:** ${interaction.guild.name}\n\n` +
+                        `Your verification could not be completed due to the following issues:\n\n` +
+                        applyResult.errors.map(e => `• ${e}`).join('\n') + '\n\n' +
+                        'Please contact a staff member for assistance.'
+                    )
+                    .setColor(0xFF0000)
+                    .setTimestamp();
+
+                await dmChannel.send({ embeds: [failureEmbed] });
+            } catch (dmErr) {
+                console.error('[VerificationApproveModal] Could not DM user about failure:', dmErr);
+            }
+
+            // Log failure
+            await logVerificationEvent(
+                interaction.guild,
+                userId,
+                `**❌ Manual verification failed** by <@${interaction.user.id}>\n` +
+                `• IGN: \`${ign}\`\n` +
+                `• Errors: ${applyResult.errors.join(', ')}`
+            );
+
+            return;
+        }
+
         // Update session with IGN and approval
-        await updateSession(guildId, userId, {
+        const updatedSession = await updateSession(guildId, userId, {
             rotmg_ign: ign,
             status: 'verified',
             reviewed_by_user_id: interaction.user.id,
         });
+        
+        // If session was already gone, that's okay - verification already succeeded
+        if (!updatedSession) {
+            console.log(`[VerificationApproveModal] Session ${userId} was already cleaned up, but verification succeeded`);
+        }
 
         // Send DM to user
         try {
@@ -432,11 +484,16 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
             const reason = message.content.trim();
 
             // Update session with denial
-            await updateSession(guildId, userId, {
+            const deniedSession = await updateSession(guildId, userId, {
                 status: 'denied',
                 reviewed_by_user_id: interaction.user.id,
                 denial_reason: reason || 'No reason provided',
             });
+            
+            // If session was already gone, still notify user about denial
+            if (!deniedSession) {
+                console.log(`[VerificationDeny] Session ${userId} was already cleaned up, but user will still be notified of denial`);
+            }
 
             // Send DM to user
             try {
@@ -506,10 +563,15 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
             console.log(`[VerificationDeny] Collector ended. Reason: ${reason}, Collected: ${collected.size}`);
             if (reason === 'time' && collected.size === 0) {
                 // No reason provided within timeout
-                await updateSession(guildId, userId, {
+                const deniedSession = await updateSession(guildId, userId, {
                     status: 'denied',
                     reviewed_by_user_id: interaction.user.id,
                 });
+                
+                // If session was already gone, still notify user about denial
+                if (!deniedSession) {
+                    console.log(`[VerificationDeny] Session ${userId} was already cleaned up (timeout), but user will still be notified of denial`);
+                }
 
                 // Send DM to user without reason
                 try {

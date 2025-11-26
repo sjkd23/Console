@@ -299,10 +299,33 @@ export const addalt: SlashCommand = {
                         break;
                     case 'IGN_ALREADY_IN_USE':
                         errorMessage += '**Issue:** This IGN is already linked to another Discord account.\n\n';
-                        errorMessage += `${err.message}\n\n`;
-                        errorMessage += '**What to do:**\n';
-                        errorMessage += '• Verify the correct IGN spelling\n';
-                        errorMessage += '• Contact an admin if this is an error or account transfer';
+                        
+                        // Try to get conflict user info from error data
+                        const conflictUserId = err.data?.conflictUserId;
+                        const conflictIgn = err.data?.conflictIgn || altIgn;
+                        
+                        if (conflictUserId) {
+                            errorMessage += `The IGN "${conflictIgn}" is currently in use by <@${conflictUserId}>.\n\n`;
+                            
+                            // Try to fetch user tag for additional context
+                            try {
+                                const conflictUser = await interaction.client.users.fetch(conflictUserId);
+                                errorMessage += `**Discord Tag:** ${conflictUser.tag}\n`;
+                                errorMessage += `**User ID:** ${conflictUserId}\n\n`;
+                            } catch {
+                                errorMessage += `**User ID:** ${conflictUserId}\n\n`;
+                            }
+                            
+                            errorMessage += '**What to do:**\n';
+                            errorMessage += '• Verify this is the correct IGN\n';
+                            errorMessage += '• Check if the mentioned user is still in the server\n';
+                            errorMessage += '• Contact an admin for account transfers or corrections';
+                        } else {
+                            errorMessage += `${err.message}\n\n`;
+                            errorMessage += '**What to do:**\n';
+                            errorMessage += '• Verify the correct IGN spelling\n';
+                            errorMessage += '• Contact an admin if this is an error or account transfer';
+                        }
                         break;
                     case 'DUPLICATE_IGN':
                         errorMessage += '**Issue:** Alt IGN cannot be the same as the main IGN.\n\n';

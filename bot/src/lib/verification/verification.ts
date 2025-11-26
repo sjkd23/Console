@@ -9,9 +9,12 @@
  */
 
 import { GuildMember, User, Guild, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { postJSON, getJSON, patchJSON, verifyRaider, BackendError } from '../utilities/http.js';
+import { postJSON, getJSON, patchJSON, verifyRaider, BackendError, unverifyRaider } from '../utilities/http.js';
 import { getGuildChannels } from '../utilities/http.js';
+import { createLogger } from '../logging/logger.js';
 import crypto from 'crypto';
+
+const logger = createLogger('Verification');
 
 // ===== TYPES =====
 
@@ -103,6 +106,8 @@ async function createSession(guildId: string, userId: string): Promise<Verificat
 
 /**
  * Update a verification session
+ * 
+ * @returns The updated session, or null if the session was not found (expired/cleaned up)
  */
 export async function updateSession(
     guildId: string,
@@ -117,11 +122,27 @@ export async function updateSession(
         reviewed_by_user_id?: string;
         denial_reason?: string;
     }
-): Promise<VerificationSession> {
-    return await patchJSON<VerificationSession>(
-        `/verification/session/${guildId}/${userId}`,
-        updates
-    );
+): Promise<VerificationSession | null> {
+    try {
+        return await patchJSON<VerificationSession>(
+            `/verification/session/${guildId}/${userId}`,
+            updates
+        );
+    } catch (err) {
+        // Handle session not found (likely expired or cleaned up)
+        if (err instanceof BackendError && err.code === 'SESSION_NOT_FOUND') {
+            logger.info('Verification session not found when updating (likely expired/reset)', {
+                guildId,
+                userId,
+                code: err.code,
+                status: err.status,
+            });
+            return null;
+        }
+
+        // For all other errors, preserve existing behavior
+        throw err;
+    }
 }
 
 /**
@@ -319,10 +340,10 @@ export async function applyVerification(
         }
 
         // Call backend to record verification
+        // Get actor's roles if actorMember is provided (needed for both success and error paths)
+        const actorRoles = actorMember ? Array.from(actorMember.roles.cache.keys()) : undefined;
+        
         try {
-            // Get actor's roles if actorMember is provided
-            const actorRoles = actorMember ? Array.from(actorMember.roles.cache.keys()) : undefined;
-            
             await verifyRaider({
                 actor_user_id: actorUserId,
                 actor_roles: actorRoles,
@@ -331,9 +352,108 @@ export async function applyVerification(
                 ign,
             });
         } catch (backendErr) {
-            console.error('[Verification] Failed to record verification in backend:', backendErr);
-            // Don't add to user-facing errors since Discord changes succeeded
-            errors.push('Verification recorded in Discord but may not be saved in database');
+            // Handle IGN conflict with automatic retry if user left server
+            if (backendErr instanceof BackendError && backendErr.code === 'IGN_ALREADY_IN_USE') {
+                const conflictUserId = backendErr.data?.conflictUserId;
+                const conflictIgn = backendErr.data?.conflictIgn || ign;
+                
+                logger.info('IGN conflict detected', {
+                    ign: conflictIgn,
+                    conflictUserId,
+                    guildId: guild.id,
+                    newUserId: member.id,
+                });
+
+                if (conflictUserId) {
+                    // Try to fetch the conflicting user
+                    try {
+                        const conflictMember = await guild.members.fetch(conflictUserId);
+                        
+                        // User is still in the server - report the conflict with details
+                        errors.push(
+                            `The IGN "${conflictIgn}" is already in use by ${conflictMember.user.tag} (<@${conflictUserId}>). ` +
+                            'Please contact staff if you believe this is an error.'
+                        );
+                        
+                        logger.info('IGN conflict: User still in server', {
+                            ign: conflictIgn,
+                            conflictUserId,
+                            conflictUserTag: conflictMember.user.tag,
+                        });
+                        
+                        return { success: false, roleApplied, nicknameSet, errors };
+                    } catch (fetchErr: any) {
+                        // User not found in server (likely left) - unverify them and retry
+                        if (fetchErr.code === 10007 || fetchErr.code === 10013) {
+                            logger.info('IGN conflict: User not in server, unverifying and retrying', {
+                                ign: conflictIgn,
+                                conflictUserId,
+                                guildId: guild.id,
+                            });
+                            
+                            try {
+                                // Unverify the user who left
+                                await unverifyRaider(guild.id, conflictUserId, {
+                                    actor_user_id: actorUserId,
+                                    actor_roles: actorRoles,
+                                    reason: `User left server, IGN "${conflictIgn}" freed for new user ${member.user.tag} (<@${member.id}>)`,
+                                });
+                                
+                                logger.info('Successfully unverified user who left server', {
+                                    ign: conflictIgn,
+                                    conflictUserId,
+                                });
+
+                                // Retry verification
+                                await verifyRaider({
+                                    actor_user_id: actorUserId,
+                                    actor_roles: actorRoles,
+                                    guild_id: guild.id,
+                                    user_id: member.id,
+                                    ign,
+                                });
+                                
+                                logger.info('Verification successful after unverifying departed user', {
+                                    ign,
+                                    userId: member.id,
+                                });
+                                
+                                // Success! Continue with normal flow
+                            } catch (unverifyErr) {
+                                logger.error('Failed to unverify departed user', {
+                                    error: unverifyErr,
+                                    conflictUserId,
+                                    ign: conflictIgn,
+                                });
+                                errors.push(
+                                    `The IGN "${conflictIgn}" is in use by a user who left the server, but auto-cleanup failed. ` +
+                                    'Please contact staff.'
+                                );
+                                return { success: false, roleApplied, nicknameSet, errors };
+                            }
+                        } else {
+                            // Some other fetch error
+                            logger.error('Failed to fetch conflicting user', {
+                                error: fetchErr,
+                                conflictUserId,
+                            });
+                            errors.push(
+                                `The IGN "${conflictIgn}" is already in use, but unable to verify user status. ` +
+                                'Please contact staff.'
+                            );
+                            return { success: false, roleApplied, nicknameSet, errors };
+                        }
+                    }
+                } else {
+                    // No conflict user ID provided (shouldn't happen with updated backend)
+                    errors.push(backendErr.message || 'IGN conflict detected. Please contact staff.');
+                    return { success: false, roleApplied, nicknameSet, errors };
+                }
+            } else {
+                // Other backend error
+                console.error('[Verification] Failed to record verification in backend:', backendErr);
+                errors.push('Verification recorded in Discord but may not be saved in database');
+            }
         }
 
         return {

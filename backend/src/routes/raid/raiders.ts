@@ -158,6 +158,7 @@ export default async function raidersRoutes(app: FastifyInstance) {
                     code: 'IGN_ALREADY_IN_USE',
                     message: `The IGN "${ign}" is already in use by another member in this server. Each IGN can only be linked to one Discord account.`,
                     conflictUserId,
+                    conflictIgn: existingIgn.rows[0].ign, // Return the actual IGN casing
                 },
             });
         }
@@ -652,6 +653,95 @@ export default async function raidersRoutes(app: FastifyInstance) {
             status: raider.status,
             verified_at: raider.verified_at,
             old_alt_ign: oldAltIgn,
+        });
+    });
+
+    /**
+     * DELETE /raiders/:guild_id/:user_id/unverify
+     * Unverify a raider (remove them from the raider table).
+     * This is used when a user leaves the server and their IGN should be freed up.
+     * Authorization: actor_user_id must have Security role or be the bot itself (for automation).
+     * Returns success message.
+     * Logs audit event: raider.unverify
+     */
+    app.delete('/raiders/:guild_id/:user_id/unverify', async (req, reply) => {
+        const Params = z.object({
+            guild_id: zSnowflake,
+            user_id: zSnowflake,
+        });
+        const Body = z.object({
+            actor_user_id: zSnowflake,
+            actor_roles: z.array(zSnowflake).optional(),
+            reason: z.string().optional(), // Optional reason for audit log
+        });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+
+        if (!p.success || !b.success) {
+            const msg = [...(p.error?.issues ?? []), ...(b.error?.issues ?? [])]
+                .map(i => i.message)
+                .join('; ');
+            return Errors.validation(reply, msg || 'Invalid request');
+        }
+
+        const { guild_id, user_id } = p.data;
+        const { actor_user_id, actor_roles, reason } = b.data;
+
+        console.log(`[Unverify] Actor ${actor_user_id} in guild ${guild_id} unverifying ${user_id}`);
+
+        // Authorization: actor must have the 'security' role or higher
+        try {
+            await requireSecurity(guild_id, actor_user_id, actor_roles);
+        } catch (err: any) {
+            return reply.code(403).send({
+                error: {
+                    code: 'NOT_SECURITY',
+                    message: err.message || 'You need the Security role or higher to unverify users',
+                },
+            });
+        }
+
+        // Ensure actor exists in member table before audit logging
+        await ensureMemberExists(actor_user_id);
+
+        // Check if raider exists
+        const existingRaider = await query<{ ign: string; alt_ign: string | null; status: string }>(
+            `SELECT ign, alt_ign, status FROM raider 
+             WHERE guild_id = $1::bigint AND user_id = $2::bigint`,
+            [guild_id, user_id]
+        );
+
+        if (!existingRaider.rowCount || existingRaider.rowCount === 0) {
+            return reply.code(404).send({
+                error: {
+                    code: 'RAIDER_NOT_FOUND',
+                    message: 'This user is not in the raider system',
+                },
+            });
+        }
+
+        const raiderInfo = existingRaider.rows[0];
+
+        // Delete the raider record
+        await query(
+            `DELETE FROM raider 
+             WHERE guild_id = $1::bigint AND user_id = $2::bigint`,
+            [guild_id, user_id]
+        );
+
+        // Log audit event
+        await logAudit(guild_id, actor_user_id, 'raider.unverify', user_id, {
+            ign: raiderInfo.ign,
+            alt_ign: raiderInfo.alt_ign,
+            status: raiderInfo.status,
+            reason: reason || 'No reason provided',
+        });
+
+        return reply.code(200).send({
+            success: true,
+            message: `Successfully unverified user ${user_id}`,
+            ign: raiderInfo.ign,
         });
     });
 }

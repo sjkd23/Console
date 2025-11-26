@@ -1375,58 +1375,57 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 return hasPoints;
             });
 
+            // Calculate total points to award across all roles
+            let totalPointsToAward = 0;
+            for (const config of relevantConfigs) {
+                switch (cmdType) {
+                    case 'verify':
+                        totalPointsToAward += config.verify_points;
+                        break;
+                    case 'warn':
+                        totalPointsToAward += config.warn_points;
+                        break;
+                    case 'suspend':
+                        totalPointsToAward += config.suspend_points;
+                        break;
+                    case 'modmail_reply':
+                        totalPointsToAward += config.modmail_reply_points;
+                        break;
+                    case 'editname':
+                        totalPointsToAward += config.editname_points;
+                        break;
+                    case 'addnote':
+                        totalPointsToAward += config.addnote_points;
+                        break;
+                }
+            }
+
+            // ALWAYS log exactly ONE event per action for stat tracking
+            // This ensures the verification counter in /stats increments correctly
+            // Award the sum of all role points (or 0 if no quota roles configured)
+            const event = await logQuotaEvent(
+                guild_id,
+                user_id,
+                'verify_member',
+                `${cmdType}:${Date.now()}:${user_id}`, // Unique subject_id per action
+                undefined, // No dungeon key for moderation actions
+                totalPointsToAward
+            );
+
+            const pointsAwarded = event ? Number(event.quota_points) : 0;
+
             if (relevantConfigs.length === 0) {
-                // No quota roles with points configured for this command type
+                console.log(`[Quota] Logged ${cmdType} action for ${user_id} in guild ${guild_id} (0 points - no quota config)`);
                 return reply.send({
                     points_awarded: 0,
                     message: `No points configured for ${cmdType} command in your roles`,
                 });
             }
 
-            // Award points for each relevant role
-            let totalPointsAwarded = 0;
-            for (const config of relevantConfigs) {
-                // Determine points based on command type
-                let pointsToAward = 0;
-                switch (cmdType) {
-                    case 'verify':
-                        pointsToAward = config.verify_points;
-                        break;
-                    case 'warn':
-                        pointsToAward = config.warn_points;
-                        break;
-                    case 'suspend':
-                        pointsToAward = config.suspend_points;
-                        break;
-                    case 'modmail_reply':
-                        pointsToAward = config.modmail_reply_points;
-                        break;
-                    case 'editname':
-                        pointsToAward = config.editname_points;
-                        break;
-                    case 'addnote':
-                        pointsToAward = config.addnote_points;
-                        break;
-                }
-
-                const event = await logQuotaEvent(
-                    guild_id,
-                    user_id,
-                    'verify_member', // Keep existing action_type for compatibility
-                    `${cmdType}:${Date.now()}:${user_id}`, // Unique subject_id per action
-                    undefined, // No dungeon key for moderation actions
-                    pointsToAward
-                );
-
-                if (event) {
-                    totalPointsAwarded += Number(event.quota_points);
-                }
-            }
-
-            console.log(`[Quota] Awarded ${totalPointsAwarded} moderation points to ${user_id} in guild ${guild_id} for ${relevantConfigs.length} role(s)`);
+            console.log(`[Quota] Awarded ${pointsAwarded} moderation points to ${user_id} in guild ${guild_id} for ${relevantConfigs.length} role(s)`);
 
             return reply.send({
-                points_awarded: totalPointsAwarded,
+                points_awarded: pointsAwarded,
                 roles_awarded: relevantConfigs.length,
             });
         } catch (err) {
