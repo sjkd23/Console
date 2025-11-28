@@ -6,6 +6,7 @@ import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole, hasRequiredRoleOrHigher, requireSecurity, canManageGuildRoles } from '../../lib/auth/authorization.js';
 import { ensureGuildExists, ensureMemberExists, ensureRaiderExists } from '../../lib/database/database-helpers.js';
+import { createLogger } from '../../lib/logging/logger.js';
 import { 
     logQuotaEvent, 
     isRunAlreadyLogged, 
@@ -33,7 +34,7 @@ import {
     recalculateQuotaPoints,
 } from '../../lib/quota/quota.js';
 
-/**
+const logger = createLogger('Quota');/**
  * Body schema for manually logging run quota.
  */
 const LogRunBody = z.object({
@@ -85,7 +86,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         // Authorization: actor must have organizer role or higher
         const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
         if (!hasOrganizerRole) {
-            console.log(`[Quota] User ${actorId} in guild ${guildId} denied - no organizer role`);
+            logger.warn({ actorId, guildId }, 'User denied - no organizer role');
             return reply.code(403).send({
                 error: {
                     code: 'NOT_ORGANIZER',
@@ -99,7 +100,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             await ensureMemberExists(actorId);
             await ensureMemberExists(targetOrganizerId);
         } catch (err) {
-            console.error(`[Quota] Failed to ensure members exist:`, err);
+            logger.error({ err, actorId, targetOrganizerId, guildId }, 'Failed to ensure members exist');
             return Errors.internal(reply, 'Failed to process quota logging');
         }
 
@@ -155,7 +156,14 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 loggedCount = Math.abs(adjustedAmount);
             }
 
-            console.log(`[Quota] Manually logged ${loggedCount} run(s) for organizer ${targetOrganizerId} in guild ${guildId} (dungeon: ${dungeonKey}, points per run: ${pointsPerRun}, total points: ${totalPoints})`);
+            logger.info({ 
+                loggedCount, 
+                targetOrganizerId, 
+                guildId, 
+                dungeonKey, 
+                pointsPerRun, 
+                totalPoints 
+            }, 'Manually logged runs');
 
             return reply.code(200).send({
                 logged: loggedCount,
@@ -163,7 +171,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 organizer_id: targetOrganizerId,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to manually log run:`, err);
+            logger.error({ err, guildId, targetOrganizerId, dungeonKey }, 'Failed to manually log run');
             return Errors.internal(reply, 'Failed to log quota event');
         }
     });
@@ -189,7 +197,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         // Authorization: actor must have organizer role or higher
         const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
         if (!hasOrganizerRole) {
-            console.log(`[Quota] User ${actorId} in guild ${guildId} denied - no organizer role`);
+            logger.warn({ actorId, guildId }, 'User denied - no organizer role');
             return reply.code(403).send({
                 error: {
                     code: 'NOT_ORGANIZER',
@@ -207,7 +215,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             await ensureGuildExists(guildId);
         } catch (err) {
-            console.error(`[Quota] Failed to ensure guild exists:`, err);
+            logger.error({ err, guildId }, 'Failed to ensure guild exists');
             return Errors.internal(reply, 'Failed to process key pop logging');
         }
 
@@ -215,7 +223,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             await ensureMemberExists(actorId);
         } catch (err) {
-            console.error(`[Quota] Failed to ensure actor exists:`, err);
+            logger.error({ err, actorId }, 'Failed to ensure actor exists');
             return Errors.internal(reply, 'Failed to process key pop logging');
         }
 
@@ -224,7 +232,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             await ensureRaiderExists(guildId, userId, username || null, userRoles);
         } catch (err) {
-            console.error(`[Quota] Failed to ensure raider exists:`, err);
+            logger.error({ err, guildId, userId }, 'Failed to ensure raider exists');
             return Errors.internal(reply, 'Failed to process key pop logging');
         }
 
@@ -304,7 +312,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 }
             }
 
-            console.log(`[Quota] Manually logged ${Math.abs(adjustedAmount)} key pop(s) for user ${userId} in guild ${guildId} (dungeon: ${dungeonKey}, new total: ${newTotal}, points awarded: ${totalPointsAwarded})`);
+            logger.info({ guildId, userId, dungeonKey, amount: Math.abs(adjustedAmount), newTotal, pointsAwarded: totalPointsAwarded }, 'Manually logged key pops');
 
             return reply.code(200).send({
                 logged: Math.abs(adjustedAmount),
@@ -313,7 +321,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 user_id: userId,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to manually log key pops:`, err);
+            logger.error({ err, guildId, userId, dungeonKey }, 'Failed to manually log key pops');
             return Errors.internal(reply, 'Failed to log key pops');
         }
     });
@@ -343,7 +351,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const stats = await getUserQuotaStats(guild_id, user_id);
             return reply.code(200).send(stats);
         } catch (err) {
-            console.error(`[Quota] Failed to get stats for user ${user_id} in guild ${guild_id}:`, err);
+            logger.error({ err, guild_id, user_id }, 'Failed to get stats for user');
             return Errors.internal(reply, 'Failed to retrieve quota statistics');
         }
     });
@@ -374,7 +382,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 dungeon_overrides: overrides,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to get config:`, err);
+            logger.error({ err, guild_id, role_id }, 'Failed to get config');
             return Errors.internal(reply, 'Failed to retrieve quota configuration');
         }
     });
@@ -408,7 +416,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ configs: configsWithOverrides });
         } catch (err) {
-            console.error(`[Quota] Failed to get configs for guild ${guild_id}:`, err);
+            logger.error({ err, guild_id }, 'Failed to get configs for guild');
             return Errors.internal(reply, 'Failed to retrieve quota configurations');
         }
     });
@@ -505,7 +513,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 dungeon_overrides: overrides,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to update config:`, err);
+            logger.error({ err, guild_id, role_id }, 'Failed to update config');
             return Errors.internal(reply, 'Failed to update quota configuration');
         }
     });
@@ -572,7 +580,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_overrides: overrides });
         } catch (err) {
-            console.error(`[Quota] Failed to set dungeon override:`, err);
+            logger.error({ err, guild_id, role_id, dungeon_key }, 'Failed to set dungeon override');
             return Errors.internal(reply, 'Failed to update dungeon override');
         }
     });
@@ -623,7 +631,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_overrides: overrides });
         } catch (err) {
-            console.error(`[Quota] Failed to delete dungeon override:`, err);
+            logger.error({ err, guild_id, role_id, dungeon_key }, 'Failed to delete dungeon override');
             return Errors.internal(reply, 'Failed to delete dungeon override');
         }
     });
@@ -684,7 +692,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 message: 'Quota configuration deleted successfully'
             });
         } catch (err) {
-            console.error(`[Quota] Failed to delete quota config:`, err);
+            logger.error({ err, guild_id, role_id }, 'Failed to delete quota config');
             return Errors.internal(reply, 'Failed to delete quota configuration');
         }
     });
@@ -728,13 +736,19 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const periodStart = getQuotaPeriodStart(config);
             const periodEnd = getQuotaPeriodEnd(config);
             
-            console.log(`[Quota Leaderboard] Config created_at: ${config.created_at}, reset_at: ${config.reset_at}`);
-            console.log(`[Quota Leaderboard] Period: ${periodStart.toISOString()} to ${periodEnd.toISOString()}`);
-            console.log(`[Quota Leaderboard] Received ${member_user_ids.length} member IDs from bot`);
+            logger.info({ 
+                guild_id, 
+                role_id, 
+                created_at: config.created_at, 
+                reset_at: config.reset_at,
+                period_start: periodStart.toISOString(),
+                period_end: periodEnd.toISOString(),
+                member_count: member_user_ids.length
+            }, 'Processing quota leaderboard request');
             
             const leaderboard = await getQuotaLeaderboard(guild_id, role_id, member_user_ids, periodStart, periodEnd);
             
-            console.log(`[Quota Leaderboard] Returning ${leaderboard.length} leaderboard entries (includes members with 0 points)`);
+            logger.info({ guild_id, role_id, leaderboard_count: leaderboard.length }, 'Returning quota leaderboard entries');
 
             return reply.send({
                 config,
@@ -743,7 +757,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 leaderboard,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to get leaderboard:`, err);
+            logger.error({ err, guild_id, role_id }, 'Failed to get leaderboard');
             return Errors.internal(reply, 'Failed to retrieve leaderboard');
         }
     });
@@ -769,7 +783,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const dungeonPoints = await getRaiderPointsConfig(guild_id);
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to get raider points config:`, err);
+            logger.error({ err, guild_id }, 'Failed to get raider points config');
             return Errors.internal(reply, 'Failed to retrieve raider points configuration');
         }
     });
@@ -823,7 +837,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to set raider points:`, err);
+            logger.error({ err, guild_id, dungeon_key, points }, 'Failed to set raider points');
             return Errors.internal(reply, 'Failed to update raider points configuration');
         }
     });
@@ -873,7 +887,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to delete raider points:`, err);
+            logger.error({ err, guild_id, dungeon_key }, 'Failed to delete raider points');
             return Errors.internal(reply, 'Failed to delete raider points configuration');
         }
     });
@@ -899,7 +913,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const dungeonPoints = await getKeyPopPointsConfig(guild_id);
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to get key pop points config:`, err);
+            logger.error({ err, guild_id }, 'Failed to get key pop points config');
             return Errors.internal(reply, 'Failed to retrieve key pop points configuration');
         }
     });
@@ -953,7 +967,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to set key pop points:`, err);
+            logger.error({ err, guild_id, dungeon_key, points }, 'Failed to set key pop points');
             return Errors.internal(reply, 'Failed to update key pop points configuration');
         }
     });
@@ -1003,7 +1017,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             return reply.send({ dungeon_points: dungeonPoints });
         } catch (err) {
-            console.error(`[Quota] Failed to delete key pop points:`, err);
+            logger.error({ err, guild_id, dungeon_key }, 'Failed to delete key pop points');
             return Errors.internal(reply, 'Failed to delete key pop points configuration');
         }
     });
@@ -1056,7 +1070,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             await ensureGuildExists(guild_id);
             await ensureMemberExists(user_id);
         } catch (err) {
-            console.error(`[Quota] Failed to upsert guild/member:`, err);
+            logger.error({ err, guild_id, user_id }, 'Failed to upsert guild/member');
             return Errors.internal(reply, 'Failed to prepare database records');
         }
 
@@ -1107,7 +1121,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 new_total: totalQuotaPoints,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to adjust quota points:`, err);
+            logger.error({ err, guild_id, user_id, amount }, 'Failed to adjust quota points');
             return Errors.internal(reply, 'Failed to adjust quota points');
         }
     });
@@ -1160,7 +1174,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             await ensureGuildExists(guild_id);
             await ensureMemberExists(user_id);
         } catch (err) {
-            console.error(`[Quota] Failed to upsert guild/member:`, err);
+            logger.error({ err, guild_id, user_id }, 'Failed to upsert guild/member for points adjustment');
             return Errors.internal(reply, 'Failed to prepare database records');
         }
 
@@ -1211,7 +1225,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 new_total: totalPoints,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to adjust points:`, err);
+            logger.error({ err, guild_id, user_id, amount }, 'Failed to adjust points');
             return Errors.internal(reply, 'Failed to adjust points');
         }
     });
@@ -1278,7 +1292,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 leaderboard,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to get leaderboard:`, err);
+            logger.error({ err, guild_id, category, dungeon_key }, 'Failed to get leaderboard');
             return Errors.internal(reply, 'Failed to retrieve leaderboard');
         }
     });
@@ -1321,7 +1335,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             await requireSecurity(guild_id, actor_user_id, actor_roles);
         } catch (err: any) {
-            console.log(`[Quota] User ${actor_user_id} in guild ${guild_id} denied - insufficient permissions`);
+            logger.warn({ actor_user_id, guild_id }, 'User denied - insufficient permissions');
             return reply.code(403).send({
                 error: {
                     code: 'NOT_SECURITY',
@@ -1336,7 +1350,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             await ensureMemberExists(actor_user_id);
             await ensureMemberExists(user_id);
         } catch (err) {
-            console.error(`[Quota] Failed to ensure members exist:`, err);
+            logger.error({ err, guild_id, actor_user_id, user_id }, 'Failed to ensure members exist');
             return Errors.internal(reply, 'Failed to process moderation points');
         }
 
@@ -1415,21 +1429,21 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const pointsAwarded = event ? Number(event.quota_points) : 0;
 
             if (relevantConfigs.length === 0) {
-                console.log(`[Quota] Logged ${cmdType} action for ${user_id} in guild ${guild_id} (0 points - no quota config)`);
+                logger.info({ user_id, guild_id, cmdType }, 'Logged action with 0 points - no quota config');
                 return reply.send({
                     points_awarded: 0,
                     message: `No points configured for ${cmdType} command in your roles`,
                 });
             }
 
-            console.log(`[Quota] Awarded ${pointsAwarded} moderation points to ${user_id} in guild ${guild_id} for ${relevantConfigs.length} role(s)`);
+            logger.info({ user_id, guild_id, pointsAwarded, rolesCount: relevantConfigs.length }, 'Awarded moderation points');
 
             return reply.send({
                 points_awarded: pointsAwarded,
                 roles_awarded: relevantConfigs.length,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to award moderation points:`, err);
+            logger.error({ err, guild_id, user_id, cmdType }, 'Failed to award moderation points');
             return Errors.internal(reply, 'Failed to award moderation points');
         }
     });
@@ -1477,7 +1491,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         // Authorization: actor must have admin permission
         const canManage = await canManageGuildRoles(guild_id, actorId, actorRoles);
         if (!canManage) {
-            console.log(`[Quota] User ${actorId} denied recalculate for guild ${guild_id} - no admin permission`);
+            logger.warn({ actorId, guild_id }, 'User denied recalculate - no admin permission');
             return reply.code(403).send({
                 error: {
                     code: 'FORBIDDEN',
@@ -1489,7 +1503,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             const result = await recalculateQuotaPoints(guild_id, role_id);
             
-            console.log(`[Quota] Recalculated ${result.recalculated} events for guild ${guild_id}, role ${role_id}`);
+            logger.info({ guild_id, role_id, recalculated: result.recalculated, total_points: result.total_points }, 'Recalculated quota points');
 
             return reply.send({
                 recalculated: result.recalculated,
@@ -1497,7 +1511,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 message: `Successfully recalculated ${result.recalculated} events`,
             });
         } catch (err) {
-            console.error(`[Quota] Failed to recalculate quota points:`, err);
+            logger.error({ err, guild_id, role_id }, 'Failed to recalculate quota points');
             return Errors.internal(reply, 'Failed to recalculate quota points');
         }
     });

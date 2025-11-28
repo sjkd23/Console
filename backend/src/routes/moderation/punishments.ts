@@ -8,6 +8,9 @@ import { Errors } from '../../lib/errors/errors.js';
 import { logAudit } from '../../lib/logging/audit.js';
 import { requireSecurity } from '../../lib/auth/authorization.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
+import { createLogger } from '../../lib/logging/logger.js';
+
+const logger = createLogger('Punishments');
 
 /**
  * Schema for creating a punishment
@@ -49,10 +52,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
         const parsed = CreatePunishmentBody.safeParse(req.body);
 
         if (!parsed.success) {
-            console.error('[Punishments] Validation failed for POST /punishments:', {
-                issues: parsed.error.issues,
-                body: req.body,
-            });
+            logger.error({ issues: parsed.error.issues, body: req.body }, 'Validation failed for POST /punishments');
             const msg = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
             return Errors.validation(reply, msg || 'Invalid request');
         }
@@ -63,7 +63,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
         try {
             await requireSecurity(guild_id, actor_user_id, actor_roles);
         } catch (err) {
-            console.log(`[Punishments] User ${actor_user_id} in guild ${guild_id} denied - not security`);
+            logger.warn({ actorUserId: actor_user_id, guildId: guild_id }, 'User denied - not security');
             throw err;
         }
 
@@ -125,7 +125,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
                 created_at: punishment.created_at,
             });
         } catch (err) {
-            console.error('[Punishments] Failed to create punishment:', err);
+            logger.error({ err, guildId: guild_id, userId: user_id, type }, 'Failed to create punishment');
             return Errors.internal(reply, 'Failed to create punishment');
         }
     });
@@ -176,7 +176,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
 
             return reply.send(result.rows[0]);
         } catch (err) {
-            console.error('[Punishments] Failed to get punishment:', err);
+            logger.error({ err, punishmentId: id }, 'Failed to get punishment');
             return Errors.internal(reply, 'Failed to retrieve punishment');
         }
     });
@@ -243,8 +243,8 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
                 punishments: result.rows,
             });
         } catch (err) {
-            console.error('[Punishments] Failed to get user punishments:', err);
-            return Errors.internal(reply, 'Failed to retrieve punishments');
+            logger.error({ err, guildId: guild_id, userId: user_id }, 'Failed to get user punishments');
+            return Errors.internal(reply, 'Failed to retrieve user punishments');
         }
     });
 
@@ -287,7 +287,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
                 expired: result.rows,
             });
         } catch (err) {
-            console.error('[Punishments] Failed to get expired suspensions:', err);
+            logger.error({ err }, 'Failed to get expired suspensions');
             return Errors.internal(reply, 'Failed to retrieve expired suspensions');
         }
     });
@@ -401,7 +401,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
             try {
                 await requireSecurity(punishment.guild_id, actor_user_id, actor_roles);
             } catch (err) {
-                console.log(`[Punishments] User ${actor_user_id} denied removal - not security`);
+                logger.warn({ actorUserId: actor_user_id, punishmentId: id }, 'User denied removal - not security');
                 throw err;
             }
 
@@ -443,7 +443,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
 
             return reply.send(updated);
         } catch (err) {
-            console.error('[Punishments] Failed to remove punishment:', err);
+            logger.error({ err, punishmentId: id }, 'Failed to remove punishment');
             return Errors.internal(reply, 'Failed to remove punishment');
         }
     });

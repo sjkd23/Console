@@ -50,6 +50,7 @@ export default async function verificationRoutes(app: FastifyInstance) {
         const { user_id } = parsed.data;
 
         // Get most recent active session (not expired/cancelled/verified/denied)
+        // Note: pending_review sessions are exempt from expiration check as they wait for staff
         const res = await query(
             `SELECT guild_id, user_id, rotmg_ign, verification_code, status, 
                     verification_method, screenshot_url, ticket_message_id, 
@@ -58,7 +59,7 @@ export default async function verificationRoutes(app: FastifyInstance) {
              FROM verification_session
              WHERE user_id = $1::bigint 
                AND status IN ('pending_ign', 'pending_realmeye', 'pending_screenshot', 'pending_review')
-               AND expires_at > NOW()
+               AND (status = 'pending_review' OR expires_at > NOW())
              ORDER BY created_at DESC
              LIMIT 1`,
             [user_id]
@@ -188,6 +189,11 @@ export default async function verificationRoutes(app: FastifyInstance) {
         if (updates.status !== undefined) {
             setClauses.push(`status = $${paramIndex++}`);
             values.push(updates.status);
+            
+            // Extend expiration for pending_review to 7 days since it needs to wait for staff
+            if (updates.status === 'pending_review') {
+                setClauses.push(`expires_at = NOW() + INTERVAL '7 days'`);
+            }
         }
 
         if (updates.verification_method !== undefined) {
@@ -269,12 +275,14 @@ export default async function verificationRoutes(app: FastifyInstance) {
     /**
      * POST /verification/cleanup-expired
      * Cleanup expired verification sessions (called periodically by bot or cron)
+     * Note: pending_review sessions are not expired as they wait for staff action
      */
     app.post('/verification/cleanup-expired', async (req, reply) => {
         const res = await query(
             `UPDATE verification_session
              SET status = 'expired'
-             WHERE expires_at < NOW() AND status NOT IN ('verified', 'cancelled', 'expired')
+             WHERE expires_at < NOW() 
+               AND status NOT IN ('verified', 'cancelled', 'expired', 'denied', 'pending_review')
              RETURNING guild_id, user_id`
         );
 

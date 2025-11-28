@@ -2,15 +2,18 @@
 import { randomUUID } from 'crypto';
 import { Client } from 'discord.js';
 import { botConfig } from '../../config.js';
+import { logHttpStart, logHttpSuccess, logHttpError, logHttpTimeout } from '../logging/http-logger.js';
 import { createLogger } from '../logging/logger.js';
 import { updateQuotaPanelsForUser } from '../ui/quota-panel.js';
 
 const BASE = botConfig.BACKEND_URL;
 const API_KEY = botConfig.BACKEND_API_KEY;
-const logger = createLogger('HTTP');
+const logger = createLogger('HTTP'); // Keep for non-HTTP logging (e.g., quota panel updates)
 
 interface RequestContext {
     guildId?: string;
+    roleId?: string;
+    userId?: string;
 }
 
 function headers(requestId: string, ctx?: RequestContext) {
@@ -59,7 +62,14 @@ async function makeRequest<T>(method: string, path: string, body?: any, ctx?: Re
     const requestId = randomUUID().slice(0, 8);
     const start = Date.now();
     
-    logger.debug('API request starting', { requestId, method, path, guildId: ctx?.guildId });
+    logHttpStart({ 
+        requestId, 
+        method, 
+        path, 
+        guildId: ctx?.guildId,
+        roleId: ctx?.roleId,
+        userId: ctx?.userId
+    });
     
     // Create abort controller for timeout (25s to leave buffer before Discord's 30s limit)
     const controller = new AbortController();
@@ -79,13 +89,15 @@ async function makeRequest<T>(method: string, path: string, body?: any, ctx?: Re
         const res = await fetch(`${BASE}${path}`, options);
         const duration = Date.now() - start;
         
-        logger.info('API request completed', { 
+        logHttpSuccess({ 
             requestId, 
             method, 
             path, 
             status: res.status, 
             duration,
-            guildId: ctx?.guildId
+            guildId: ctx?.guildId,
+            roleId: ctx?.roleId,
+            userId: ctx?.userId
         });
         
         clearTimeout(timeoutId);
@@ -96,12 +108,14 @@ async function makeRequest<T>(method: string, path: string, body?: any, ctx?: Re
         
         // Check if this was a timeout/abort
         if (err instanceof Error && err.name === 'AbortError') {
-            logger.error('API request timed out', {
+            logHttpTimeout({
                 requestId,
                 method,
                 path,
                 duration,
-                guildId: ctx?.guildId
+                guildId: ctx?.guildId,
+                roleId: ctx?.roleId,
+                userId: ctx?.userId
             });
             throw new BackendError(
                 'Request to backend timed out. The server may be overloaded.',
@@ -112,25 +126,28 @@ async function makeRequest<T>(method: string, path: string, body?: any, ctx?: Re
         }
         
         if (err instanceof BackendError) {
-            logger.warn('API request failed with backend error', { 
+            logHttpError({ 
                 requestId, 
                 method, 
                 path, 
                 status: err.status,
                 code: err.code,
                 duration,
-                message: err.message,
-                guildId: ctx?.guildId
+                error: err.message,
+                guildId: ctx?.guildId,
+                roleId: ctx?.roleId,
+                userId: ctx?.userId
             });
         } else {
-            logger.error('API request failed', { 
+            logHttpError({ 
                 requestId, 
                 method, 
                 path, 
                 duration,
                 error: err instanceof Error ? err.message : String(err),
-                stack: err instanceof Error ? err.stack : undefined,
-                guildId: ctx?.guildId
+                guildId: ctx?.guildId,
+                roleId: ctx?.roleId,
+                userId: ctx?.userId
             });
         }
         

@@ -200,14 +200,17 @@ export async function checkRealmEyeVerification(
     // Use the new centralized RealmEye scraper
     const { fetchRealmEyePlayerProfile } = await import('../../services/realmeye/index.js');
     
-    console.log(`[Verification] Checking RealmEye for IGN: "${ign}", looking for code: "${code}"`);
+    logger.debug('Checking RealmEye profile for verification', { 
+        ign, 
+        verificationCode: code.substring(0, 4) + '***' // Mask code for security
+    });
     
     const profile = await fetchRealmEyePlayerProfile(ign);
 
-    console.log(`[Verification] RealmEye result:`, {
+    logger.debug('RealmEye profile fetched', {
+        ign,
         resultCode: profile.resultCode,
         descriptionLinesCount: profile.descriptionLines.length,
-        descriptionLines: profile.descriptionLines,
     });
 
     // Map result codes to the existing return format for backward compatibility
@@ -215,18 +218,13 @@ export async function checkRealmEyeVerification(
         case 'Success': {
             // Join description lines into a single string for the legacy format
             const description = profile.descriptionLines.join('\n');
-            console.log(`[Verification] Full description: "${description}"`);
-            console.log(`[Verification] Looking for code: "${code}"`);
-            
             const found = description.includes(code);
 
-            if (found) {
-                console.log('[Verification] ✅ Code found in description!');
-            } else {
-                console.log('[Verification] ❌ Code NOT found in description');
-                console.log('[Verification] Description length:', description.length);
-                console.log('[Verification] Code length:', code.length);
-            }
+            logger.debug('Verification code search completed', {
+                ign,
+                found,
+                descriptionLength: description.length
+            });
 
             return {
                 found,
@@ -772,7 +770,7 @@ export async function logVerificationEvent(
             const timestamp = Math.floor(Date.now() / 1000);
             const threadName = `Verification - ${user.tag} - <t:${timestamp}:t>`;
             
-            console.log(`[VerificationLog] Creating NEW thread for session: "${threadName}"`);
+            logger.debug('Creating new verification thread', { userId, threadName });
 
             if ('threads' in veriLogChannel) {
                 thread = await veriLogChannel.threads.create({
@@ -798,7 +796,7 @@ export async function logVerificationEvent(
             // EXISTING SESSION - Try to find the most recent thread for this user
             const threadNamePrefix = `Verification - ${user.tag}`;
             
-            console.log(`[VerificationLog] Looking for recent thread starting with: "${threadNamePrefix}"`);
+            logger.debug('Looking for existing verification thread', { userId, threadNamePrefix });
 
             if ('threads' in veriLogChannel) {
                 const activeThreads = await veriLogChannel.threads.fetchActive();
@@ -806,7 +804,7 @@ export async function logVerificationEvent(
                 const userThreads = activeThreads.threads.filter(t => t.name.startsWith(threadNamePrefix));
                 thread = userThreads.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0)).first();
 
-                console.log(`[VerificationLog] Found in active threads: ${!!thread}`);
+                logger.debug('Active thread search result', { userId, found: !!thread });
 
                 // If not in active, check archived
                 if (!thread) {
@@ -814,11 +812,11 @@ export async function logVerificationEvent(
                     const archivedUserThreads = archivedThreads.threads.filter(t => t.name.startsWith(threadNamePrefix));
                     thread = archivedUserThreads.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0)).first();
                     
-                    console.log(`[VerificationLog] Found in archived threads: ${!!thread}`);
+                    logger.debug('Archived thread search result', { userId, found: !!thread });
                     
                     // Unarchive if found
                     if (thread && thread.archived) {
-                        console.log(`[VerificationLog] Unarchiving thread`);
+                        logger.debug('Unarchiving verification thread', { userId, threadId: thread.id });
                         await thread.setArchived(false);
                     }
                 }
@@ -837,7 +835,11 @@ export async function logVerificationEvent(
             }
         }
 
-        console.log(`[VerificationLog] Using thread: ${thread?.name || 'none'}, ID: ${thread?.id || 'none'}`);
+        logger.debug('Verification thread selected', { 
+            userId, 
+            threadName: thread?.name, 
+            threadId: thread?.id 
+        });
 
         // Send the log message to the thread
         if (thread) {

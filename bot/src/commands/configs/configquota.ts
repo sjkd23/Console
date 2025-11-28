@@ -2,10 +2,15 @@ import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
     MessageFlags,
+    Message,
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { BackendError } from '../../lib/utilities/http.js';
 import { buildQuotaConfigPanel } from '../../lib/ui/quota-config-panel.js';
+import { createLogger } from '../../lib/logging/logger.js';
+
+const logger = createLogger('ConfigQuota');
+const CONFIG_PANEL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * /configquota - Configure quota settings for a specific role
@@ -50,10 +55,36 @@ export const configquota: SlashCommand = {
             // Build config panel using helper function
             const { embed, buttons } = await buildQuotaConfigPanel(interaction.guildId!, role.id, interaction.user.id);
 
-            await interaction.editReply({
+            const reply = await interaction.editReply({
                 embeds: [embed],
                 components: buttons,
             });
+
+            // Schedule automatic button removal after 10 minutes
+            setTimeout(async () => {
+                try {
+                    // Fetch the message to ensure it still exists
+                    const message = reply instanceof Message ? reply : await interaction.fetchReply();
+                    
+                    // Remove all components (buttons)
+                    await message.edit({
+                        components: []
+                    });
+
+                    logger.debug('Removed buttons from expired config panel', {
+                        guildId: interaction.guildId,
+                        roleId: role.id,
+                        messageId: message.id
+                    });
+                } catch (err) {
+                    // Message might have been deleted or bot lacks permissions
+                    logger.debug('Could not remove buttons from expired config panel', {
+                        guildId: interaction.guildId,
+                        roleId: role.id,
+                        error: err instanceof Error ? err.message : String(err)
+                    });
+                }
+            }, CONFIG_PANEL_EXPIRY_MS);
 
         } catch (err) {
             console.error('configquota command error:', err);

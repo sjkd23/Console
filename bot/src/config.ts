@@ -8,6 +8,11 @@ const EnvSchema = z.object({
     BACKEND_URL: z.string().url("BACKEND_URL must be a valid URL (e.g. http://backend:4000/v1)"),
     BACKEND_API_KEY: z.string().min(1, "BACKEND_API_KEY is required (must match backend)"),
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    
+    // Member fetching configuration (optional)
+    MEMBER_FETCH_TIMEOUT_MS: z.coerce.number().int().positive().default(10000), // 10 seconds default
+    MEMBER_CACHE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.95), // 95% threshold for cache freshness
+    MEMBER_FETCH_BACKOFF_MS: z.coerce.number().int().positive().default(300000), // 5 minutes backoff after timeout (default: 300000ms)
 });
 
 type EnvConfig = z.infer<typeof EnvSchema>;

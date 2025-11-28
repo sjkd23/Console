@@ -104,10 +104,10 @@ export const RateLimitPresets = {
         errorMessage: '⏱️ **Too many panel actions.** Please wait before performing more organizer actions.'
     } as RateLimitConfig,
 
-    /** Config panel interactions - restrictive (2 per 15s) */
+    /** Config panel interactions - moderate (6 per 10s) */
     BUTTON_CONFIG_PANEL: {
-        maxRequests: 2,
-        windowMs: 15_000,
+        maxRequests: 6,
+        windowMs: 10_000,
         errorMessage: '⏱️ **Config panel rate limit.** Please wait before making more configuration changes.'
     } as RateLimitConfig,
 

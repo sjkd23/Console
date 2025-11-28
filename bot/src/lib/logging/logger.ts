@@ -1,20 +1,62 @@
 /**
  * Centralized logging utility for the Discord bot.
- * Provides consistent formatting with context prefixes and log levels.
+ * Provides structured JSON logging compatible with pino format for better searchability.
  * 
  * Usage:
  *   import { createLogger } from './logger.js';
  *   const logger = createLogger('RunAutoEnd');
- *   logger.info('Checking for expired runs');
- *   logger.error('Failed to process run', { runId, error });
+ *   logger.info('Checking for expired runs', { guildId, count: 5 });
+ *   logger.error('Failed to process run', { runId, error, guildId });
  * 
  * Log levels: debug, info, warn, error
+ * 
+ * Output format matches pino structure:
+ *   { "level": "info", "time": <timestamp>, "context": "QuotaPanel", "msg": "...", ...fields }
  */
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+const LOG_LEVEL_VALUES: Record<LogLevel, number> = {
+  debug: 20,
+  info: 30,
+  warn: 40,
+  error: 50,
+};
+
 interface LogContext {
   [key: string]: unknown;
+}
+
+/**
+ * Sanitizes sensitive data from log context
+ * Masks verification codes, API keys, tokens, passwords
+ */
+function sanitizeContext(data: LogContext): LogContext {
+  const sanitized: LogContext = {};
+  
+  for (const [key, value] of Object.entries(data)) {
+    const lowerKey = key.toLowerCase();
+    
+    // Mask sensitive fields - be specific to avoid over-masking
+    // Only mask verification codes and API codes, not error codes or status codes
+    if ((lowerKey === 'verificationcode' || lowerKey === 'verification_code' || lowerKey === 'code') 
+        && typeof value === 'string' && value.length > 4) {
+      sanitized[key] = value.substring(0, 4) + '***';
+    } else if (lowerKey.includes('token') || lowerKey.includes('password') || lowerKey.includes('secret') || lowerKey.includes('apikey') || lowerKey.includes('api_key')) {
+      sanitized[key] = '***';
+    } else if (value instanceof Error) {
+      // Convert Error objects to structured data
+      sanitized[key] = {
+        message: value.message,
+        name: value.name,
+        stack: value.stack,
+      };
+    } else {
+      sanitized[key] = value;
+    }
+  }
+  
+  return sanitized;
 }
 
 class Logger {
@@ -27,51 +69,49 @@ class Logger {
   }
 
   private shouldLog(level: LogLevel): boolean {
-    const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-    return levels.indexOf(level) >= levels.indexOf(this.minLevel);
+    return LOG_LEVEL_VALUES[level] >= LOG_LEVEL_VALUES[this.minLevel];
   }
 
-  private formatMessage(level: LogLevel, message: string, data?: LogContext): string {
-    const timestamp = new Date().toISOString();
-    const prefix = `[${timestamp}] [${level.toUpperCase()}] [${this.context}]`;
+  /**
+   * Format log message as structured JSON compatible with pino format
+   */
+  private formatStructured(level: LogLevel, message: string, data?: LogContext): string {
+    const logEntry: Record<string, unknown> = {
+      level: LOG_LEVEL_VALUES[level],
+      time: Date.now(),
+      context: this.context,
+      msg: message,
+    };
     
     if (data && Object.keys(data).length > 0) {
-      return `${prefix} ${message} ${JSON.stringify(data)}`;
+      const sanitized = sanitizeContext(data);
+      Object.assign(logEntry, sanitized);
     }
     
-    return `${prefix} ${message}`;
+    return JSON.stringify(logEntry);
   }
 
   debug(message: string, data?: LogContext): void {
     if (this.shouldLog('debug')) {
-      console.log(this.formatMessage('debug', message, data));
+      console.log(this.formatStructured('debug', message, data));
     }
   }
 
   info(message: string, data?: LogContext): void {
     if (this.shouldLog('info')) {
-      console.log(this.formatMessage('info', message, data));
+      console.log(this.formatStructured('info', message, data));
     }
   }
 
   warn(message: string, data?: LogContext): void {
     if (this.shouldLog('warn')) {
-      console.warn(this.formatMessage('warn', message, data));
+      console.warn(this.formatStructured('warn', message, data));
     }
   }
 
   error(message: string, data?: LogContext): void {
     if (this.shouldLog('error')) {
-      // If data contains an error object, log it separately for better stack traces
-      if (data?.error instanceof Error) {
-        console.error(this.formatMessage('error', message, { ...data, error: data.error.message }));
-        console.error(data.error.stack);
-      } else if (data?.err instanceof Error) {
-        console.error(this.formatMessage('error', message, { ...data, err: data.err.message }));
-        console.error(data.err.stack);
-      } else {
-        console.error(this.formatMessage('error', message, data));
-      }
+      console.error(this.formatStructured('error', message, data));
     }
   }
 }

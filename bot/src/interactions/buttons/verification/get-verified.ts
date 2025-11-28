@@ -797,6 +797,7 @@ async function collectScreenshot(
         }
 
         // Update session with screenshot (no IGN yet)
+        // This also extends the expiration to 7 days for staff review
         const updatedSession = await updateSession(guildId, userId, {
             screenshot_url: attachment.url,
             status: 'pending_review',
@@ -804,6 +805,12 @@ async function collectScreenshot(
 
         // Handle case where session no longer exists (expired/cleaned up)
         if (!updatedSession) {
+            console.error('[ManualVerification] Session disappeared during screenshot submission', {
+                guildId,
+                userId,
+                screenshotUrl: attachment.url,
+            });
+            
             await dmChannel.send(
                 '❌ **Verification Session Expired**\n\n' +
                 'Your verification session has expired or was reset. Please click the "Get Verified" button in the server to start a new verification.'
@@ -819,6 +826,13 @@ async function collectScreenshot(
             }
             return;
         }
+        
+        console.log('[ManualVerification] Session updated to pending_review', {
+            guildId,
+            userId,
+            status: updatedSession.status,
+            expiresAt: updatedSession.expires_at,
+        });
 
         // Create ticket in manual-verification channel
         try {

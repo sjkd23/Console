@@ -1,6 +1,7 @@
 // bot/src/lib/scheduled-tasks.ts
 import { Client, EmbedBuilder, type GuildTextBasedChannel, type TextChannel } from 'discord.js';
 import { getJSON, patchJSON, postJSON } from '../utilities/http.js';
+import { OperationContext } from '../utilities/operation-context.js';
 import { createLogger } from '../logging/logger.js';
 import { deleteRunRole } from '../utilities/run-role-manager.js';
 import { updateQuotaPanelsForUser, updateAllQuotaPanels } from '../ui/quota-panel.js';
@@ -482,19 +483,14 @@ async function updateQuotaPanels(client: Client): Promise<void> {
     
     // Process each guild the bot is in
     for (const [guildId, guild] of client.guilds.cache) {
+        // Create a new operation context for each guild to cache API calls within guild processing
+        const ctx = new OperationContext();
+        
         try {
             totalGuilds++;
             
-            // Fetch all quota configs for this guild
-            const configs = await getJSON<{
-                configs: Array<{
-                    guild_id: string;
-                    discord_role_id: string;
-                    required_points: number;
-                    reset_at: string;
-                    panel_message_id: string | null;
-                }>;
-            }>(`/quota/configs/${guildId}`);
+            // Fetch all quota configs for this guild (will be cached in ctx)
+            const configs = await ctx.getQuotaConfigs(guildId);
             
             // Only update panels that have a message_id (i.e., panels that exist)
             const activePanels = configs.configs.filter(c => c.panel_message_id);
@@ -512,14 +508,16 @@ async function updateQuotaPanels(client: Client): Promise<void> {
                 guildName: guild.name
             });
             
-            // Update all panels for this guild
-            await updateAllQuotaPanels(client, guildId);
+            // Update all panels for this guild (using shared ctx for caching)
+            await updateAllQuotaPanels(client, guildId, ctx);
             totalPanels += activePanels.length;
             
+            const stats = ctx.getStats();
             logger.info('Updated quota panels for guild', {
                 guildId,
                 guildName: guild.name,
-                panelCount: activePanels.length
+                panelCount: activePanels.length,
+                cacheHits: stats
             });
         } catch (err) {
             totalFailed++;

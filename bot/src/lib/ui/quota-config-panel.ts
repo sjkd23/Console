@@ -143,32 +143,33 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         });
     }
 
-    // Build action buttons
+    // Build action buttons with creation timestamp for expiry checking (10 minute expiry)
+    const createdAt = Date.now();
     const userIdSuffix = userId ? `:${userId}` : '';
     const buttons1 = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`quota_config_basic:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_config_basic:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Set Basic Config')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('⚙️'),
             new ButtonBuilder()
-                .setCustomId(`quota_config_base_points:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_config_base_points:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Base Points')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('🎯'),
             new ButtonBuilder()
-                .setCustomId(`quota_config_moderation:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_config_moderation:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Moderation Points')
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('✅'),
             new ButtonBuilder()
-                .setCustomId(`quota_config_dungeons:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_config_dungeons:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Configure Dungeons')
                 .setStyle(ButtonStyle.Secondary)
                 .setEmoji('🗺️'),
             new ButtonBuilder()
-                .setCustomId(`quota_refresh_panel:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_refresh_panel:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Update Panel')
                 .setStyle(ButtonStyle.Success)
                 .setEmoji('🔄')
@@ -179,19 +180,19 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
     const buttons2 = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`quota_reset_panel:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_reset_panel:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Reset Panel')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🔁')
                 .setDisabled(!config), // Only enable if config exists
             new ButtonBuilder()
-                .setCustomId(`quota_delete_config:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_delete_config:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Delete Quota')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🗑️')
                 .setDisabled(!config), // Only enable if config exists
             new ButtonBuilder()
-                .setCustomId(`quota_config_stop:${roleId}${userIdSuffix}`)
+                .setCustomId(`quota_config_stop:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Stop')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🛑')

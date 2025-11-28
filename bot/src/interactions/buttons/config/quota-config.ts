@@ -4,6 +4,7 @@ import {
     TextInputBuilder,
     TextInputStyle,
     ActionRowBuilder,
+    ButtonBuilder,
     EmbedBuilder,
     MessageFlags,
     PermissionFlagsBits,
@@ -17,6 +18,85 @@ import { DUNGEON_DATA } from '../../../constants/dungeons/DungeonData.js';
 import { updateQuotaPanel } from '../../../lib/ui/quota-panel.js';
 import { formatPoints } from '../../../lib/utilities/format-helpers.js';
 import { buildQuotaConfigPanel } from '../../../lib/ui/quota-config-panel.js';
+import { createLogger } from '../../../lib/logging/logger.js';
+
+const logger = createLogger('QuotaConfig');
+
+/**
+ * Config panels expire after 10 minutes to prevent stale interactions
+ */
+const CONFIG_PANEL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Helper function to check if a config panel has expired.
+ * Config panels include a creation timestamp in their customId.
+ * 
+ * @param customId - The button customId (format: "prefix:roleId:timestamp:userId?")
+ * @returns Object with `expired` boolean, `createdAt` timestamp, and `secondsAgo`
+ */
+function checkPanelExpiry(customId: string): { expired: boolean; createdAt: number; secondsAgo: number } {
+    const parts = customId.split(':');
+    // Format: "quota_config_basic:roleId:timestamp:userId?" or "quota_config_basic:roleId:timestamp"
+    const createdAt = parseInt(parts[2], 10);
+    
+    if (isNaN(createdAt)) {
+        // Old format without timestamp - treat as expired
+        logger.warn('Config panel customId missing timestamp - treating as expired', { customId });
+        return { expired: true, createdAt: 0, secondsAgo: Infinity };
+    }
+    
+    const now = Date.now();
+    const age = now - createdAt;
+    const expired = age > CONFIG_PANEL_EXPIRY_MS;
+    
+    return { 
+        expired, 
+        createdAt, 
+        secondsAgo: Math.floor(age / 1000) 
+    };
+}
+
+/**
+ * Handle expired panel interaction: silently ignore and remove buttons if they're still present.
+ * 
+ * @param interaction - The button interaction
+ * @param expiryCheck - Result from checkPanelExpiry
+ */
+async function handleExpiredPanel(interaction: ButtonInteraction, expiryCheck: ReturnType<typeof checkPanelExpiry>): Promise<void> {
+    logger.info('Config panel expired - removing buttons', {
+        guildId: interaction.guildId,
+        userId: interaction.user.id,
+        customId: interaction.customId,
+        secondsAgo: expiryCheck.secondsAgo
+    });
+
+    // Remove all buttons on the message (if not already removed)
+    try {
+        if (interaction.message.components.length > 0) {
+            await interaction.update({
+                components: []
+            });
+
+            logger.debug('Removed buttons from expired config panel', {
+                guildId: interaction.guildId,
+                messageId: interaction.message.id
+            });
+        } else {
+            // Buttons already removed by timer, just acknowledge the interaction
+            await interaction.deferUpdate();
+        }
+    } catch (err) {
+        logger.warn('Failed to remove buttons from expired panel', {
+            guildId: interaction.guildId,
+            messageId: interaction.message.id,
+            error: err instanceof Error ? err.message : String(err)
+        });
+        // Fallback: try to defer update to avoid "interaction failed"
+        try {
+            await interaction.deferUpdate();
+        } catch { }
+    }
+}
 
 /**
  * Helper function to build the dungeon selection dropdown panel
@@ -102,9 +182,17 @@ async function buildDungeonSelectorPanel(guildId: string, roleId: string): Promi
  * Opens a modal to set required points and reset datetime
  */
 export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -269,9 +357,17 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
  * Opens a modal to set moderation points (verification points)
  */
 export async function handleQuotaConfigModeration(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -481,9 +577,17 @@ export async function handleQuotaModerationModal(interaction: ModalSubmitInterac
  * Opens a modal to set base exalt and non-exalt dungeon points
  */
 export async function handleQuotaConfigBasePoints(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -639,9 +743,17 @@ export async function handleQuotaBasePointsModal(interaction: ModalSubmitInterac
  * Split into Exaltation, Misc 1, and Misc 2 to handle Discord's 25-option limit
  */
 export async function handleQuotaConfigDungeons(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -860,9 +972,17 @@ export async function handleQuotaDungeonModal(interaction: ModalSubmitInteractio
  * This ensures the panel reflects current point values even if configuration changed.
  */
 export async function handleQuotaRefreshPanel(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -926,9 +1046,17 @@ export async function handleQuotaRefreshPanel(interaction: ButtonInteraction) {
  * Deletes the old panel and creates a fresh one with current settings
  */
 export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -1018,7 +1146,7 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
             `• New panel created in quota channel`
         );
     } catch (err) {
-        console.error('Failed to reset quota panel:', err);
+        logger.error('Failed to reset quota panel', { err, guildId: interaction.guildId, roleId });
         const msg = err instanceof BackendError ? err.message : 'Unknown error';
         await interaction.editReply(`❌ Failed to reset panel: ${msg}`);
     }
@@ -1029,9 +1157,17 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
  * Deletes the entire quota configuration for this role, including the panel
  */
 export async function handleQuotaDeleteConfig(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
@@ -1120,9 +1256,17 @@ export async function handleQuotaDeleteConfig(interaction: ButtonInteraction) {
  * Removes the interactive buttons but keeps the panel embed visible
  */
 export async function handleQuotaConfigStop(interaction: ButtonInteraction) {
+    // Check panel expiry first
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
     const customIdParts = interaction.customId.split(':');
     const roleId = customIdParts[1];
-    const authorizedUserId = customIdParts.length > 2 ? customIdParts[2] : null;
+    // customIdParts[2] is the timestamp
+    const authorizedUserId = customIdParts.length > 3 ? customIdParts[3] : null;
 
     if (!roleId) {
         await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });

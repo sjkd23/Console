@@ -4,7 +4,9 @@ import {
     TextChannel,
     Message,
 } from 'discord.js';
-import { getQuotaLeaderboard, getGuildChannels, updateQuotaRoleConfig, getJSON, getQuotaRoleConfig } from '../utilities/http.js';
+import { getQuotaLeaderboard, updateQuotaRoleConfig, getJSON, BackendError } from '../utilities/http.js';
+import { OperationContext } from '../utilities/operation-context.js';
+import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
 import { createLogger } from '../logging/logger.js';
 import { formatPoints } from '../utilities/format-helpers.js';
 
@@ -12,6 +14,11 @@ const logger = createLogger('QuotaPanel');
 
 /**
  * Update or create a quota leaderboard panel for a specific role
+ * @param client Discord client
+ * @param guildId Guild ID
+ * @param roleId Role ID
+ * @param config Quota configuration
+ * @param ctx Operation context for caching API calls (optional, creates new if not provided)
  */
 export async function updateQuotaPanel(
     client: Client,
@@ -23,11 +30,15 @@ export async function updateQuotaPanel(
         required_points: number;
         reset_at: string;
         panel_message_id: string | null;
-    }
+    },
+    ctx?: OperationContext
 ): Promise<void> {
+    // Create context if not provided (for backwards compatibility)
+    const opCtx = ctx || new OperationContext();
+    
     try {
-        // Get quota channel
-        const channels = await getGuildChannels(guildId);
+        // Get quota channel (use cached if available)
+        const channels = await opCtx.getGuildChannels(guildId);
         const quotaChannelId = channels.channels['quota'];
         
         if (!quotaChannelId) {
@@ -54,34 +65,36 @@ export async function updateQuotaPanel(
             return;
         }
 
-        // Fetch guild members to ensure role.members is populated
-        // Use a timeout to prevent hanging on large servers
-        logger.debug('Fetching guild members to populate role cache', { guildId, roleId });
-        try {
-            // Race between fetching members and a 10-second timeout
-            await Promise.race([
-                guild.members.fetch(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Fetch timeout')), 10000))
-            ]);
-            logger.debug('Successfully fetched all guild members', { guildId, roleId });
-        } catch (err) {
-            logger.warn('Failed to fetch all members within timeout, using cached members', { 
-                guildId, 
-                roleId, 
-                cachedCount: role.members.size,
-                err: String(err) 
-            });
-        }
+        // Fetch role members using smart caching strategy
+        const { memberIds, fetchResult } = await getRoleMembersWithCache(role);
         
-        const memberIds = role.members.map(m => m.id);
-        logger.info('Collected role members for leaderboard', { guildId, roleId, roleName: role.name, memberCount: memberIds.length });
+        logger.info('Collected role members for leaderboard', { 
+            guildId, 
+            roleId, 
+            roleName: role.name, 
+            memberCount: memberIds.length,
+            fetchSource: fetchResult.source,
+            fetchSuccess: fetchResult.success
+        });
         
         // Get leaderboard data
         const result = await getQuotaLeaderboard(guildId, roleId, memberIds);
         logger.debug('Received leaderboard data', { guildId, roleId, entryCount: result.leaderboard.length });
         
-        // Get quota config for base points and dungeon overrides
-        const configResult = await getQuotaRoleConfig(guildId, roleId);
+        // Get quota config for base points and dungeon overrides (use cached if available)
+        let configResult;
+        try {
+            configResult = await opCtx.getQuotaRoleConfig(guildId, roleId);
+        } catch (err) {
+            // Handle 404 gracefully - role may not have detailed config yet
+            if (err instanceof BackendError && err.status === 404) {
+                logger.debug('No detailed quota config found for role (using defaults)', { guildId, roleId });
+                configResult = { config: null, dungeon_overrides: {} };
+            } else {
+                // Re-throw unexpected errors
+                throw err;
+            }
+        }
         
         // If config is null, use defaults
         const quotaConfig = configResult.config || {
@@ -282,28 +295,27 @@ function buildLeaderboardEmbed(
 
 /**
  * Update all quota panels for a guild
+ * @param client Discord client
+ * @param guildId Guild ID
+ * @param ctx Operation context for caching API calls (optional, creates new if not provided)
  */
-export async function updateAllQuotaPanels(client: Client, guildId: string): Promise<void> {
+export async function updateAllQuotaPanels(client: Client, guildId: string, ctx?: OperationContext): Promise<void> {
+    // Create context if not provided (for backwards compatibility)
+    const opCtx = ctx || new OperationContext();
+    
     try {
-        // Fetch all quota configs for the guild
-        const configs = await getJSON<{
-            configs: Array<{
-                guild_id: string;
-                discord_role_id: string;
-                required_points: number;
-                reset_at: string;
-                panel_message_id: string | null;
-            }>;
-        }>(`/quota/configs/${guildId}`);
+        // Fetch all quota configs for the guild (cached within this operation)
+        const configs = await opCtx.getQuotaConfigs(guildId);
 
         // Update each panel
         for (const config of configs.configs) {
             if (config.panel_message_id) {
-                await updateQuotaPanel(client, guildId, config.discord_role_id, config);
+                await updateQuotaPanel(client, guildId, config.discord_role_id, config, opCtx);
             }
         }
 
-        logger.info('Updated all quota panels', { guildId, panelCount: configs.configs.length });
+        const stats = opCtx.getStats();
+        logger.info('Updated all quota panels', { guildId, panelCount: configs.configs.length, cacheHits: stats });
     } catch (err) {
         logger.error('Failed to update all quota panels', { guildId, err });
     }
@@ -311,12 +323,20 @@ export async function updateAllQuotaPanels(client: Client, guildId: string): Pro
 
 /**
  * Update quota panels for roles that a specific user has
+ * @param client Discord client
+ * @param guildId Guild ID
+ * @param userId User ID
+ * @param ctx Operation context for caching API calls (optional, creates new if not provided)
  */
 export async function updateQuotaPanelsForUser(
     client: Client,
     guildId: string,
-    userId: string
+    userId: string,
+    ctx?: OperationContext
 ): Promise<void> {
+    // Create context if not provided (for backwards compatibility)
+    const opCtx = ctx || new OperationContext();
+    
     try {
         logger.debug('Starting panel update for user', { guildId, userId });
         
@@ -332,16 +352,8 @@ export async function updateQuotaPanelsForUser(
             return;
         }
 
-        // Fetch all quota configs for the guild
-        const configs = await getJSON<{
-            configs: Array<{
-                guild_id: string;
-                discord_role_id: string;
-                required_points: number;
-                reset_at: string;
-                panel_message_id: string | null;
-            }>;
-        }>(`/quota/configs/${guildId}`);
+        // Fetch all quota configs for the guild (cached within this operation)
+        const configs = await opCtx.getQuotaConfigs(guildId);
 
         logger.debug('Found quota configs', { guildId, configCount: configs.configs.length });
 
@@ -350,13 +362,14 @@ export async function updateQuotaPanelsForUser(
         for (const config of configs.configs) {
             if (member.roles.cache.has(config.discord_role_id)) {
                 logger.debug('Updating panel for user role', { guildId, userId, roleId: config.discord_role_id });
-                await updateQuotaPanel(client, guildId, config.discord_role_id, config);
+                await updateQuotaPanel(client, guildId, config.discord_role_id, config, opCtx);
                 updatedCount++;
             }
         }
 
         if (updatedCount > 0) {
-            logger.info('Updated quota panels for user', { guildId, userId, updatedCount });
+            const stats = opCtx.getStats();
+            logger.info('Updated quota panels for user', { guildId, userId, updatedCount, cacheHits: stats });
         } else {
             logger.debug('No panels updated for user', { guildId, userId });
         }

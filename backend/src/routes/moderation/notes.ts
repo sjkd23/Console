@@ -8,6 +8,9 @@ import { Errors } from '../../lib/errors/errors.js';
 import { logAudit } from '../../lib/logging/audit.js';
 import { requireSecurity } from '../../lib/auth/authorization.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
+import { createLogger } from '../../lib/logging/logger.js';
+
+const logger = createLogger('Notes');
 
 /**
  * Schema for creating a note
@@ -30,10 +33,7 @@ export default async function notesRoutes(app: FastifyInstance) {
         const parsed = CreateNoteBody.safeParse(req.body);
 
         if (!parsed.success) {
-            console.error('[Notes] Validation failed for POST /notes:', {
-                issues: parsed.error.issues,
-                body: req.body,
-            });
+            logger.error({ issues: parsed.error.issues, body: req.body }, 'Validation failed for POST /notes');
             const msg = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
             return Errors.validation(reply, msg || 'Invalid request');
         }
@@ -44,7 +44,7 @@ export default async function notesRoutes(app: FastifyInstance) {
         try {
             await requireSecurity(guild_id, actor_user_id, actor_roles);
         } catch (err) {
-            console.log(`[Notes] User ${actor_user_id} in guild ${guild_id} denied - not security`);
+            logger.warn({ actorUserId: actor_user_id, guildId: guild_id }, 'User denied - not security');
             throw err;
         }
 
@@ -89,7 +89,7 @@ export default async function notesRoutes(app: FastifyInstance) {
                 created_at: note.created_at,
             });
         } catch (err) {
-            console.error('[Notes] Failed to create note:', err);
+            logger.error({ err, guildId: guild_id, userId: user_id }, 'Failed to create note');
             return Errors.internal(reply, 'Failed to create note');
         }
     });
@@ -134,7 +134,7 @@ export default async function notesRoutes(app: FastifyInstance) {
 
             return reply.send(result.rows[0]);
         } catch (err) {
-            console.error('[Notes] Failed to get note:', err);
+            logger.error({ err, noteId: id }, 'Failed to get note');
             return Errors.internal(reply, 'Failed to retrieve note');
         }
     });
@@ -177,8 +177,8 @@ export default async function notesRoutes(app: FastifyInstance) {
                 notes: result.rows,
             });
         } catch (err) {
-            console.error('[Notes] Failed to get user notes:', err);
-            return Errors.internal(reply, 'Failed to retrieve notes');
+            logger.error({ err, guildId: guild_id, userId: user_id }, 'Failed to get user notes');
+            return Errors.internal(reply, 'Failed to retrieve user notes');
         }
     });
 
@@ -240,7 +240,7 @@ export default async function notesRoutes(app: FastifyInstance) {
             try {
                 await requireSecurity(note.guild_id, actor_user_id, actor_roles);
             } catch (err) {
-                console.log(`[Notes] User ${actor_user_id} denied note removal - not security`);
+                logger.warn({ actorUserId: actor_user_id, noteId: id }, 'User denied note removal - not security');
                 throw err;
             }
 
@@ -271,7 +271,7 @@ export default async function notesRoutes(app: FastifyInstance) {
                 removal_reason,
             });
         } catch (err) {
-            console.error('[Notes] Failed to remove note:', err);
+            logger.error({ err, noteId: id }, 'Failed to remove note');
             return Errors.internal(reply, 'Failed to remove note');
         }
     });

@@ -87,6 +87,12 @@ async function handleVerificationApproveInternal(interaction: ButtonInteraction,
         const session = await getSessionByUserId(userId);
 
         if (!session) {
+            console.error('[VerificationApprove] Session not found', {
+                userId,
+                requestedBy: interaction.user.id,
+                timestamp: new Date().toISOString(),
+            });
+            
             await interaction.reply({
                 content: '❌ **Session Not Found**\n\n' +
                 'Verification session not found. It may have been cancelled or expired.',
@@ -94,6 +100,14 @@ async function handleVerificationApproveInternal(interaction: ButtonInteraction,
             });
             return;
         }
+        
+        console.log('[VerificationApprove] Session found', {
+            userId,
+            guildId: session.guild_id,
+            status: session.status,
+            expiresAt: session.expires_at,
+            createdAt: session.created_at,
+        });
 
         if (session.status !== 'pending_review') {
             await interaction.reply({
@@ -165,12 +179,26 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
         const session = await getSessionByUserId(userId);
 
         if (!session) {
+            console.error('[VerificationDeny] Session not found', {
+                userId,
+                requestedBy: interaction.user.id,
+                timestamp: new Date().toISOString(),
+            });
+            
             await interaction.editReply(
                 '❌ **Session Not Found**\n\n' +
-                'Verification session not found. It may have been cancelled or expired.'
+                'Verification session not found. It may have already been processed or cancelled.'
             );
             return;
         }
+        
+        console.log('[VerificationDeny] Session found', {
+            userId,
+            guildId: session.guild_id,
+            status: session.status,
+            expiresAt: session.expires_at,
+            createdAt: session.created_at,
+        });
 
         if (session.status !== 'pending_review') {
             await interaction.editReply(
@@ -553,10 +581,12 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 await message.delete();
             } catch {}
 
-            // Clean up session after delay
-            setTimeout(() => {
-                deleteSession(guildId, userId).catch(console.error);
-            }, 60000);
+            // Clean up session immediately after denial
+            try {
+                await deleteSession(guildId, userId);
+            } catch (err) {
+                console.error('[VerificationDeny] Failed to delete session:', err);
+            }
         });
 
         collector.on('end', async (collected: ReadonlyCollection<string, Message>, reason: string) => {
@@ -612,14 +642,16 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 });
 
                 await interaction.followUp({
-                    content: `⏱️ **Timeout**\n\nNo reason provided. <@${userId}> has been notified of denial.`,
+                    content: `⏱️ **Timeout**\n\nNo reason provided. <@${userId}> has been notified.`,
                     ephemeral: true,
                 });
 
-                // Clean up session
-                setTimeout(() => {
-                    deleteSession(guildId, userId).catch(console.error);
-                }, 60000);
+                // Clean up session immediately after timeout denial
+                try {
+                    await deleteSession(guildId, userId);
+                } catch (err) {
+                    console.error('[VerificationDeny] Failed to delete session:', err);
+                }
             }
         });
     } catch (err) {
