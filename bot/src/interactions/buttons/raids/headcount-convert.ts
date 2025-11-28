@@ -32,6 +32,7 @@ import { clearHeadcountPanels } from '../../../lib/state/headcount-panel-tracker
 import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-tracker.js';
 import { createRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { createLogger } from '../../../lib/logging/logger.js';
+import { buildRunOrganizerPanelContent } from './organizer-panel.js';
 
 export async function handleHeadcountConvert(btn: ButtonInteraction, publicMessageId: string) {
     // CRITICAL: Wrap in mutex to prevent concurrent conversion
@@ -437,66 +438,25 @@ async function convertHeadcountToRun(
     // This prevents the "multiple runs" error when using /taken after converting a headcount
     unregisterHeadcount(interaction.guild.id, organizerId);
 
-    // Build the run organizer panel (matching current format from organizer-panel.ts)
-    const runOrgPanelEmbed = new EmbedBuilder()
-        .setTitle(`Organizer Panel — ${dungeon.dungeonName}`)
-        .setTimestamp(new Date());
+    // Build the run organizer panel using the shared function
+    // This ensures consistency with /run command and shows headcount keys properly
+    const panelContent = await buildRunOrganizerPanelContent(runId, interaction.guild.id);
+    
+    if (!panelContent) {
+        // Run doesn't exist or has ended (shouldn't happen, but handle gracefully)
+        await interaction.editReply({
+            content: '❌ Failed to create organizer panel for the converted run.',
+            embeds: [],
+            components: []
+        });
+        return;
+    }
 
-    // Build description with success message and link to new run panel
+    // Show success message first
     const raidPanelUrl = `https://discord.com/channels/${interaction.guild.id}/${newRunMessage.channelId}/${newRunMessage.id}`;
-    let description = `✅ **Headcount converted to run!**\n\n[Jump to Raid Panel](${raidPanelUrl})\n\nManage the raid with the controls below.`;
-
-    runOrgPanelEmbed.setDescription(description);
-
-    // Starting phase controls (matching organizer-panel.ts format)
-    // Row 1: Start, Cancel
-    const orgRow1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`run:start:${runId}`)
-            .setLabel('Start')
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId(`run:cancel:${runId}`)
-            .setLabel('Cancel')
-            .setStyle(ButtonStyle.Danger)
-    );
-    
-    // Row 2: Set Party/Loc + Chain Amount (if not Oryx 3)
-    const orgRow2Components = [
-        new ButtonBuilder()
-            .setCustomId(`run:setpartyloc:${runId}`)
-            .setLabel('Set Party/Loc')
-            .setStyle(ButtonStyle.Secondary)
-    ];
-    
-    if (dungeon.codeName !== 'ORYX_3') {
-        orgRow2Components.push(
-            new ButtonBuilder()
-                .setCustomId(`run:setchain:${runId}`)
-                .setLabel('Chain Amount')
-                .setStyle(ButtonStyle.Secondary)
-        );
-    }
-    
-    const orgRow2 = new ActionRowBuilder<ButtonBuilder>().addComponents(...orgRow2Components);
-    
-    const controls = [orgRow1, orgRow2];
-    
-    // Row 3: Screenshot button for Oryx 3
-    if (dungeon.codeName === 'ORYX_3') {
-        const screenshotRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`run:screenshot:${runId}`)
-                .setLabel('📸 Submit Screenshot')
-                .setStyle(ButtonStyle.Secondary)
-        );
-        controls.push(screenshotRow);
-    }
-
-    // Update the conversion button interaction to show success message
     const successEmbed = new EmbedBuilder()
         .setTitle('✅ Headcount Converted!')
-        .setDescription(`Headcount converted to run. See the new organizer panel below.\n\n[Jump to Raid Panel](${raidPanelUrl})`)
+        .setDescription(`Headcount converted to run. See your organizer panel below.\n\n[Jump to Raid Panel](${raidPanelUrl})`)
         .setColor(0x00FF00)
         .setTimestamp(new Date());
 
@@ -514,24 +474,20 @@ async function convertHeadcountToRun(
         });
     }
 
-    // Then send the run organizer panel as a NEW followUp
-    // This creates a proper panel that can be registered and auto-refreshed
+    // Send the run organizer panel as a follow-up
+    // Uses the same content as the /run command auto-popup
     const panelMessage = await interaction.followUp({
-        embeds: [runOrgPanelEmbed],
-        components: controls,
-        flags: MessageFlags.Ephemeral
+        embeds: panelContent.embeds,
+        components: panelContent.components,
+        flags: MessageFlags.Ephemeral,
+        fetchReply: true
     });
 
-    // Create a wrapper interaction for the followUp so it can be registered
-    // We'll use a pseudo-interaction that points to this followUp message
-    const panelInteraction = {
-        ...interaction,
-        id: panelMessage.id, // Use the message ID as interaction ID
-        async editReply(options: any) {
-            return await panelMessage.edit(options);
-        }
-    } as any;
-    
-    // Register this panel for auto-refresh
-    registerOrganizerPanel(runId.toString(), interaction.user.id, panelInteraction);
+    // Register this panel for auto-refresh using a followup handle
+    // This is the correct way to track ephemeral follow-ups for live updates
+    registerOrganizerPanel(runId.toString(), interaction.user.id, {
+        type: 'followup',
+        webhook: interaction.webhook,
+        messageId: panelMessage.id
+    });
 }

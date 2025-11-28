@@ -19,10 +19,11 @@ import { registerOrganizerPanel, RunOrganizerPanelHandle } from '../../../lib/st
 /**
  * Build the organizer panel content (embed and components) for a run.
  * This is a pure function that doesn't interact with Discord directly.
+ * EXPORTED for use by headcount-convert.ts to create consistent organizer panels.
  * 
  * @returns Object with embed and components to display, or null if run has ended
  */
-async function buildRunOrganizerPanelContent(
+export async function buildRunOrganizerPanelContent(
     runId: number,
     guildId: string,
     confirmationMessage?: string

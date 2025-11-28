@@ -17,7 +17,7 @@ import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
-import { registerHeadcountPanel } from '../../../lib/state/headcount-panel-tracker.js';
+import { registerHeadcountPanel, HeadcountOrganizerPanelHandle } from '../../../lib/state/headcount-panel-tracker.js';
 
 /**
  * Format key type for user-friendly display
@@ -137,28 +137,42 @@ function buildHeadcountOrganizerPanelContent(
 }
 
 /**
- * Update a headcount organizer panel message with current data.
- * This is interaction-agnostic - it just edits a Message object.
+ * Update a headcount organizer panel using the appropriate edit method based on handle type.
+ * This fixes the "Unknown Message" error by using the correct Discord API method for each panel type.
  * 
- * @param message The ephemeral message to update
+ * @param handle The panel handle (knows whether to use editReply, webhook.editMessage, or message.edit)
  * @param publicMsg The public headcount message
  * @param embed The headcount embed
  * @param dungeonCodes The dungeon codes for this headcount
  */
 export async function updateHeadcountOrganizerPanel(
-    message: Message,
+    handle: HeadcountOrganizerPanelHandle,
     publicMsg: Message,
     embed: EmbedBuilder,
     dungeonCodes: string[]
 ): Promise<void> {
     try {
         const content = buildHeadcountOrganizerPanelContent(publicMsg, embed, dungeonCodes);
-        await message.edit({
+        
+        // Update the panel with fresh content using the correct edit method
+        const updateContent = {
             embeds: content.embeds,
             components: content.components
-        });
+        };
+
+        switch (handle.type) {
+            case 'interactionReply':
+                await handle.interaction.editReply(updateContent);
+                break;
+            case 'followup':
+                await handle.webhook.editMessage(handle.messageId, updateContent);
+                break;
+            case 'publicMessage':
+                await handle.message.edit(updateContent);
+                break;
+        }
     } catch (err) {
-        // Message might be deleted or ephemeral expired
+        // Panel might be deleted or ephemeral expired
         console.error('Failed to update headcount organizer panel:', err);
     }
 }
@@ -179,23 +193,25 @@ export async function showHeadcountPanel(
     const content = buildHeadcountOrganizerPanelContent(publicMsg, embed, dungeonCodes);
 
     // Send or update the panel
-    let panelMessage: Message;
     if (interaction.deferred || interaction.replied) {
-        panelMessage = await interaction.editReply({
+        await interaction.editReply({
             embeds: content.embeds,
             components: content.components
-        }) as Message;
+        });
     } else {
-        panelMessage = await interaction.reply({
+        await interaction.reply({
             embeds: content.embeds,
             components: content.components,
-            flags: MessageFlags.Ephemeral,
-            fetchReply: true
-        }) as Message;
+            flags: MessageFlags.Ephemeral
+        });
     }
     
     // Register this panel for auto-refresh when keys are reacted
-    registerHeadcountPanel(publicMsg.id, panelMessage);
+    // Store as an interactionReply handle since this was created via interaction.reply()
+    registerHeadcountPanel(publicMsg.id, {
+        type: 'interactionReply',
+        interaction
+    });
 }
 
 export async function handleHeadcountOrganizerPanel(btn: ButtonInteraction, panelTimestamp: string) {
@@ -362,4 +378,46 @@ export async function handleHeadcountOrganizerPanelDeny(btn: ButtonInteraction, 
         embeds: [],
         components: []
     });
+}
+
+/**
+ * Create and send a headcount organizer panel as a follow-up message (for auto-popup after headcount creation).
+ * This allows the organizer to immediately manage the headcount after creating it.
+ * 
+ * @param interaction The command interaction (must have been replied to already)
+ * @param publicMsg The public headcount message that was posted
+ * @param embed The headcount embed
+ * @param dungeonCodes The dungeon codes for this headcount
+ */
+export async function sendHeadcountOrganizerPanelAsFollowUp(
+    interaction: ChatInputCommandInteraction,
+    publicMsg: Message,
+    embed: EmbedBuilder,
+    dungeonCodes: string[]
+): Promise<void> {
+    try {
+        // Build panel content
+        const content = buildHeadcountOrganizerPanelContent(publicMsg, embed, dungeonCodes);
+
+        // Send as ephemeral follow-up and get the Message object
+        const panelMessage = await interaction.followUp({
+            embeds: content.embeds,
+            components: content.components,
+            flags: MessageFlags.Ephemeral,
+            fetchReply: true // Get the message ID for later editing
+        }) as Message;
+
+        // Register this panel for live updates
+        // Store as a followup handle since this was created via interaction.followUp()
+        // This is the KEY fix: followup messages must be edited via webhook.editMessage(), not message.edit()
+        registerHeadcountPanel(publicMsg.id, {
+            type: 'followup',
+            webhook: interaction.webhook,
+            messageId: panelMessage.id
+        });
+
+    } catch (err) {
+        // Silently fail - organizer can open panel manually if needed
+        console.error('Failed to send headcount organizer panel as follow-up:', err);
+    }
 }

@@ -29,6 +29,7 @@ import {
 } from '../../lib/utilities/organizer-activity-checker.js';
 import { fetchConfiguredRaidChannel } from '../../lib/utilities/channel-helpers.js';
 import { buildRunMessageContent } from '../../lib/utilities/run-message-helpers.js';
+import { sendHeadcountOrganizerPanelAsFollowUp } from '../../interactions/buttons/raids/headcount-organizer-panel.js';
 
 const logger = createLogger('Headcount');
 
@@ -516,6 +517,26 @@ async function createHeadcountPanel(
             content: `✅ Headcount created: ${sent.url}`,
             components: []
         });
+
+        // Show the organizer panel automatically as a followUp
+        // This allows the organizer to immediately manage the headcount
+        // Extract dungeon codes from the button components for the auto-popup panel
+        const dungeonCodes: string[] = [];
+        for (const row of sent.components) {
+            if ('components' in row) {
+                for (const component of row.components) {
+                    if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
+                        const parts = component.customId.split(':');
+                        const dungeonCode = parts[3];
+                        if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
+                            dungeonCodes.push(dungeonCode);
+                        }
+                    }
+                }
+            }
+        }
+        
+        await sendHeadcountOrganizerPanelAsFollowUp(interaction, sent, embed, dungeonCodes);
 
     } catch (err) {
         // Error creating headcount

@@ -282,10 +282,10 @@ export async function handleHeadcountKey(
             }
         }
         
-        // Update all registered panel messages
-        for (const panelMessage of activePanels) {
+        // Update all registered panel handles
+        for (const handle of activePanels) {
             try {
-                await updateHeadcountOrganizerPanel(panelMessage, msg, embed, dungeonCodes);
+                await updateHeadcountOrganizerPanel(handle, msg, embed, dungeonCodes);
             } catch (e) {
                 console.error('Failed to refresh headcount organizer panel:', e);
             }

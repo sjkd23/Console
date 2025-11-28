@@ -8,7 +8,7 @@ import { setEmbedField } from '../../../lib/ui/embed-builders.js';
 import { getParticipants, updateParticipantsList, getOrganizerId } from '../../../lib/state/headcount-state.js';
 import { logRaidJoin } from '../../../lib/logging/raid-logger.js';
 import { getActiveHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
-import { showHeadcountPanel } from './headcount-organizer-panel.js';
+import { updateHeadcountOrganizerPanel } from './headcount-organizer-panel.js';
 
 /**
  * Handle join button click for headcount panel.
@@ -100,14 +100,12 @@ export async function handleHeadcountJoin(btn: ButtonInteraction, panelTimestamp
             }
         }
         
-        const organizerId = getOrganizerId(embed);
-        if (organizerId) {
-            for (const panelInteraction of activePanels) {
-                try {
-                    await showHeadcountPanel(panelInteraction, msg, embed, organizerId, dungeonCodes);
-                } catch (e) {
-                    console.error('Failed to refresh headcount organizer panel on join/leave:', e);
-                }
+        // Update all registered panel handles
+        for (const handle of activePanels) {
+            try {
+                await updateHeadcountOrganizerPanel(handle, msg, embed, dungeonCodes);
+            } catch (e) {
+                console.error('Failed to refresh headcount organizer panel on join/leave:', e);
             }
         }
     }

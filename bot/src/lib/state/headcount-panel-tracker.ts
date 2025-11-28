@@ -1,41 +1,63 @@
 /**
  * Tracks active headcount organizer panels for auto-refresh when keys are reacted.
  * 
- * REFACTORED: Now stores Message objects instead of Interaction objects.
- * This allows both button-spawned panels and auto-popup panels to be tracked
- * using the same mechanism, without needing to create mock interaction objects.
+ * REFACTORED: Now stores HeadcountOrganizerPanelHandle objects that know how to edit themselves.
+ * This allows ephemeral follow-ups (from auto-popup) and ephemeral replies (from buttons)
+ * to be edited correctly, fixing the Discord API "Unknown Message" error.
  */
 
-import { ButtonInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, Message } from 'discord.js';
+import { ButtonInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, Message, InteractionWebhook } from 'discord.js';
 
 /**
- * Map of headcount message ID to array of active organizer panel Message objects.
+ * Handle type for headcount organizer panels, abstracting over different edit methods.
+ * 
+ * - `interactionReply`: Panel created via interaction.reply() - edit via interaction.editReply()
+ * - `followup`: Panel created via interaction.followUp() - edit via webhook.editMessage(messageId)
+ * - `publicMessage`: Panel in a regular channel - edit via message.edit()
+ */
+export type HeadcountOrganizerPanelHandle =
+    | {
+        type: 'interactionReply';
+        interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction;
+    }
+    | {
+        type: 'followup';
+        webhook: InteractionWebhook;
+        messageId: string;
+    }
+    | {
+        type: 'publicMessage';
+        message: Message<true>;
+    };
+
+/**
+ * Map of headcount message ID to array of active organizer panel handles.
  * When a key is reacted on a headcount, all tracked panels for that message ID are refreshed.
  */
-const activeHeadcountPanels = new Map<string, Array<Message>>();
+const activeHeadcountPanels = new Map<string, Array<HeadcountOrganizerPanelHandle>>();
 
 /**
  * Register a headcount organizer panel for auto-refresh.
  * When keys are reacted on this headcount, this panel will be updated.
  * 
  * @param publicMessageId The ID of the public headcount message
- * @param message The ephemeral organizer panel message (from interaction.reply or interaction.followUp with fetchReply: true)
+ * @param handle The panel handle that knows how to edit itself
  */
 export function registerHeadcountPanel(
     publicMessageId: string, 
-    message: Message
+    handle: HeadcountOrganizerPanelHandle
 ): void {
     const existing = activeHeadcountPanels.get(publicMessageId) || [];
-    existing.push(message);
+    existing.push(handle);
     activeHeadcountPanels.set(publicMessageId, existing);
 }
 
 /**
- * Get all active organizer panel messages for a headcount message.
+ * Get all active organizer panel handles for a headcount message.
  * @param publicMessageId The ID of the public headcount message
- * @returns Array of Message objects to refresh
+ * @returns Array of handles that know how to edit themselves
  */
-export function getActiveHeadcountPanels(publicMessageId: string): Array<Message> {
+export function getActiveHeadcountPanels(publicMessageId: string): Array<HeadcountOrganizerPanelHandle> {
     return activeHeadcountPanels.get(publicMessageId) || [];
 }
 
@@ -48,18 +70,19 @@ export function clearHeadcountPanels(publicMessageId: string): void {
 }
 
 /**
- * Remove a specific panel message (e.g., if it becomes invalid).
+ * Remove a specific panel handle (e.g., if it becomes invalid).
  * @param publicMessageId The ID of the public headcount message
- * @param message The message to remove
+ * @param handle The handle to remove
  */
 export function unregisterHeadcountPanel(
     publicMessageId: string, 
-    message: Message
+    handle: HeadcountOrganizerPanelHandle
 ): void {
     const existing = activeHeadcountPanels.get(publicMessageId);
     if (!existing) return;
     
-    const filtered = existing.filter(m => m.id !== message.id);
+    // Filter by comparing the handle objects (reference equality should work for most cases)
+    const filtered = existing.filter(h => h !== handle);
     if (filtered.length === 0) {
         activeHeadcountPanels.delete(publicMessageId);
     } else {
