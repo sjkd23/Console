@@ -6,6 +6,9 @@ A Discord bot for organizing **Realm of the Mad God** raids with automated run m
 **Status:** Production ready (actively maintained)  
 **Last Updated:** November 17, 2025  
 
+Dungeoneer: Discord.gg/o3
+Support Server: Discord.gg/87fq2cpjxD
+
 ---
 
 ## Table of Contents
