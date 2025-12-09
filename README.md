@@ -2,7 +2,7 @@
 
 A Discord bot for organizing **Realm of the Mad God** raids with automated run management, dual verification, moderation tools, and quota tracking for staff.
 
-**Version:** 0.3.0  
+**Version:** 1.1
 **Status:** Production ready (actively maintained)  
 **Last Updated:** November 17, 2025  
 
