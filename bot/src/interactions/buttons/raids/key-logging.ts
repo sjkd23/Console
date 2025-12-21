@@ -19,6 +19,7 @@ import {
 import { logKeyLogged } from '../../../lib/logging/raid-logger.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { createLogger } from '../../../lib/logging/logger.js';
+import { findMemberByName } from '../../../lib/utilities/member-helpers.js';
 
 const logger = createLogger('KeyLogging');
 
@@ -401,16 +402,17 @@ export async function handleKeyLogCustomNameModal(
                 logger.info('Using existing guild member cache', { runId: runIdNum, cacheSize });
             }
             
-            const member = interaction.guild.members.cache.find(
-                (m) =>
-                    m.user.username.toLowerCase() === searchQuery.toLowerCase() ||
-                    m.user.tag.toLowerCase() === searchQuery.toLowerCase() ||
-                    m.displayName.toLowerCase() === searchQuery.toLowerCase()
-            );
+            // Use the improved search function that handles prefix stripping
+            const member = findMemberByName(interaction.guild, searchQuery);
 
             if (member) {
                 foundUser = { id: member.id, username: member.user.username };
-                logger.info('Found user in guild members', { runId: runIdNum, userId: member.id, displayName: member.displayName });
+                logger.info('Found user in guild members', { 
+                    runId: runIdNum, 
+                    userId: member.id, 
+                    displayName: member.displayName,
+                    searchQuery 
+                });
             } else {
                 logger.info('No matching user found in guild members', { runId: runIdNum, searchQuery });
             }
