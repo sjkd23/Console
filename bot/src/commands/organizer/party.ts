@@ -32,7 +32,7 @@ export const party: SlashCommand = {
     requiredRole: 'verified_raider',
     data: new SlashCommandBuilder()
         .setName('party')
-        .setDescription('Create a party finder post for organizing your own group (Verified Raider+)')
+        .setDescription('Create a party finder post for organizing your own group')
         .addStringOption(o =>
             o.setName('party_name')
                 .setDescription('Name of your party')
@@ -50,7 +50,7 @@ export const party: SlashCommand = {
         )
         .addStringOption(o =>
             o.setName('dungeon_1')
-                .setDescription('First dungeon (optional)')
+                .setDescription('First/Main Dungeon (use "Realm Dungeons" for general realm dungeon farming)')
                 .setRequired(false)
                 .setAutocomplete(true)
         )
@@ -270,8 +270,8 @@ export const party: SlashCommand = {
                     components: [row]
                 });
 
-                // Record party creation
-                recordPartyCreation(interaction.user.id, message.id);
+                // Record party creation (includes auto-close after 2 hours)
+                recordPartyCreation(interaction.user.id, message.id, partyFinderChannel.id, guild.id);
 
                 // Start a thread
                 // Auto-archive after 60 minutes of inactivity

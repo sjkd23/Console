@@ -25,8 +25,15 @@ interface PartyCreationRecord {
     timestamp: number;
 }
 
-// Map: userId -> messageId of active party
-const activeParties = new Map<string, string>();
+interface ActivePartyInfo {
+    messageId: string;
+    channelId: string;
+    createdAt: number;
+    guildId: string;
+}
+
+// Map: userId -> active party info
+const activeParties = new Map<string, ActivePartyInfo>();
 
 // Map: userId -> array of party creation timestamps
 const partyCreationHistory = new Map<string, PartyCreationRecord[]>();
@@ -34,6 +41,7 @@ const partyCreationHistory = new Map<string, PartyCreationRecord[]>();
 // Rate limit configuration
 const MAX_PARTIES_PER_HOUR = 3;
 const RATE_LIMIT_WINDOW_MS = 30 * 60 * 1000; // 30 minutes in milliseconds (not a full hour)
+const PARTY_AUTO_CLOSE_MS = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
 
 /**
  * Check if user has an active party
@@ -46,6 +54,13 @@ export function hasActiveParty(userId: string): boolean {
  * Get user's active party message ID
  */
 export function getActivePartyMessageId(userId: string): string | undefined {
+    return activeParties.get(userId)?.messageId;
+}
+
+/**
+ * Get user's active party info
+ */
+export function getActivePartyInfo(userId: string): ActivePartyInfo | undefined {
     return activeParties.get(userId);
 }
 
@@ -108,21 +123,35 @@ export function checkRateLimit(userId: string): {
  * Record a new party creation
  * 
  * Adds the party to active tracking and records the creation timestamp
- * for rate limit enforcement.
+ * for rate limit enforcement. Schedules auto-close after 2 hours.
  * 
  * @param userId - Discord user ID who created the party
  * @param messageId - Discord message ID of the party post
+ * @param channelId - Discord channel ID where party was posted
+ * @param guildId - Discord guild ID
  */
-export function recordPartyCreation(userId: string, messageId: string): void {
+export function recordPartyCreation(userId: string, messageId: string, channelId: string, guildId: string): void {
     const now = Date.now();
     
     // Add to active parties
-    activeParties.set(userId, messageId);
+    activeParties.set(userId, {
+        messageId,
+        channelId,
+        createdAt: now,
+        guildId
+    });
     
     // Add to creation history
     const history = partyCreationHistory.get(userId) || [];
     history.push({ timestamp: now });
     partyCreationHistory.set(userId, history);
+    
+    // Schedule auto-close after 2 hours
+    setTimeout(() => {
+        autoCloseParty(userId).catch(err => {
+            console.error(`[Party] Failed to auto-close party for user ${userId}:`, err);
+        });
+    }, PARTY_AUTO_CLOSE_MS);
 }
 
 /**
@@ -158,6 +187,87 @@ export function cleanupExpiredRecords(): void {
         } else {
             partyCreationHistory.delete(userId);
         }
+    }
+}
+
+/**
+ * Auto-close a party after 2 hours
+ * Called by setTimeout when party expires
+ */
+async function autoCloseParty(userId: string): Promise<void> {
+    const partyInfo = activeParties.get(userId);
+    if (!partyInfo) return; // Party already closed manually
+    
+    try {
+        // Import Discord client from index
+        const { client } = await import('../../index.js');
+        if (!client) return;
+        
+        const channel = await client.channels.fetch(partyInfo.channelId);
+        if (!channel || !channel.isTextBased()) return;
+        
+        const message = await channel.messages.fetch(partyInfo.messageId);
+        if (!message) return;
+        
+        const embed = message.embeds[0];
+        if (!embed) return;
+        
+        // Import EmbedBuilder
+        const { EmbedBuilder } = await import('discord.js');
+        
+        // Update embed to show party as closed (auto)
+        const newEmbed = new EmbedBuilder(embed.toJSON());
+        newEmbed.setColor(0xED4245); // Red for Closed
+        newEmbed.setTitle('⏰ Party Auto-Closed');
+        newEmbed.setFooter({ text: 'Party automatically closed after 2 hours' });
+        
+        // Remove all action buttons/components when closed
+        await message.edit({ embeds: [newEmbed], components: [] });
+        
+        // Remove from active parties tracking
+        removeActiveParty(userId);
+        
+        // Archive thread if exists
+        if (message.thread) {
+            try {
+                await message.thread.setLocked(true);
+                await message.thread.setArchived(true);
+            } catch (err) {
+                console.error('[Party] Failed to archive thread during auto-close:', err);
+            }
+        }
+        
+        // Log auto-closure
+        const { logPartyClosure, clearPartyLogThreadCache } = await import('../../logging/party-logger.js');
+        const messageContent = message.content || '';
+        const partyNameMatch = messageContent.match(/\*\*Party:\*\*\s*([^\|]+)/);
+        const partyName = partyNameMatch ? partyNameMatch[1].trim() : 'Unknown Party';
+        
+        try {
+            await logPartyClosure(
+                client,
+                {
+                    guildId: partyInfo.guildId,
+                    ownerId: userId,
+                    ownerUsername: 'System',
+                    partyName: partyName,
+                    messageId: message.id
+                },
+                'auto-close'
+            );
+            
+            clearPartyLogThreadCache({
+                guildId: partyInfo.guildId,
+                ownerId: userId,
+                ownerUsername: 'System',
+                partyName: partyName,
+                messageId: message.id
+            });
+        } catch (err) {
+            console.error('[Party] Failed to log auto-closure:', err);
+        }
+    } catch (err) {
+        console.error('[Party] Error during auto-close:', err);
     }
 }
 

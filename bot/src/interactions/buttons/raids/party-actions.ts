@@ -2,6 +2,7 @@ import { ButtonInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butto
 import { removeActiveParty } from '../../../lib/state/party-state.js';
 import { logBotEvent } from '../../../lib/logging/bot-logger.js';
 import { logPartyClosure, clearPartyLogThreadCache } from '../../../lib/logging/party-logger.js';
+import { hasRequiredRoleOrHigher } from '../../../lib/permissions/permissions.js';
 
 /**
  * Party Actions Handler
@@ -22,10 +23,16 @@ import { logPartyClosure, clearPartyLogThreadCache } from '../../../lib/logging/
  * @param creatorId - The Discord user ID of the party creator (from button custom ID)
  */
 export async function handlePartyClose(interaction: ButtonInteraction, creatorId: string) {
-    // Only party leader can close
-    if (interaction.user.id !== creatorId) {
+    const isCreator = interaction.user.id === creatorId;
+    
+    // Check if user is Moderator+ (can close any party)
+    const member = interaction.guild ? await interaction.guild.members.fetch(interaction.user.id) : null;
+    const { hasRole: isModerator } = await hasRequiredRoleOrHigher(member, 'moderator');
+    
+    // Only party leader or Moderator+ can close
+    if (!isCreator && !isModerator) {
         await interaction.reply({ 
-            content: '❌ Only the party leader can close this party.', 
+            content: '❌ Only the party leader or Moderators can close this party.', 
             ephemeral: true 
         });
         return;
