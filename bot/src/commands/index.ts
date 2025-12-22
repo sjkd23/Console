@@ -5,6 +5,7 @@ import { withRateLimit } from '../lib/utilities/rate-limit-middleware.js';
 import type { RateLimitConfig } from '../lib/utilities/rate-limiter.js';
 import { runCreate } from './organizer/run.js';
 import { taken } from './organizer/taken.js';
+import { party } from './organizer/party.js';
 import { verify } from './moderation/security/verify.js';
 import { setroles } from './configs/setroles.js';
 import { setchannels } from './configs/setchannels.js';
@@ -70,6 +71,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(runCreate),
     withMiddleware(taken),
     withMiddleware(headcount),
+    withMiddleware(party),
     withMiddleware(verify),
     withMiddleware(setroles),
     withMiddleware(setchannels),

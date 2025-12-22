@@ -31,6 +31,7 @@ import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.j
 import { handleHeadcountOrganizerPanel, handleHeadcountOrganizerPanelConfirm, handleHeadcountOrganizerPanelDeny } from './interactions/buttons/raids/headcount-organizer-panel.js';
 import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.js';
 import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-convert.js';
+import { handlePartyClose } from './interactions/buttons/raids/party-actions.js';
 import {
     handleQuotaConfigBasic,
     handleQuotaConfigModeration,
@@ -215,6 +216,14 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.isButton()) {
+            // Handle party buttons
+            if (interaction.customId.startsWith('party:close:')) {
+                if (!await applyButtonRateLimit(interaction, 'party:close')) return;
+                const creatorId = interaction.customId.split(':')[2];
+                await safeHandleInteraction(interaction, () => handlePartyClose(interaction, creatorId), { ephemeral: true });
+                return;
+            }
+
             // Handle verification buttons (strict rate limiting)
             if (interaction.customId === 'verification:get_verified') {
                 if (!await applyButtonRateLimit(interaction, 'verification:start')) return;

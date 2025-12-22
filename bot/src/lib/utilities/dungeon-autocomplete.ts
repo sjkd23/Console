@@ -1,6 +1,14 @@
 /**
  * Shared autocomplete handler for dungeon selection.
- * Used by /run, /logrun, and /logkey commands.
+ * Used by /run, /logrun, /logkey, and /party commands.
+ * 
+ * @example
+ * // Single dungeon field (like /run command)
+ * await handleDungeonAutocomplete(interaction, 'dungeon');
+ * 
+ * @example
+ * // Multiple dungeon fields (like /party command)
+ * await handleDungeonAutocomplete(interaction, ['dungeon_1', 'dungeon_2', 'dungeon_3', 'dungeon_4', 'dungeon_5']);
  */
 
 import { AutocompleteInteraction } from 'discord.js';
@@ -11,15 +19,18 @@ import { getRecentDungeons } from './dungeon-cache.js';
  * Handles autocomplete for dungeon selection fields.
  * Shows recently used dungeons when query is empty, otherwise searches.
  * @param interaction - The autocomplete interaction
- * @param fieldName - The option field name to handle (defaults to 'dungeon')
+ * @param fieldName - The option field name to handle (defaults to 'dungeon'). Can be a string or array of field names.
  */
 export async function handleDungeonAutocomplete(
     interaction: AutocompleteInteraction,
-    fieldName: string = 'dungeon'
+    fieldName: string | string[] = 'dungeon'
 ): Promise<void> {
     const focused = interaction.options.getFocused(true);
     
-    if (focused.name !== fieldName) {
+    // Support multiple field names (e.g., dungeon_1, dungeon_2, etc.)
+    const fieldNames = Array.isArray(fieldName) ? fieldName : [fieldName];
+    
+    if (!fieldNames.includes(focused.name)) {
         await interaction.respond([]);
         return;
     }

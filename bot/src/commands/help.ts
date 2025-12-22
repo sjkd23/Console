@@ -40,6 +40,15 @@ function getCommandHelp(commandName: string): CommandHelp | null {
             usage: '/headcount',
             examples: ['/headcount - Opens a modal to create a headcount'],
         },
+        party: {
+            name: 'party',
+            description: 'Create a party finder post to organize your own group. Available to all verified raiders.',
+            usage: '/party party_name:<name> description:<description> [location:<server>] [dungeon_1:<dungeon>] [dungeon_2:<dungeon>] [dungeon_3:<dungeon>] [dungeon_4:<dungeon>] [dungeon_5:<dungeon>]',
+            examples: [
+                '/party party_name:Fun Runs description:Casual runs, everyone welcome - Create a simple party',
+                '/party party_name:Voids party description:Grinding voids location:USW3 dungeon_1:Void - Create a party with details',
+            ],
+        },
         logrun: {
             name: 'logrun',
             description: 'Manually adjust run completion quota points for an organizer. Use positive numbers to add runs, negative to remove.',
