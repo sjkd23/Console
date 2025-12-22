@@ -10,6 +10,7 @@ import {
 
 export interface KeyLoggingState {
     runId: number;
+    organizerId: string; // Organizer user ID for logging purposes
     dungeonKey: string;
     dungeonLabel: string;
     totalKeys: number;

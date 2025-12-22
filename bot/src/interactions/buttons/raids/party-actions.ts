@@ -1,6 +1,7 @@
 import { ButtonInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { removeActiveParty } from '../../../lib/state/party-state.js';
 import { logBotEvent } from '../../../lib/logging/bot-logger.js';
+import { logPartyClosure, clearPartyLogThreadCache } from '../../../lib/logging/party-logger.js';
 
 /**
  * Party Actions Handler
@@ -42,6 +43,11 @@ export async function handlePartyClose(interaction: ButtonInteraction, creatorId
     }
 
     try {
+        // Extract party name from the message content (format: "**Party:** {name}")
+        const messageContent = message.content || '';
+        const partyNameMatch = messageContent.match(/\*\*Party:\*\*\s*([^\|]+)/);
+        const partyName = partyNameMatch ? partyNameMatch[1].trim() : 'Unknown Party';
+
         // Update embed to show party as closed
         const newEmbed = new EmbedBuilder(embed.toJSON());
         newEmbed.setColor(0xED4245); // Red for Closed
@@ -64,7 +70,36 @@ export async function handlePartyClose(interaction: ButtonInteraction, creatorId
             }
         }
 
-        // Log party closure to bot-log channel
+        // Log party closure to raid-log channel thread
+        if (interaction.guildId) {
+            try {
+                await logPartyClosure(
+                    interaction.client,
+                    {
+                        guildId: interaction.guildId,
+                        ownerId: creatorId,
+                        ownerUsername: interaction.user.username,
+                        partyName: partyName,
+                        messageId: message.id
+                    },
+                    interaction.user.id
+                );
+                
+                // Clear the thread cache after party closes
+                clearPartyLogThreadCache({
+                    guildId: interaction.guildId,
+                    ownerId: creatorId,
+                    ownerUsername: interaction.user.username,
+                    partyName: partyName,
+                    messageId: message.id
+                });
+            } catch (err) {
+                console.error('[Party] Failed to log party closure to raid-log:', err);
+                // Non-critical error - don't fail the operation
+            }
+        }
+
+        // Log to bot-log channel (brief notification)
         if (interaction.guildId) {
             await logBotEvent(
                 interaction.client,
@@ -74,13 +109,13 @@ export async function handlePartyClose(interaction: ButtonInteraction, creatorId
                 {
                     color: 0xED4245,
                     fields: [
-                        { name: 'Party Name', value: embed.title || 'Unknown', inline: true },
+                        { name: 'Party Name', value: partyName, inline: true },
                         { name: 'Channel', value: `<#${interaction.channelId}>`, inline: true },
                         { name: 'Message', value: `[View](${message.url})`, inline: true }
                     ]
                 }
             ).catch(err => {
-                console.error('[Party] Failed to log party closure:', err);
+                console.error('[Party] Failed to log party closure to bot-log:', err);
                 // Non-critical error - don't fail the operation
             });
         }

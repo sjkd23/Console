@@ -16,6 +16,7 @@ import { handleDungeonAutocomplete } from '../../lib/utilities/dungeon-autocompl
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import { logCommandExecution } from '../../lib/logging/bot-logger.js';
 import { hasActiveParty, checkRateLimit, recordPartyCreation } from '../../lib/state/party-state.js';
+import { logPartyCreation } from '../../lib/logging/party-logger.js';
 
 /**
  * Party Command
@@ -267,6 +268,28 @@ export const party: SlashCommand = {
                     });
                 } catch (threadErr) {
                     console.error('[Party] Failed to create thread:', threadErr);
+                }
+
+                // Log party creation to raid-log channel with thread
+                try {
+                    await logPartyCreation(
+                        interaction.client,
+                        {
+                            guildId: guild.id,
+                            ownerId: interaction.user.id,
+                            ownerUsername: interaction.user.username,
+                            partyName: partyName,
+                            messageId: message.id
+                        },
+                        {
+                            location: location || undefined,
+                            description: description,
+                            dungeons: dungeonCodes.length > 0 ? dungeonCodes : undefined
+                        }
+                    );
+                } catch (logErr) {
+                    console.error('[Party] Failed to log party creation to raid-log:', logErr);
+                    // Non-critical error - don't fail the party creation
                 }
 
                 await interaction.editReply(

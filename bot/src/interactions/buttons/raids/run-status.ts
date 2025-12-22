@@ -353,15 +353,8 @@ async function handleStatusInternal(
                 }
             );
 
-            // Clear thread cache since run is ending
-            clearLogThreadCache({
-                guildId: btn.guild.id,
-                organizerId: run.organizerId,
-                organizerUsername: '',
-                dungeonName: run.dungeonLabel,
-                type: 'run',
-                runId: parseInt(runId)
-            });
+            // DON'T clear thread cache when ending - keep it for key logging phase
+            // Thread cache will be cleared after key logging is complete or if run is cancelled
         } catch (e) {
             console.error('Failed to log status change to raid-log:', e);
         }
@@ -397,11 +390,28 @@ async function handleStatusInternal(
                 btn,
                 parseInt(runId),
                 guildId,
+                run.organizerId,
                 run.dungeonKey,
                 run.dungeonLabel,
                 totalKeys
             );
             return;
+        }
+
+        // For cancelled runs, clear the thread cache immediately since there's no key logging phase
+        if (status === 'cancelled') {
+            try {
+                clearLogThreadCache({
+                    guildId: btn.guild.id,
+                    organizerId: run.organizerId,
+                    organizerUsername: '',
+                    dungeonName: run.dungeonLabel,
+                    type: 'run',
+                    runId: parseInt(runId)
+                });
+            } catch (e) {
+                console.error('Failed to clear thread cache for cancelled run:', e);
+            }
         }
 
         // Close the organizer panel with clear message

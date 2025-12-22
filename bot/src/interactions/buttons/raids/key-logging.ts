@@ -16,7 +16,7 @@ import {
     buildCustomNameFeedback,
     KeyLoggingState,
 } from '../../../lib/ui/key-logging-panel.js';
-import { logKeyLogged } from '../../../lib/logging/raid-logger.js';
+import { logKeyLogged, clearLogThreadCache } from '../../../lib/logging/raid-logger.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { findMemberByName } from '../../../lib/utilities/member-helpers.js';
@@ -34,6 +34,7 @@ export async function showKeyLoggingPanel(
     btn: ButtonInteraction,
     runId: number,
     guildId: string,
+    organizerId: string,
     dungeonKey: string,
     dungeonLabel: string,
     totalKeys: number
@@ -73,6 +74,7 @@ export async function showKeyLoggingPanel(
         // Initialize session state
         const state: KeyLoggingState = {
             runId,
+            organizerId,
             dungeonKey,
             dungeonLabel,
             totalKeys,
@@ -491,6 +493,18 @@ export async function handleKeyLogCancel(btn: ButtonInteraction, runId: string):
             runId: runIdNum,
             remainingKeys: state.remainingKeys,
         });
+
+        // Clear the raid log thread cache now that key logging is complete
+        if (btn.guild) {
+            clearLogThreadCache({
+                guildId: btn.guild.id,
+                organizerId: state.organizerId,
+                organizerUsername: '',
+                dungeonName: state.dungeonLabel,
+                type: 'run',
+                runId: runIdNum
+            });
+        }
     }
 
     await btn.editReply({
@@ -508,6 +522,20 @@ export async function handleKeyLogClose(btn: ButtonInteraction, runId: string): 
     await btn.deferUpdate();
 
     const runIdNum = parseInt(runId);
+    const state = keyLoggingSessions.get(runIdNum);
+    
+    // Clear the raid log thread cache now that key logging is complete
+    if (state && btn.guild) {
+        clearLogThreadCache({
+            guildId: btn.guild.id,
+            organizerId: state.organizerId,
+            organizerUsername: '',
+            dungeonName: state.dungeonLabel,
+            type: 'run',
+            runId: runIdNum
+        });
+    }
+    
     keyLoggingSessions.delete(runIdNum);
 
     await btn.editReply({
