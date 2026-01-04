@@ -78,15 +78,7 @@ export const warn: SlashCommand = {
                 return;
             }
 
-            // Role hierarchy check
-            const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
-                allowSelf: false,
-                checkBotPosition: true
-            });
-            if (!targetCheck.canTarget) {
-                await interaction.editReply(targetCheck.reason!);
-                return;
-            }
+            // Note: Role hierarchy is bypassed for warn command
 
             try {
                 // Create punishment in backend

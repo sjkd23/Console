@@ -78,15 +78,7 @@ export const addnote: SlashCommand = {
                 return;
             }
 
-            // Role hierarchy check
-            const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
-                allowSelf: false,
-                checkBotPosition: true
-            });
-            if (!targetCheck.canTarget) {
-                await interaction.editReply(targetCheck.reason!);
-                return;
-            }
+            // Note: Role hierarchy is bypassed for addnote command
 
             try {
                 // Create note in backend
