@@ -40,8 +40,10 @@ const CHANNEL_KEYS = [
     'quota',
     'bot_log',
     'staff_updates',
+    'modmail',
     'role_ping',
     'party_finder',
+    'early_loc',
 ] as const;
 
 const zChannelKey = z.enum(CHANNEL_KEYS);

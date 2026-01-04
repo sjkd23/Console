@@ -1,4 +1,3 @@
-// backend/src/routes/runs.ts
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query } from '../../db/pool.js';
@@ -11,6 +10,7 @@ import { createLogger } from '../../lib/logging/logger.js';
 import { createRunWithTransaction, endRunWithTransaction } from '../../lib/services/run-service.js';
 import { QuotaService } from '../../lib/services/quota-service.js';
 import { RAID_BEHAVIOR } from '../../config/raid-config.js';
+import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.js';
 
 const logger = createLogger('Runs');
 const quotaService = new QuotaService();
@@ -223,7 +223,24 @@ export default async function runsRoutes(app: FastifyInstance) {
                 roleId,
             });
 
-            return reply.code(201).send({ runId: result.runId });
+            // Check if early-loc notification is needed for initial party/location
+            let earlyLocNotification = undefined;
+            if (party || location) {
+                // For initial run creation, both party and location start as null
+                // So if either is provided, this is an initial SET
+                const earlyLocInfo = {
+                    shouldNotify: true,
+                    isInitialSet: true,
+                    party: party || null,
+                    location: location || null
+                };
+                earlyLocNotification = earlyLocInfo;
+            }
+
+            return reply.code(201).send({ 
+                runId: result.runId,
+                earlyLocNotification
+            });
         } catch (err) {
             logger.error({ err, guildId, organizerId, dungeonKey }, 'Failed to create run');
             return Errors.internal(reply, 'Failed to create run');
@@ -1090,7 +1107,7 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Body: { actorId: Snowflake, actorRoles?: string[], party: string }
      * Updates the party name for a run.
      * Authorization: actorId must match run.organizer_id OR have organizer role.
-     * Returns { ok: true, party: string }.
+     * Returns { ok: true, party: string, earlyLocNotification?: { shouldNotify, isInitialSet, party, location } }.
      */
     app.patch('/runs/:id/party', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -1108,9 +1125,9 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { actorId, actorRoles, party } = b.data;
 
-        // Read current status AND organizer_id AND guild_id
-        const cur = await query<RunRow>(
-            `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
+        // Read current status AND organizer_id AND guild_id AND location
+        const cur = await query<RunRow & { location: string | null }>(
+            `SELECT status, organizer_id, guild_id, location FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -1141,13 +1158,24 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
+        // Check if early-loc notification is needed BEFORE updating
+        const earlyLocInfo = await checkEarlyLocNotification(
+            runId,
+            party || null,
+            run.location
+        );
+
         // Update party
         await query(
             `UPDATE run SET party = $2 WHERE id = $1::bigint`,
             [runId, party || null]
         );
 
-        return reply.send({ ok: true, party });
+        return reply.send({ 
+            ok: true, 
+            party,
+            earlyLocNotification: earlyLocInfo.shouldNotify ? earlyLocInfo : undefined
+        });
     });
 
     /**
@@ -1155,7 +1183,7 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Body: { actorId: Snowflake, actorRoles?: string[], location: string }
      * Updates the location for a run.
      * Authorization: actorId must match run.organizer_id OR have organizer role.
-     * Returns { ok: true, location: string }.
+     * Returns { ok: true, location: string, earlyLocNotification?: { shouldNotify, isInitialSet, party, location } }.
      */
     app.patch('/runs/:id/location', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -1173,9 +1201,9 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { actorId, actorRoles, location } = b.data;
 
-        // Read current status AND organizer_id AND guild_id
-        const cur = await query<RunRow>(
-            `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
+        // Read current status AND organizer_id AND guild_id AND party
+        const cur = await query<RunRow & { party: string | null }>(
+            `SELECT status, organizer_id, guild_id, party FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -1206,13 +1234,24 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
+        // Check if early-loc notification is needed BEFORE updating
+        const earlyLocInfo = await checkEarlyLocNotification(
+            runId,
+            run.party,
+            location || null
+        );
+
         // Update location
         await query(
             `UPDATE run SET location = $2 WHERE id = $1::bigint`,
             [runId, location || null]
         );
 
-        return reply.send({ ok: true, location });
+        return reply.send({ 
+            ok: true, 
+            location,
+            earlyLocNotification: earlyLocInfo.shouldNotify ? earlyLocInfo : undefined
+        });
     });
 
     /**

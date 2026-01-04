@@ -26,6 +26,7 @@ const CHANNEL_OPTIONS = [
     { key: 'modmail', label: 'Modmail', description: 'Channel for receiving and managing modmail support tickets' },
     { key: 'role_ping', label: 'Role Ping', description: 'Channel for the role ping panel where users can self-assign dungeon ping roles' },
     { key: 'party_finder', label: 'Party Finder', description: 'Channel where verified raiders can organize their own parties' },
+    { key: 'early_loc', label: 'Early Loc', description: 'Priority/staff channel for location/party notifications when set or updated' },
 ] as const;
 
 export const setchannels: SlashCommand = {
@@ -45,6 +46,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('modmail').setDescription('Modmail support tickets channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('role_ping').setDescription('Role ping panel channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('party_finder').setDescription('Party finder channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('early_loc').setDescription('Priority/staff channel for location/party notifications').addChannelTypes(ChannelType.GuildText))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setDMPermission(false),
 

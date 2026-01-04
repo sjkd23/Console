@@ -15,11 +15,13 @@ import {
 import { buildRunMessageContent } from '../../../lib/utilities/run-message-helpers.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { notifyKeyReactors } from '../../../lib/utilities/key-reactor-notifications.js';
+import { sendEarlyLocNotification } from '../../../lib/utilities/early-loc-notifier.js';
 
 interface RunDetails {
     channelId: string | null;
     postMessageId: string | null;
     status: string;
+    dungeonKey: string;
     dungeonLabel: string;
     organizerId: string;
     startedAt: string | null;
@@ -126,17 +128,25 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     const party = values.party;
     const location = values.location;
 
-    // Fetch run details BEFORE updating to check if party/location were already set
-    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
-    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
-
     // Both fields are now required, so we always update both
+    // Capture early-loc notification info from the responses
+    let earlyLocNotificationData: any = null;
+
     try {
-        await patchJSON(`/runs/${runId}/party`, {
-            actorId: btn.user.id,
-            actorRoles: memberData.roleIds,
-            party
-        }, { guildId: guildCtx.guildId });
+        const partyResponse = await patchJSON<{ ok: boolean; party: string; earlyLocNotification?: any }>(
+            `/runs/${runId}/party`,
+            {
+                actorId: btn.user.id,
+                actorRoles: memberData.roleIds,
+                party
+            },
+            { guildId: guildCtx.guildId }
+        );
+        
+        // Capture early-loc info if present
+        if (partyResponse.earlyLocNotification) {
+            earlyLocNotificationData = partyResponse.earlyLocNotification;
+        }
     } catch (err) {
         if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
             await submitted.followUp({ content: 'Only the organizer can update party.', ephemeral: true });
@@ -148,11 +158,21 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     }
 
     try {
-        await patchJSON(`/runs/${runId}/location`, {
-            actorId: btn.user.id,
-            actorRoles: memberData.roleIds,
-            location
-        }, { guildId: guildCtx.guildId });
+        const locationResponse = await patchJSON<{ ok: boolean; location: string; earlyLocNotification?: any }>(
+            `/runs/${runId}/location`,
+            {
+                actorId: btn.user.id,
+                actorRoles: memberData.roleIds,
+                location
+            },
+            { guildId: guildCtx.guildId }
+        );
+        
+        // ALWAYS prefer location's notification when both are being updated
+        // because it will have both the updated party AND location values
+        if (locationResponse.earlyLocNotification) {
+            earlyLocNotificationData = locationResponse.earlyLocNotification;
+        }
     } catch (err) {
         if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
             await submitted.followUp({ content: 'Only the organizer can update location.', ephemeral: true });
@@ -213,9 +233,26 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     // Build confirmation message
     const confirmMsg = `✅ **Updated:**\n• Party: **${party}**\n• Location: **${location}**`;
 
+    // Send early-loc notification if needed
+    if (earlyLocNotificationData && btn.guild) {
+        sendEarlyLocNotification(
+            btn.client,
+            btn.guild.id,
+            run.organizerId,
+            run.dungeonKey,
+            run.dungeonLabel,
+            run.channelId,
+            run.postMessageId,
+            earlyLocNotificationData
+        ).catch(err => {
+            console.error('Failed to send early-loc notification:', err);
+        });
+    }
+
     // Notify key reactors now that both party and location are set
-    // Determine if this is an update (both were already set) or initial notification
-    const isUpdate = wasPartyAndLocationSet;
+    // The early-loc notification already told us if this was an initial SET or CHANGED
+    // Use that same logic: if it was initial set, this is NOT an update for key reactors
+    const isUpdate = earlyLocNotificationData ? !earlyLocNotificationData.isInitialSet : false;
     notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
         console.error('Failed to notify key reactors:', err);
     });
@@ -260,17 +297,24 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
     const values = getModalFieldValues(submitted, ['party']);
     const party = values.party;
 
-    // Fetch current run details BEFORE update to check if party/location were previously set
-    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
-    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
-
-    // Update backend
+    // Update backend and capture early-loc notification info
+    let earlyLocNotificationData: any = null;
+    
     try {
-        await patchJSON(`/runs/${runId}/party`, {
-            actorId: btn.user.id,
-            actorRoles: memberData.roleIds,
-            party: party || ''
-        }, { guildId: guildCtx.guildId });
+        const partyResponse = await patchJSON<{ ok: boolean; party: string; earlyLocNotification?: any }>(
+            `/runs/${runId}/party`,
+            {
+                actorId: btn.user.id,
+                actorRoles: memberData.roleIds,
+                party: party || ''
+            },
+            { guildId: guildCtx.guildId }
+        );
+        
+        // Capture early-loc info if present
+        if (partyResponse.earlyLocNotification) {
+            earlyLocNotificationData = partyResponse.earlyLocNotification;
+        }
     } catch (err) {
         if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
             await submitted.followUp({ content: 'Only the organizer can update party.', ephemeral: true });
@@ -317,11 +361,27 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
     // Refresh organizer panel with confirmation message
     const confirmMsg = party ? `✅ **Updated Party:** ${party}` : '✅ Party cleared';
     
-    // Notify key reactors if both party and location are NOW set (and weren't both set before)
+    // Send early-loc notification if needed
+    if (earlyLocNotificationData && btn.guild) {
+        sendEarlyLocNotification(
+            btn.client,
+            btn.guild.id,
+            run.organizerId,
+            run.dungeonKey,
+            run.dungeonLabel,
+            run.channelId,
+            run.postMessageId,
+            earlyLocNotificationData
+        ).catch(err => {
+            console.error('Failed to send early-loc notification:', err);
+        });
+    }
+    
+    // Notify key reactors if both party and location are NOW set
     const isNowBothSet = !!(run.party && run.location);
     if (isNowBothSet) {
-        // Determine if this is an update (both were set before) or initial notification
-        const isUpdate = wasPartyAndLocationSet;
+        // Use early-loc notification to determine if this was initial or update
+        const isUpdate = earlyLocNotificationData ? !earlyLocNotificationData.isInitialSet : false;
         notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
             console.error('Failed to notify key reactors:', err);
         });
@@ -366,17 +426,24 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
     const values = getModalFieldValues(submitted, ['location']);
     const location = values.location;
 
-    // Fetch current run details BEFORE update to check if party/location were previously set
-    const runBefore = await getJSON<RunDetails>(`/runs/${runId}`);
-    const wasPartyAndLocationSet = !!(runBefore.party && runBefore.location);
-
-    // Update backend
+    // Update backend and capture early-loc notification info
+    let earlyLocNotificationData: any = null;
+    
     try {
-        await patchJSON(`/runs/${runId}/location`, {
-            actorId: btn.user.id,
-            actorRoles: memberData.roleIds,
-            location: location || ''
-        }, { guildId: guildCtx.guildId });
+        const locationResponse = await patchJSON<{ ok: boolean; location: string; earlyLocNotification?: any }>(
+            `/runs/${runId}/location`,
+            {
+                actorId: btn.user.id,
+                actorRoles: memberData.roleIds,
+                location: location || ''
+            },
+            { guildId: guildCtx.guildId }
+        );
+        
+        // Capture early-loc info if present
+        if (locationResponse.earlyLocNotification) {
+            earlyLocNotificationData = locationResponse.earlyLocNotification;
+        }
     } catch (err) {
         if (err instanceof BackendError && err.code === 'NOT_ORGANIZER') {
             await submitted.followUp({ content: 'Only the organizer can update location.', ephemeral: true });
@@ -423,11 +490,27 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
     // Refresh organizer panel with confirmation message
     const confirmMsg = location ? `✅ **Updated Location:** ${location}` : '✅ Location cleared';
     
-    // Notify key reactors if both party and location are NOW set (and weren't both set before)
+    // Send early-loc notification if needed
+    if (earlyLocNotificationData && btn.guild) {
+        sendEarlyLocNotification(
+            btn.client,
+            btn.guild.id,
+            run.organizerId,
+            run.dungeonKey,
+            run.dungeonLabel,
+            run.channelId,
+            run.postMessageId,
+            earlyLocNotificationData
+        ).catch(err => {
+            console.error('Failed to send early-loc notification:', err);
+        });
+    }
+    
+    // Notify key reactors if both party and location are NOW set
     const isNowBothSet = !!(run.party && run.location);
     if (isNowBothSet) {
-        // Determine if this is an update (both were set before) or initial notification
-        const isUpdate = wasPartyAndLocationSet;
+        // Use early-loc notification to determine if this was initial or update
+        const isUpdate = earlyLocNotificationData ? !earlyLocNotificationData.isInitialSet : false;
         notifyKeyReactorsIfReady(btn, runId, run, isUpdate).catch(err => {
             console.error('Failed to notify key reactors:', err);
         });

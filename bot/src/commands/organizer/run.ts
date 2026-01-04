@@ -28,6 +28,7 @@ import { fetchConfiguredRaidChannel } from '../../lib/utilities/channel-helpers.
 import { sendRunOrganizerPanelAsFollowUp } from '../../interactions/buttons/raids/organizer-panel.js';
 import { buildRunEmbed, buildRunButtons } from '../../lib/utilities/run-panel-builder.js';
 import { autoJoinOrganizerToRun } from '../../lib/utilities/auto-join-helpers.js';
+import { sendEarlyLocNotification } from '../../lib/utilities/early-loc-notifier.js';
 
 const logger = createLogger('RunCreate');
 
@@ -116,7 +117,7 @@ export const runCreate: SlashCommand = {
 
         // Create DB run with the correct raid channel ID
         try {
-            const { runId } = await postJSON<{ runId: number }>('/runs', {
+            const createResponse = await postJSON<{ runId: number; earlyLocNotification?: any }>('/runs', {
                 guildId: guild.id,
                 guildName: guild.name,
                 organizerId: interaction.user.id,
@@ -131,6 +132,9 @@ export const runCreate: SlashCommand = {
                 autoEndMinutes: getDefaultAutoEndMinutes(),
                 roleId: role?.id // Store the created role ID
             }, { guildId: guild.id });
+
+            const runId = createResponse.runId;
+            const earlyLocNotification = createResponse.earlyLocNotification;
 
             // Build the public embed and buttons using universal helpers
             const embed = buildRunEmbed({
@@ -187,6 +191,23 @@ export const runCreate: SlashCommand = {
             await interaction.editReply(
                 `Run created${sent ? ` and posted: ${sent.url}` : ''}`
             );
+
+            // Send early-loc notification if party/location were set during creation
+            if (earlyLocNotification) {
+                sendEarlyLocNotification(
+                    interaction.client,
+                    guild.id,
+                    interaction.user.id,
+                    d.codeName,
+                    d.dungeonName,
+                    raidChannel.id,
+                    sent.id,
+                    earlyLocNotification
+                ).catch(err => {
+                    logger.error({ err, guildId: guild.id, runId }, 
+                        'Failed to send early-loc notification');
+                });
+            }
 
             // Automatically add the organizer to their run (simulates clicking join button)
             // This happens after the message is posted but before the organizer panel
