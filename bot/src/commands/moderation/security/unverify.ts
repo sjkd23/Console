@@ -10,20 +10,21 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../../lib/permissions/permissions.js';
-import { updateRaiderStatus, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../../lib/utilities/http.js';
+import { unverifyRaider, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../../lib/utilities/http.js';
 import { logCommandExecution, logVerificationAction } from '../../../lib/logging/bot-logger.js';
 
 /**
- * /unverify - Remove verification status from a raider.
+ * /unverify - Remove a user from the verification system.
  * Staff-only command (Security role required).
- * Sets raider status to 'pending' and removes verified raider role.
+ * Completely removes the raider from the database, freeing up their IGN.
+ * Also removes verified raider role and nickname.
  */
 export const unverify: SlashCommand = {
     requiredRole: 'security',
     mutatesRoles: true,
     data: new SlashCommandBuilder()
         .setName('unverify')
-        .setDescription('Remove verification status from a member (Security only)')
+        .setDescription('Remove a member from the verification system (Security only)')
         .addUserOption(option =>
             option
                 .setName('member')
@@ -105,12 +106,11 @@ export const unverify: SlashCommand = {
             // Get actor's role IDs for authorization
             const actorRoles = getMemberRoleIds(invokerMember);
             
-            // Call backend to update raider status to pending
-            const result = await updateRaiderStatus(targetUser.id, {
+            // Call backend to completely remove raider from database
+            const result = await unverifyRaider(interaction.guildId, targetUser.id, {
                 actor_user_id: interaction.user.id,
                 actor_roles: actorRoles,
-                guild_id: interaction.guildId,
-                status: 'pending',
+                reason,
             });
 
             // Remove nickname (revert to Discord username)
@@ -154,13 +154,12 @@ export const unverify: SlashCommand = {
 
             // Build success embed
             const embed = new EmbedBuilder()
-                .setTitle('✅ Member Unverified')
+                .setTitle('✅ Member Removed from Verification System')
                 .setColor(0xff9900)
                 .addFields(
-                    { name: 'Member', value: `<@${result.user_id}>`, inline: true },
-                    { name: 'IGN', value: `\`${result.ign}\``, inline: true },
-                    { name: 'Old Status', value: result.old_status, inline: true },
-                    { name: 'New Status', value: result.status, inline: true },
+                    { name: 'Member', value: `<@${targetUser.id}>`, inline: true },
+                    { name: 'IGN (Freed)', value: `\`${result.ign}\``, inline: true },
+                    { name: 'Previous Status', value: existingRaider.status, inline: true },
                     { name: 'Unverified By', value: `<@${interaction.user.id}>`, inline: true },
                     { name: 'Reason', value: reason, inline: false }
                 )
@@ -209,14 +208,13 @@ export const unverify: SlashCommand = {
                     
                     if (veriLogChannel && veriLogChannel.isTextBased()) {
                         const logEmbed = new EmbedBuilder()
-                            .setTitle('❌ Member Unverified')
+                            .setTitle('❌ Member Removed from Verification System')
                             .setColor(0xff9900)
                             .addFields(
-                                { name: 'Member', value: `<@${result.user_id}> (${targetUser.tag})`, inline: true },
-                                { name: 'User ID', value: result.user_id, inline: true },
-                                { name: 'IGN', value: `\`${result.ign}\``, inline: true },
-                                { name: 'Old Status', value: result.old_status, inline: true },
-                                { name: 'New Status', value: result.status, inline: true },
+                                { name: 'Member', value: `<@${targetUser.id}> (${targetUser.tag})`, inline: true },
+                                { name: 'User ID', value: targetUser.id, inline: true },
+                                { name: 'IGN (Freed)', value: `\`${result.ign}\``, inline: true },
+                                { name: 'Previous Status', value: existingRaider.status, inline: true },
                                 { name: 'Unverified By', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
                                 { name: 'Reason', value: reason, inline: false },
                                 {
