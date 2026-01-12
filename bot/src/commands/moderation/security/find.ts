@@ -50,15 +50,7 @@ function createFindButtons(
 
     // If we're in userinfo mode, no pagination needed
     if (mode === 'userinfo') {
-        const stopRow = new ActionRowBuilder<ButtonBuilder>();
-        stopRow.addComponents(
-            new ButtonBuilder()
-                .setCustomId('find_stop')
-                .setLabel('Stop')
-                .setStyle(ButtonStyle.Danger)
-                .setDisabled(disabled)
-        );
-        return [tabRow, stopRow];
+        return [tabRow];
     }
 
     // For punishments/notes, add pagination
@@ -91,16 +83,7 @@ function createFindButtons(
             .setDisabled(disabled || currentPage === totalPages - 1 || totalPages === 0)
     );
 
-    const stopRow = new ActionRowBuilder<ButtonBuilder>();
-    stopRow.addComponents(
-        new ButtonBuilder()
-            .setCustomId('find_stop')
-            .setLabel('Stop')
-            .setStyle(ButtonStyle.Danger)
-            .setDisabled(disabled)
-    );
-
-    return [tabRow, navigationRow, stopRow];
+    return [tabRow, navigationRow];
 }
 
 /**
@@ -195,7 +178,7 @@ async function setupFindNavigation(
         timeout?: number;
     }
 ): Promise<void> {
-    const { targetUser, raiderData, punishmentEmbeds, noteEmbeds, userId, timeout = 600000 } = options;
+    const { targetUser, raiderData, punishmentEmbeds, noteEmbeds, userId, timeout = 1800000 } = options;
 
     let mode: TabMode = 'userinfo';
     let currentPage = 0;
@@ -241,14 +224,6 @@ async function setupFindNavigation(
     });
 
     collector.on('collect', async (buttonInteraction: ButtonInteraction) => {
-        // Handle stop button - remove all buttons
-        if (buttonInteraction.customId === 'find_stop') {
-            collector.stop('stopped');
-            await buttonInteraction.update({
-                components: [],
-            });
-            return;
-        }
 
         let needsUpdate = false;
 
@@ -333,18 +308,16 @@ async function setupFindNavigation(
         }
     });
 
-    collector.on('end', async (collected, reason) => {
-        // Only disable buttons if timeout occurred (not if user clicked Stop)
-        if (reason !== 'stopped') {
-            try {
-                const totalPages = getTotalPages();
-                await interaction.editReply({
-                    components: createFindButtons(mode, hasNotes, hasPunishments, currentPage, totalPages, true),
-                });
-            } catch (err) {
-                // Message might have been deleted
-                console.warn('[Find] Failed to disable buttons:', err);
-            }
+    collector.on('end', async () => {
+        // Disable buttons when collector expires
+        try {
+            const totalPages = getTotalPages();
+            await interaction.editReply({
+                components: createFindButtons(mode, hasNotes, hasPunishments, currentPage, totalPages, true),
+            });
+        } catch (err) {
+            // Message might have been deleted
+            console.warn('[Find] Failed to disable buttons:', err);
         }
     });
 }
@@ -693,7 +666,7 @@ export const find: SlashCommand = {
                     punishmentEmbeds: punishmentEmbeds,
                     noteEmbeds: noteEmbeds,
                     userId: interaction.user.id,
-                    timeout: 600000, // 10 minutes
+                    timeout: 1800000, // 30 minutes
                 });
 
             } catch (err) {

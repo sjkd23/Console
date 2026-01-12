@@ -369,8 +369,8 @@ export async function applyVerification(
                         
                         // User is still in the server - report the conflict with details
                         errors.push(
-                            `The IGN "${conflictIgn}" is already in use by ${conflictMember.user.tag} (<@${conflictUserId}>). ` +
-                            'Please contact staff if you believe this is an error.'
+                            `The IGN "${conflictIgn}" is already in use by ${conflictMember.user.tag} (<@${conflictUserId}>) in **${guild.name}**. ` +
+                            `Please contact staff (Security+) if you believe this is an error.`
                         );
                         
                         logger.info('IGN conflict: User still in server', {
@@ -424,8 +424,8 @@ export async function applyVerification(
                                     ign: conflictIgn,
                                 });
                                 errors.push(
-                                    `The IGN "${conflictIgn}" is in use by a user who left the server, but auto-cleanup failed. ` +
-                                    'Please contact staff.'
+                                    `The IGN "${conflictIgn}" is in use by a user who left **${guild.name}** (User ID: ${conflictUserId}), but auto-cleanup failed. ` +
+                                    'Please contact staff (Security+) for assistance.'
                                 );
                                 return { success: false, roleApplied, nicknameSet, errors };
                             }
@@ -436,15 +436,15 @@ export async function applyVerification(
                                 conflictUserId,
                             });
                             errors.push(
-                                `The IGN "${conflictIgn}" is already in use, but unable to verify user status. ` +
-                                'Please contact staff.'
+                                `The IGN "${conflictIgn}" is already in use in **${guild.name}** (User ID: ${conflictUserId}), but unable to verify user status. ` +
+                                'Please contact staff (Security+) for assistance.'
                             );
                             return { success: false, roleApplied, nicknameSet, errors };
                         }
                     }
                 } else {
                     // No conflict user ID provided (shouldn't happen with updated backend)
-                    errors.push(backendErr.message || 'IGN conflict detected. Please contact staff.');
+                    errors.push(backendErr.message || `IGN conflict detected in **${guild.name}**. Please contact staff (Security+) for assistance.`);
                     return { success: false, roleApplied, nicknameSet, errors };
                 }
             } else {

@@ -421,6 +421,50 @@ export async function handleVerificationDone(interaction: ButtonInteraction): Pr
             member // User is verifying themselves
         );
 
+        // Check if verification failed
+        if (!applyResult.success) {
+            // Mark session as failed
+            await updateSession(guildId, interaction.user.id, { status: 'pending_realmeye' });
+
+            // Log failure
+            await logVerificationEvent(
+                guild,
+                interaction.user.id,
+                `**❌ Verification Failed**\n` +
+                `• IGN: \`${session.rotmg_ign}\`\n` +
+                `• Reason: ${applyResult.errors.join(', ')}`,
+                { error: true }
+            );
+
+            // Send failure message to user (sanitize to remove user details)
+            const sanitizedErrors = applyResult.errors.map(error => {
+                // Remove user tags, IDs, and usernames from error messages for privacy
+                return error
+                    .replace(/<@\d+>/g, 'another Discord account') // Remove mentions
+                    .replace(/User ID: \d+/g, 'another Discord account') // Remove user IDs
+                    .replace(/by [^\s]+#\d+ \(/g, 'by another Discord account (') // Remove user#discriminator
+                    .replace(/by [^\s]+ \(/g, 'by another Discord account ('); // Remove username
+            });
+            
+            await interaction.editReply({
+                content: null,
+                embeds: [
+                    new EmbedBuilder()
+                        .setTitle('❌ Verification Failed')
+                        .setColor(0xFF0000)
+                        .setDescription(
+                            `Unable to complete verification in **${guild.name}**.\n\n` +
+                            `**IGN:** ${session.rotmg_ign}\n\n` +
+                            `**Reason:**\n${sanitizedErrors.map(e => `• ${e}`).join('\n')}\n\n` +
+                            `Please contact staff (Security+) for assistance.`
+                        )
+                        .setFooter({ text: 'You can close this DM' })
+                ],
+                components: [], // Remove buttons
+            });
+            return;
+        }
+
         // Mark session as verified
         const verifiedSession = await updateSession(guildId, interaction.user.id, { status: 'verified' });
         
@@ -442,7 +486,7 @@ export async function handleVerificationDone(interaction: ButtonInteraction): Pr
             `• IGN: \`${session.rotmg_ign}\`\n` +
             `• Role Applied: ${applyResult.roleApplied ? '✅' : '❌'}\n` +
             `• Nickname Set: ${applyResult.nicknameSet ? '✅' : '❌'}` +
-            (applyResult.errors.length > 0 ? `\n• Errors: ${applyResult.errors.join(', ')}` : '')
+            (applyResult.errors.length > 0 ? `\n• Warnings: ${applyResult.errors.join(', ')}` : '')
         );
 
         // Send success message

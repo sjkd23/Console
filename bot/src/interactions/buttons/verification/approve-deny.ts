@@ -326,16 +326,27 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
                 `**Errors:**\n${applyResult.errors.map(e => `• ${e}`).join('\n')}`
             );
 
-            // Try to notify user
+            // Try to notify user (sanitize error messages to remove user details)
             try {
                 const dmChannel = await userToVerify.createDM();
+                
+                // Sanitize errors for user DM
+                const sanitizedErrors = applyResult.errors.map(error => {
+                    // Remove user tags, IDs, and usernames from error messages for privacy
+                    return error
+                        .replace(/<@\d+>/g, 'another Discord account') // Remove mentions
+                        .replace(/User ID: \d+/g, 'another Discord account') // Remove user IDs
+                        .replace(/by [^\s]+#\d+ \(/g, 'by another Discord account (') // Remove user#discriminator
+                        .replace(/by [^\s]+ \(/g, 'by another Discord account ('); // Remove username
+                });
+                
                 const failureEmbed = new EmbedBuilder()
                     .setTitle('❌ Verification Failed')
                     .setDescription(
                         `**Server:** ${interaction.guild.name}\n\n` +
                         `Your verification could not be completed due to the following issues:\n\n` +
-                        applyResult.errors.map(e => `• ${e}`).join('\n') + '\n\n' +
-                        'Please contact a staff member for assistance.'
+                        sanitizedErrors.map(e => `• ${e}`).join('\n') + '\n\n' +
+                        'Please contact a staff member (Security+) for assistance.'
                     )
                     .setColor(0xFF0000)
                     .setTimestamp();

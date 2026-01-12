@@ -421,8 +421,8 @@ async function handleCustomRoleApproveInternal(interaction: ButtonInteraction, s
             const user = await interaction.client.users.fetch(session.user_id);
             await user.send(
                 `✅ **Verification Approved!**\n\n` +
-                `Your verification for **${role.name}** in **${interaction.guild!.name}** has been approved!\n` +
-                `You now have the ${role} role.`
+                `Your verification for **"${role.name}"** in **${interaction.guild!.name}** has been approved!\n` +
+                `You now have the **"${role.name}"** role.`
             );
         } catch (err) {
             // User has DMs disabled, that's OK
