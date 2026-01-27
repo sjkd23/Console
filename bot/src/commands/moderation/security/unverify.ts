@@ -88,18 +88,15 @@ export const unverify: SlashCommand = {
             return;
         }
 
-        // Check if we can change nickname (based on role hierarchy)
-        // Allow unverification of anyone, but only change nickname if they're lower in hierarchy
-        let canChangeNickname = true;
-        try {
-            const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
-                allowSelf: false,
-                checkBotPosition: true
-            });
-            canChangeNickname = targetCheck.canTarget;
-        } catch (hierarchyErr) {
-            console.error('[Unverify] Role hierarchy check failed:', hierarchyErr);
-            canChangeNickname = false;
+        // Check role hierarchy: actor must outrank target
+        const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
+            allowSelf: false,
+            checkBotPosition: true
+        });
+        
+        if (!targetCheck.canTarget) {
+            await interaction.editReply(targetCheck.reason || '❌ You cannot unverify this member.');
+            return;
         }
 
         try {
@@ -117,18 +114,13 @@ export const unverify: SlashCommand = {
             let nicknameRemoved = false;
             let nicknameError = '';
             try {
-                // Only change nickname if hierarchy allows it
-                if (canChangeNickname) {
-                    if (targetMember.nickname) {
-                        await targetMember.setNickname(null, `Unverified by ${interaction.user.tag}`);
-                        nicknameRemoved = true;
-                    }
-                } else {
-                    nicknameError = 'User has higher or equal role (hierarchy protection)';
+                if (targetMember.nickname) {
+                    await targetMember.setNickname(null, `Unverified by ${interaction.user.tag}`);
+                    nicknameRemoved = true;
                 }
             } catch (nickErr: any) {
                 if (nickErr?.code === 50013) {
-                    nicknameError = 'Missing permissions (user may have a higher role than the bot)';
+                    nicknameError = 'Missing permissions';
                     console.warn(`[Unverify] Cannot remove nickname for ${targetUser.id}: Missing Permissions`);
                 } else {
                     nicknameError = 'Unknown error';
@@ -136,20 +128,40 @@ export const unverify: SlashCommand = {
                 }
             }
 
-            // Remove verified raider role if mapped
-            let roleRemoved = false;
-            let roleError = '';
-            try {
-                const { roles } = await getGuildRoles(interaction.guildId);
-                const verifiedRaiderRoleId = roles.verified_raider;
-                
-                if (verifiedRaiderRoleId && targetMember.roles.cache.has(verifiedRaiderRoleId)) {
-                    await targetMember.roles.remove(verifiedRaiderRoleId, `Unverified by ${interaction.user.tag}`);
-                    roleRemoved = true;
+            // Remove all roles the bot can manage
+            const rolesRemovalSummary = {
+                removedCount: 0,
+                failedCount: 0,
+                skippedCount: 0,
+                errors: [] as string[],
+                removedRoles: [] as string[], // Track role mentions for display
+            };
+
+            // Get all roles except @everyone
+            const rolesToRemove = targetMember.roles.cache.filter(role => role.id !== interaction.guildId);
+
+            if (rolesToRemove.size > 0) {
+                for (const [roleId, role] of rolesToRemove) {
+                    try {
+                        // Check if bot can manage this specific role
+                        const botCanManage = await canBotManageRole(interaction.guild, roleId);
+                        
+                        if (!botCanManage.canManage) {
+                            rolesRemovalSummary.skippedCount++;
+                            console.warn(`[Unverify] Cannot remove role ${role.name} (${roleId}): ${botCanManage.reason}`);
+                            continue;
+                        }
+
+                        await targetMember.roles.remove(roleId, `Unverified by ${interaction.user.tag}`);
+                        rolesRemovalSummary.removedCount++;
+                        rolesRemovalSummary.removedRoles.push(`<@&${roleId}>`);
+                    } catch (roleErr: any) {
+                        rolesRemovalSummary.failedCount++;
+                        const errorMsg = roleErr?.code === 50013 ? 'Missing permissions' : 'Unknown error';
+                        rolesRemovalSummary.errors.push(`${role.name}: ${errorMsg}`);
+                        console.warn(`[Unverify] Failed to remove role ${role.name} (${roleId}):`, roleErr?.message || roleErr);
+                    }
                 }
-            } catch (roleErr: any) {
-                console.warn(`[Unverify] Failed to remove verified raider role:`, roleErr?.message || roleErr);
-                roleError = 'Failed to remove verified raider role';
             }
 
             // Build success embed
@@ -162,16 +174,39 @@ export const unverify: SlashCommand = {
                     { name: 'Previous Status', value: existingRaider.status, inline: true },
                     { name: 'Unverified By', value: `<@${interaction.user.id}>`, inline: true },
                     { name: 'Reason', value: reason, inline: false }
-                )
-                .setTimestamp();
+                );
 
-            const footerParts = [];
-            if (roleRemoved) {
-                footerParts.push('✓ Verified raider role removed');
-            } else if (roleError) {
-                footerParts.push(`⚠️ Role: ${roleError}`);
+            // Add roles removed field if any roles were removed
+            if (rolesRemovalSummary.removedRoles.length > 0) {
+                // Discord has a 1024 character limit per field value
+                const rolesText = rolesRemovalSummary.removedRoles.join(', ');
+                const truncatedRolesText = rolesText.length > 1024 
+                    ? rolesText.substring(0, 1021) + '...' 
+                    : rolesText;
+                embed.addFields({ 
+                    name: `Roles Removed (${rolesRemovalSummary.removedRoles.length})`, 
+                    value: truncatedRolesText, 
+                    inline: false 
+                });
             }
 
+            embed.setTimestamp();
+
+            // Build footer with detailed summary
+            const footerParts = [];
+            
+            // Role removal summary
+            if (rolesRemovalSummary.removedCount > 0) {
+                footerParts.push(`✓ ${rolesRemovalSummary.removedCount} role(s) removed`);
+            }
+            if (rolesRemovalSummary.skippedCount > 0) {
+                footerParts.push(`⚠️ ${rolesRemovalSummary.skippedCount} role(s) skipped (bot cannot manage)`);
+            }
+            if (rolesRemovalSummary.failedCount > 0) {
+                footerParts.push(`❌ ${rolesRemovalSummary.failedCount} role(s) failed`);
+            }
+
+            // Nickname summary
             if (nicknameRemoved) {
                 footerParts.push('✓ Nickname removed');
             } else if (nicknameError) {

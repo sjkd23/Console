@@ -23,6 +23,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         discord_role_id: string;
         required_points: number;
         reset_at: string;
+        period_start_at: string;
         panel_message_id: string | null;
         moderation_points: number;
         base_exalt_points?: number;
@@ -66,6 +67,8 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         .setTimestamp();
 
     if (config) {
+        const periodStartDate = new Date(config.period_start_at);
+        const periodStartTimestamp = Math.floor(periodStartDate.getTime() / 1000);
         const resetDate = new Date(config.reset_at);
         const resetTimestamp = Math.floor(resetDate.getTime() / 1000);
         
@@ -75,10 +78,11 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         
         embed.addFields(
             { name: '🎯 Required Points', value: formatPoints(config.required_points), inline: true },
+            { name: '📆 Period Start', value: `<t:${periodStartTimestamp}:F>\n(<t:${periodStartTimestamp}:R>)`, inline: true },
             { name: '📅 Resets', value: `<t:${resetTimestamp}:F>\n(<t:${resetTimestamp}:R>)`, inline: true },
-            { name: '\u200b', value: '\u200b', inline: true }, // Spacer for proper layout
             { name: '⚔️ Base Exalt Points', value: formatPoints(baseExaltPoints), inline: true },
-            { name: '🗡️ Base Non-Exalt Points', value: formatPoints(baseNonExaltPoints), inline: true }
+            { name: '🗡️ Base Non-Exalt Points', value: formatPoints(baseNonExaltPoints), inline: true },
+            { name: '\u200b', value: '\u200b', inline: true } // Spacer for proper layout
         );
 
         // Build moderation points summary

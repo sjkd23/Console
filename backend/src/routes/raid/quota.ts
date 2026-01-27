@@ -464,7 +464,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 { message: 'Required points must have at most 2 decimal places' }
             ),
             reset_at: z.string().optional(), // ISO timestamp YYYY-MM-DDTHH:MM:SSZ
-            created_at: z.string().optional(), // ISO timestamp - for resetting quota periods
+            period_start_at: z.string().optional(), // ISO timestamp - custom start date for quota period
             panel_message_id: zSnowflake.nullable().optional(),
             moderation_points: z.number().min(0).optional().refine(
                 (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
@@ -774,7 +774,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             logger.info({ 
                 guild_id, 
                 role_id, 
-                created_at: config.created_at, 
+                period_start_at: config.period_start_at, 
                 reset_at: config.reset_at,
                 period_start: periodStart.toISOString(),
                 period_end: periodEnd.toISOString(),

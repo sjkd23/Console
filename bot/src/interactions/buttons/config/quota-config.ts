@@ -229,6 +229,13 @@ export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
         resetDisplay = `${resetDate.getUTCFullYear()}-${String(resetDate.getUTCMonth() + 1).padStart(2, '0')}-${String(resetDate.getUTCDate()).padStart(2, '0')} ${String(resetDate.getUTCHours()).padStart(2, '0')}:${String(resetDate.getUTCMinutes()).padStart(2, '0')}`;
     }
 
+    // Format period_start_at for display (YYYY-MM-DD HH:MM)
+    let periodStartDisplay = '';
+    if (config?.period_start_at) {
+        const periodStartDate = new Date(config.period_start_at);
+        periodStartDisplay = `${periodStartDate.getUTCFullYear()}-${String(periodStartDate.getUTCMonth() + 1).padStart(2, '0')}-${String(periodStartDate.getUTCDate()).padStart(2, '0')} ${String(periodStartDate.getUTCHours()).padStart(2, '0')}:${String(periodStartDate.getUTCMinutes()).padStart(2, '0')}`;
+    }
+
     const modal = new ModalBuilder()
         .setCustomId(`quota_basic_modal:${roleId}:${interaction.message.id}`)
         .setTitle('Configure Basic Quota Settings');
@@ -241,16 +248,25 @@ export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
         .setRequired(true)
         .setValue(config?.required_points?.toFixed(2) || '0.00');
 
+    const periodStartInput = new TextInputBuilder()
+        .setCustomId('period_start_at')
+        .setLabel('Start Date & Time (UTC, YYYY-MM-DD HH:MM)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 2025-11-19 00:00')
+        .setRequired(true)
+        .setValue(periodStartDisplay || new Date().toISOString().slice(0, 16).replace('T', ' '));
+
     const resetAtInput = new TextInputBuilder()
         .setCustomId('reset_at')
         .setLabel('Reset Date & Time (UTC, YYYY-MM-DD HH:MM)')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 2025-11-19 00:00')
+        .setPlaceholder('e.g., 2025-11-26 00:00')
         .setRequired(true)
         .setValue(resetDisplay);
 
     modal.addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(requiredPointsInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(periodStartInput),
         new ActionRowBuilder<TextInputBuilder>().addComponents(resetAtInput)
     );
 
@@ -274,6 +290,7 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
 
     // Parse inputs
     const requiredPoints = parseFloat(interaction.fields.getTextInputValue('required_points'));
+    const periodStartStr = interaction.fields.getTextInputValue('period_start_at').trim();
     const resetAtStr = interaction.fields.getTextInputValue('reset_at').trim();
 
     // Validate required points (allow decimals up to 2 decimal places)
@@ -288,28 +305,58 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
         return;
     }
 
-    // Parse and validate reset datetime (YYYY-MM-DD HH:MM)
+    // Parse and validate period start datetime (YYYY-MM-DD HH:MM)
     const dateTimeRegex = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/;
-    const match = resetAtStr.match(dateTimeRegex);
+    const periodStartMatch = periodStartStr.match(dateTimeRegex);
 
-    if (!match) {
-        await interaction.editReply('❌ Invalid datetime format. Please use: YYYY-MM-DD HH:MM (e.g., 2025-11-19 00:00)');
+    if (!periodStartMatch) {
+        await interaction.editReply('❌ Invalid period start datetime format. Please use: YYYY-MM-DD HH:MM (e.g., 2025-11-19 00:00)');
         return;
     }
 
-    const [, year, month, day, hour, minute] = match;
-    const resetDate = new Date(Date.UTC(
-        parseInt(year, 10),
-        parseInt(month, 10) - 1, // Months are 0-indexed
-        parseInt(day, 10),
-        parseInt(hour, 10),
-        parseInt(minute, 10),
+    const [, startYear, startMonth, startDay, startHour, startMinute] = periodStartMatch;
+    const periodStartDate = new Date(Date.UTC(
+        parseInt(startYear, 10),
+        parseInt(startMonth, 10) - 1, // Months are 0-indexed
+        parseInt(startDay, 10),
+        parseInt(startHour, 10),
+        parseInt(startMinute, 10),
         0
     ));
 
-    // Validate date
+    // Validate period start date
+    if (isNaN(periodStartDate.getTime())) {
+        await interaction.editReply('❌ Invalid period start date. Please check your input.');
+        return;
+    }
+
+    // Parse and validate reset datetime (YYYY-MM-DD HH:MM)
+    const resetMatch = resetAtStr.match(dateTimeRegex);
+
+    if (!resetMatch) {
+        await interaction.editReply('❌ Invalid reset datetime format. Please use: YYYY-MM-DD HH:MM (e.g., 2025-11-19 00:00)');
+        return;
+    }
+
+    const [, resetYear, resetMonth, resetDay, resetHour, resetMinute] = resetMatch;
+    const resetDate = new Date(Date.UTC(
+        parseInt(resetYear, 10),
+        parseInt(resetMonth, 10) - 1, // Months are 0-indexed
+        parseInt(resetDay, 10),
+        parseInt(resetHour, 10),
+        parseInt(resetMinute, 10),
+        0
+    ));
+
+    // Validate reset date
     if (isNaN(resetDate.getTime())) {
-        await interaction.editReply('❌ Invalid date. Please check your input.');
+        await interaction.editReply('❌ Invalid reset date. Please check your input.');
+        return;
+    }
+
+    // Validate that reset date is after period start date
+    if (resetDate <= periodStartDate) {
+        await interaction.editReply('❌ Reset date must be after the period start date.');
         return;
     }
 
@@ -322,12 +369,14 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
             required_points: requiredPoints,
+            period_start_at: periodStartDate.toISOString(),
             reset_at: resetDate.toISOString(),
         });
 
         await interaction.editReply(
             `✅ **Quota configuration updated!**\n\n` +
             `**Required Points:** ${formatPoints(requiredPoints)}\n` +
+            `**Period Start:** <t:${Math.floor(periodStartDate.getTime() / 1000)}:F> (<t:${Math.floor(periodStartDate.getTime() / 1000)}:R>)\n` +
             `**Reset Time:** <t:${Math.floor(resetDate.getTime() / 1000)}:F> (<t:${Math.floor(resetDate.getTime() / 1000)}:R>)`
         );
 
@@ -1113,7 +1162,7 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
             }
         }
 
-        // Reset the quota period by updating created_at to NOW and reset_at to 7 days from now
+        // Reset the quota period by updating period_start_at to NOW and reset_at to 7 days from now
         // This starts a fresh quota period
         const hasAdminPerm = member.permissions.has(PermissionFlagsBits.Administrator);
         const now = new Date();
@@ -1123,7 +1172,7 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
             panel_message_id: null,
-            created_at: now.toISOString(), // Start the period NOW
+            period_start_at: now.toISOString(), // Start the period NOW
             reset_at: newResetAt.toISOString(), // End in 7 days
         });
 

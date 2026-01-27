@@ -677,6 +677,7 @@ export async function getQuotaRoleConfig(
         discord_role_id: string;
         required_points: number;
         reset_at: string;
+        period_start_at: string;
         panel_message_id: string | null;
         moderation_points: number;
         base_exalt_points: number;
@@ -697,7 +698,7 @@ export async function updateQuotaRoleConfig(
         actor_has_admin_permission?: boolean;
         required_points?: number;
         reset_at?: string;
-        created_at?: string;
+        period_start_at?: string;
         panel_message_id?: string | null;
         moderation_points?: number;
         base_exalt_points?: number;
