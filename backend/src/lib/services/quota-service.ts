@@ -34,6 +34,7 @@ export interface QuotaContext {
 export interface OrganizerQuotaInput extends QuotaContext {
     organizerDiscordId: string;
     organizerRoles?: string[]; // For dungeon point overrides lookup
+    organizerRolePositions?: Record<string, number>; // Discord role positions for failsafe
     keyPopNumber?: number; // Optional: for awarding per key pop in chains
 }
 
@@ -72,13 +73,24 @@ export class QuotaService {
     ): Promise<number> {
         const db = client || pool;
 
-        // Step 1: Calculate points for this dungeon (considering role-based overrides)
-        const points = await this.getPointsForDungeon(
+        // Step 1: Determine which quota role should award points
+        const { getQuotaRoleForDungeon } = await import('../quota/quota.js');
+        const quotaRole = await getQuotaRoleForDungeon(
             input.guildId,
             input.dungeonKey,
-            input.organizerRoles,
-            db
+            input.organizerRoles || [],
+            input.organizerRolePositions
         );
+
+        if (!quotaRole || quotaRole.points === 0) {
+            logger.debug({ 
+                runId: input.runId, 
+                guildId: input.guildId, 
+                organizerId: input.organizerDiscordId,
+                dungeonKey: input.dungeonKey
+            }, 'No quota role awards points for this dungeon');
+            return 0;
+        }
 
         // Step 2: Log quota event with idempotency
         // Use key pop number in idempotency key if provided (for chain tracking)
@@ -87,8 +99,8 @@ export class QuotaService {
             : `run:${input.runId}`;
         
         const res = await db.query<{ id: number; quota_points: string }>(
-            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
-             VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5)
+            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points, quota_role_id)
+             VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5, $6::bigint)
              ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
              DO NOTHING
              RETURNING id, quota_points`,
@@ -97,7 +109,8 @@ export class QuotaService {
                 input.organizerDiscordId,
                 idempotencyKey,
                 input.dungeonKey,
-                points,
+                quotaRole.points,
+                quotaRole.roleId,
             ]
         );
 
@@ -114,7 +127,8 @@ export class QuotaService {
             organizerId: input.organizerDiscordId,
             dungeonKey: input.dungeonKey,
             keyPopNumber: input.keyPopNumber,
-            quotaPoints
+            quotaPoints,
+            quotaRoleId: quotaRole.roleId
         }, 'Awarded organizer quota points');
 
         return quotaPoints;

@@ -40,6 +40,7 @@ const logger = createLogger('Quota');/**
 const LogRunBody = z.object({
     actorId: zSnowflake,
     actorRoles: z.array(zSnowflake).optional(),
+    actorRolePositions: z.record(z.string(), z.number()).optional(), // Discord role positions for failsafe
     guildId: zSnowflake,
     organizerId: zSnowflake.optional(), // Target organizer to log quota for (defaults to actorId)
     dungeonKey: z.string(), // Required: dungeon type for the manual quota log
@@ -68,8 +69,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
      * Authorization: actorId must have organizer role or higher.
      * Supports negative amounts to remove quota points.
      * 
-     * Body: { actorId, actorRoles?, guildId, organizerId?, dungeonKey, amount? }
-     * Returns: { logged: number, total_points: number, organizer_id: string }
+     * Body: { actorId, actorRoles?, actorRolePositions?, guildId, organizerId?, dungeonKey, amount? }
+     * Returns: { logged: number, total_points: number, organizer_id: string, quota_role_id?: string }
      */
     app.post('/quota/log-run', async (req, reply) => {
         const parsed = LogRunBody.safeParse(req.body);
@@ -78,7 +79,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             return Errors.validation(reply, msg);
         }
 
-        const { actorId, actorRoles, guildId, organizerId, dungeonKey, amount } = parsed.data;
+        const { actorId, actorRoles, actorRolePositions, guildId, organizerId, dungeonKey, amount } = parsed.data;
 
         // Default organizerId to actorId if not provided (self-logging)
         const targetOrganizerId = organizerId || actorId;
@@ -106,11 +107,30 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
         let totalPoints = 0;
         let loggedCount = 0;
+        let quotaRoleId: string | undefined;
 
         try {
-            // Get the correct quota point value for this dungeon based on guild config
-            // This queries quota_dungeon_override table (set via /configquota)
-            const pointsPerRun = await getPointsForDungeon(guildId, dungeonKey, actorRoles);
+            // Determine which quota role should award points
+            const { getQuotaRoleForDungeon } = await import('../../lib/quota/quota.js');
+            const quotaRole = await getQuotaRoleForDungeon(
+                guildId,
+                dungeonKey,
+                actorRoles || [],
+                actorRolePositions
+            );
+
+            if (!quotaRole || quotaRole.points === 0) {
+                logger.info({ actorId, guildId, dungeonKey }, 'No quota role awards points for this dungeon');
+                return reply.code(200).send({
+                    logged: 0,
+                    total_points: 0,
+                    organizer_id: targetOrganizerId,
+                    message: 'No quota role configured with points for this dungeon',
+                });
+            }
+
+            quotaRoleId = quotaRole.roleId;
+            const pointsPerRun = quotaRole.points;
             
             // Calculate total points to be added/removed
             const totalPointsToAdd = pointsPerRun * amount;
@@ -146,7 +166,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 'run_completed',
                 `manual_log_run:${Date.now()}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`, // Unique subject_id
                 dungeonKey,
-                adjustedTotalPoints // Total quota points (can be positive or negative)
+                adjustedTotalPoints, // Total quota points (can be positive or negative)
+                quotaRoleId // quota_role_id
             );
 
             if (event) {
@@ -162,13 +183,15 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 guildId, 
                 dungeonKey, 
                 pointsPerRun, 
-                totalPoints 
+                totalPoints,
+                quotaRoleId
             }, 'Manually logged runs');
 
             return reply.code(200).send({
                 logged: loggedCount,
                 total_points: totalPoints,
                 organizer_id: targetOrganizerId,
+                quota_role_id: quotaRoleId,
             });
         } catch (err) {
             logger.error({ err, guildId, targetOrganizerId, dungeonKey }, 'Failed to manually log run');
@@ -1037,7 +1060,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
     /**
      * POST /quota/adjust-quota-points/:guild_id/:user_id
      * Manually adjust quota points for a user (supports negative values)
-     * Body: { actor_user_id, actor_roles?, actor_has_admin_permission?, amount }
+     * Body: { actor_user_id, actor_roles?, actor_has_admin_permission?, amount, quota_role_id }
+     * quota_role_id is REQUIRED to specify which quota panel these points belong to
      */
     app.post('/quota/adjust-quota-points/:guild_id/:user_id', async (req, reply) => {
         const Params = z.object({
@@ -1053,6 +1077,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 (val) => Number.isFinite(val) && Math.round(val * 100) === val * 100,
                 { message: 'Amount must have at most 2 decimal places' }
             ),
+            quota_role_id: zSnowflake, // REQUIRED: Which quota role these points belong to
         });
 
         const p = Params.safeParse(req.params);
@@ -1063,7 +1088,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, user_id } = p.data;
-        const { actor_user_id, actor_roles, actor_has_admin_permission, amount } = b.data;
+        const { actor_user_id, actor_roles, actor_has_admin_permission, amount, quota_role_id } = b.data;
 
         // Authorization: must have admin permission or administrator role
         let authorized = false;
@@ -1105,10 +1130,10 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             // Insert a quota event with the adjusted amount
             const result = await query<{ id: number; quota_points: number }>(
-                `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, quota_points, points)
-                 VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0)
+                `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, quota_points, points, quota_role_id)
+                 VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5::bigint)
                  RETURNING id, quota_points`,
-                [guild_id, user_id, `manual_adjust:${Date.now()}:${user_id}`, adjustedAmount]
+                [guild_id, user_id, `manual_adjust:${Date.now()}:${user_id}`, adjustedAmount, quota_role_id]
             );
 
             if (!result.rowCount || result.rowCount === 0) {
@@ -1131,9 +1156,10 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 success: true,
                 amount_adjusted: result.rows[0].quota_points,
                 new_total: totalQuotaPoints,
+                quota_role_id,
             });
         } catch (err) {
-            logger.error({ err, guild_id, user_id, amount }, 'Failed to adjust quota points');
+            logger.error({ err, guild_id, user_id, amount, quota_role_id }, 'Failed to adjust quota points');
             return Errors.internal(reply, 'Failed to adjust quota points');
         }
     });
@@ -1314,9 +1340,10 @@ export default async function quotaRoutes(app: FastifyInstance) {
      * Award moderation points to a user for moderation activities
      * This is called automatically when staff perform moderation actions
      * 
-     * Body: { actor_user_id, actor_roles?, command_type? }
+     * Body: { actor_user_id, actor_roles?, actor_role_positions?, command_type? }
      * command_type: 'verify' | 'warn' | 'suspend' | 'modmail_reply' | 'editname' | 'addnote'
-     * Returns: { points_awarded: number }
+     * actor_role_positions: Record<roleId, position> - Discord role positions for failsafe
+     * Returns: { points_awarded: number, quota_role_id?: string }
      */
     app.post('/quota/award-moderation-points/:guild_id/:user_id', async (req, reply) => {
         const Params = z.object({
@@ -1327,6 +1354,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         const Body = z.object({
             actor_user_id: zSnowflake,
             actor_roles: z.array(zSnowflake).optional(),
+            actor_role_positions: z.record(z.string(), z.number()).optional(),
             command_type: z.enum(['verify', 'warn', 'suspend', 'modmail_reply', 'editname', 'addnote']).optional(),
         });
 
@@ -1338,7 +1366,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, user_id } = p.data;
-        const { actor_user_id, actor_roles, command_type } = b.data;
+        const { actor_user_id, actor_roles, actor_role_positions, command_type } = b.data;
 
         // Default to 'verify' for backward compatibility
         const cmdType = command_type || 'verify';
@@ -1401,46 +1429,17 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 return hasPoints;
             });
 
-            // Calculate total points to award across all roles
-            let totalPointsToAward = 0;
-            for (const config of relevantConfigs) {
-                switch (cmdType) {
-                    case 'verify':
-                        totalPointsToAward += config.verify_points;
-                        break;
-                    case 'warn':
-                        totalPointsToAward += config.warn_points;
-                        break;
-                    case 'suspend':
-                        totalPointsToAward += config.suspend_points;
-                        break;
-                    case 'modmail_reply':
-                        totalPointsToAward += config.modmail_reply_points;
-                        break;
-                    case 'editname':
-                        totalPointsToAward += config.editname_points;
-                        break;
-                    case 'addnote':
-                        totalPointsToAward += config.addnote_points;
-                        break;
-                }
-            }
-
-            // ALWAYS log exactly ONE event per action for stat tracking
-            // This ensures the verification counter in /stats increments correctly
-            // Award the sum of all role points (or 0 if no quota roles configured)
-            const event = await logQuotaEvent(
-                guild_id,
-                user_id,
-                'verify_member',
-                `${cmdType}:${Date.now()}:${user_id}`, // Unique subject_id per action
-                undefined, // No dungeon key for moderation actions
-                totalPointsToAward
-            );
-
-            const pointsAwarded = event ? Number(event.quota_points) : 0;
-
+            // If no roles apply, log with 0 points
             if (relevantConfigs.length === 0) {
+                await logQuotaEvent(
+                    guild_id,
+                    user_id,
+                    'verify_member',
+                    `${cmdType}:${Date.now()}:${user_id}`,
+                    undefined,
+                    0,
+                    undefined
+                );
                 logger.info({ user_id, guild_id, cmdType }, 'Logged action with 0 points - no quota config');
                 return reply.send({
                     points_awarded: 0,
@@ -1448,11 +1447,73 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 });
             }
 
-            logger.info({ user_id, guild_id, pointsAwarded, rolesCount: relevantConfigs.length }, 'Awarded moderation points');
+            // Determine the winning role (highest Discord position)
+            let winningConfig = relevantConfigs[0];
+            if (relevantConfigs.length > 1) {
+                logger.warn({ 
+                    guild_id, 
+                    actor_user_id, 
+                    cmdType, 
+                    roleCount: relevantConfigs.length,
+                    roleIds: relevantConfigs.map(c => c.discord_role_id)
+                }, 'Multiple quota roles could apply for moderation action - using highest role by position');
+                
+                if (actor_role_positions) {
+                    // Sort by Discord role position (higher position = higher authority)
+                    relevantConfigs.sort((a, b) => 
+                        (actor_role_positions[b.discord_role_id] ?? 0) - (actor_role_positions[a.discord_role_id] ?? 0)
+                    );
+                    winningConfig = relevantConfigs[0];
+                }
+            }
+
+            // Get points for winning role
+            let pointsToAward = 0;
+            switch (cmdType) {
+                case 'verify':
+                    pointsToAward = winningConfig.verify_points;
+                    break;
+                case 'warn':
+                    pointsToAward = winningConfig.warn_points;
+                    break;
+                case 'suspend':
+                    pointsToAward = winningConfig.suspend_points;
+                    break;
+                case 'modmail_reply':
+                    pointsToAward = winningConfig.modmail_reply_points;
+                    break;
+                case 'editname':
+                    pointsToAward = winningConfig.editname_points;
+                    break;
+                case 'addnote':
+                    pointsToAward = winningConfig.addnote_points;
+                    break;
+            }
+
+            // Award points from winning role only
+            const event = await logQuotaEvent(
+                guild_id,
+                user_id,
+                'verify_member',
+                `${cmdType}:${Date.now()}:${user_id}`, // Unique subject_id per action
+                undefined, // No dungeon key for moderation actions
+                pointsToAward,
+                winningConfig.discord_role_id // quota_role_id
+            );
+
+            const pointsAwarded = event ? Number(event.quota_points) : 0;
+
+            logger.info({ 
+                user_id, 
+                guild_id, 
+                pointsAwarded, 
+                quotaRoleId: winningConfig.discord_role_id,
+                cmdType
+            }, 'Awarded moderation points');
 
             return reply.send({
                 points_awarded: pointsAwarded,
-                roles_awarded: relevantConfigs.length,
+                quota_role_id: winningConfig.discord_role_id,
             });
         } catch (err) {
             logger.error({ err, guild_id, user_id, cmdType }, 'Failed to award moderation points');

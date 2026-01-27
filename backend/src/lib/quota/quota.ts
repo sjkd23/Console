@@ -685,6 +685,70 @@ export async function deleteKeyPopPointsForDungeon(
 }
 
 /**
+ * Get the quota role that should award points for a dungeon action.
+ * Returns the highest-ranked Discord role that:
+ * - User currently has
+ * - Has quota config with points > 0 for this dungeon
+ * 
+ * @param guildId - Discord guild ID
+ * @param dungeonKey - Dungeon identifier (e.g., 'shatters', 'fungal')
+ * @param userRoleIds - Array of Discord role IDs the user has
+ * @param userRolePositions - Optional map of roleId -> Discord position (higher = more authority)
+ * @returns Object with roleId and points, or null if no role awards points
+ */
+export async function getQuotaRoleForDungeon(
+    guildId: string,
+    dungeonKey: string,
+    userRoleIds: string[],
+    userRolePositions?: Record<string, number>
+): Promise<{ roleId: string; points: number } | null> {
+    if (!userRoleIds || userRoleIds.length === 0) {
+        return null;
+    }
+
+    // Get all configs where user has the role
+    const configs = await getAllQuotaRoleConfigs(guildId);
+    const userConfigs = configs.filter(c => userRoleIds.includes(c.discord_role_id));
+    
+    if (userConfigs.length === 0) {
+        return null;
+    }
+    
+    // For each config, get dungeon points (considering overrides)
+    const configsWithPoints = await Promise.all(
+        userConfigs.map(async (config) => {
+            const points = await getPointsForDungeon(guildId, dungeonKey, [config.discord_role_id]);
+            return { roleId: config.discord_role_id, points };
+        })
+    );
+    
+    // Filter to only configs with points > 0
+    const activeConfigs = configsWithPoints.filter(c => c.points > 0);
+    if (activeConfigs.length === 0) {
+        return null;
+    }
+    
+    // If multiple roles could award, use highest role position (failsafe)
+    if (activeConfigs.length > 1) {
+        logger.warn({ 
+            guildId, 
+            dungeonKey, 
+            roleCount: activeConfigs.length,
+            roleIds: activeConfigs.map(c => c.roleId)
+        }, 'Multiple quota roles could award points - using highest role by position');
+        
+        if (userRolePositions) {
+            // Sort by Discord role position (higher position = higher authority)
+            activeConfigs.sort((a, b) => 
+                (userRolePositions[b.roleId] ?? 0) - (userRolePositions[a.roleId] ?? 0)
+            );
+        }
+    }
+    
+    return activeConfigs[0];
+}
+
+/**
  * Calculate the start of the current quota period for a given config
  * For absolute datetime: if reset hasn't happened yet, start from when config was created
  * If reset already happened, it marks the start of the last reset (previous period)
@@ -741,6 +805,7 @@ export function getQuotaPeriodEnd(config: QuotaRoleConfig): Date {
  * @param subjectId - Optional subject identifier for idempotency (e.g., 'run:123')
  * @param dungeonKey - Optional dungeon identifier for per-dungeon tracking (e.g., 'fungal', 'osanc')
  * @param quotaPoints - Optional point override for quota_points (defaults to action type default)
+ * @param quotaRoleId - Optional Discord role ID that awarded these quota points (for panel tracking)
  * @returns The created quota event or null if it was a duplicate (idempotent no-op)
  */
 export async function logQuotaEvent(
@@ -749,19 +814,30 @@ export async function logQuotaEvent(
     actionType: QuotaActionType,
     subjectId?: string,
     dungeonKey?: string,
-    quotaPoints?: number
+    quotaPoints?: number,
+    quotaRoleId?: string
 ): Promise<{ id: number; points: number; quota_points: number } | null> {
     const effectiveQuotaPoints = quotaPoints ?? getDefaultPoints(actionType);
     const effectivePoints = 0; // Regular points not yet implemented for raiders
 
+    // Log warning if quota points are being awarded without a role ID
+    if (effectiveQuotaPoints !== 0 && !quotaRoleId) {
+        logger.warn({ 
+            guildId, 
+            actorUserId, 
+            actionType, 
+            quotaPoints: effectiveQuotaPoints 
+        }, 'Quota points awarded without quota_role_id - event will not appear in role panels');
+    }
+
     try {
         const res = await query<{ id: number; points: number; quota_points: number }>(
-            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
-             VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6, $7)
+            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points, quota_role_id)
+             VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6, $7, $8::bigint)
              ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
              DO NOTHING
              RETURNING id, points, quota_points`,
-            [guildId, actorUserId, actionType, subjectId || null, dungeonKey || null, effectivePoints, effectiveQuotaPoints]
+            [guildId, actorUserId, actionType, subjectId || null, dungeonKey || null, effectivePoints, effectiveQuotaPoints, quotaRoleId || null]
         );
 
         if (res.rowCount === 0) {
@@ -770,7 +846,7 @@ export async function logQuotaEvent(
             return null;
         }
 
-        logger.info({ guildId, actorUserId, actionType, subjectId, dungeonKey, quotaPoints: effectiveQuotaPoints }, 'Logged quota event');
+        logger.info({ guildId, actorUserId, actionType, subjectId, dungeonKey, quotaPoints: effectiveQuotaPoints, quotaRoleId }, 'Logged quota event');
 
         // Convert DB numeric fields to numbers (PostgreSQL returns them as strings)
         const row = res.rows[0];
@@ -1037,6 +1113,7 @@ export async function getUserQuotaStats(
 /**
  * Get quota leaderboard for a specific role and time period
  * Uses quota_points since leaderboards track organizer/verifier activity
+ * Only includes events where quota_role_id matches the specified role
  */
 export async function getQuotaLeaderboard(
     guildId: string,
@@ -1059,6 +1136,7 @@ export async function getQuotaLeaderboard(
 
     // Use UNNEST to include all members, even those with 0 points
     // This ensures the leaderboard shows everyone with the role, not just those with activity
+    // CRITICAL: Filter by quota_role_id to prevent cross-panel contamination
     // For manual logs (subject_id like 'manual_log_run:timestamp:userid:count'), extract the run count from subject_id
     // and multiply by SIGN(quota_points) to handle negative removals correctly
     // For regular run logs (subject_id like 'run:123'), use SIGN(quota_points) as count
@@ -1082,6 +1160,7 @@ export async function getQuotaLeaderboard(
                                   AND qe.actor_user_id = members.user_id
                                   AND qe.created_at >= $3
                                   AND qe.created_at < $4
+                                  AND qe.quota_role_id = $5::bigint
          GROUP BY members.user_id
          ORDER BY COALESCE(SUM(qe.quota_points), 0) DESC, 
                   COALESCE(
@@ -1097,7 +1176,7 @@ export async function getQuotaLeaderboard(
                       0
                   ) DESC
          LIMIT 50`,
-        [guildId, memberUserIds, periodStart.toISOString(), periodEnd.toISOString()]
+        [guildId, memberUserIds, periodStart.toISOString(), periodEnd.toISOString(), discordRoleId]
     );
 
     logger.debug({ guildId, totalMembers: memberUserIds.length, membersWithActivity: res.rowCount }, 'Quota leaderboard query completed');

@@ -1305,3 +1305,17 @@ export async function updateCustomRoleVerificationSession(
 export async function deleteCustomRoleVerificationSession(sessionId: number): Promise<void> {
     await makeRequest('DELETE', `/custom-role-verification/session/${sessionId}`, undefined);
 }
+
+/**
+ * Get Discord role positions for a member's roles
+ * Used for determining role hierarchy in multi-role quota scenarios
+ * @param member - GuildMember to get role positions for
+ * @returns Record mapping role ID to Discord position (higher = more authority)
+ */
+export function getRolePositions(member: { roles: { cache: Map<string, { id: string; position: number }> } }): Record<string, number> {
+    const positions: Record<string, number> = {};
+    for (const role of member.roles.cache.values()) {
+        positions[role.id] = role.position;
+    }
+    return positions;
+}
