@@ -43,7 +43,7 @@ import { mute } from './moderation/security/mute.js';
 import { unmute } from './moderation/security/unmute.js';
 import { headcount } from './organizer/headcount.js';
 import { leaderboard } from './leaderboard.js';
-import { purge } from './moderation/moderator/purge.js';
+import { purge } from './moderation/security/purge.js';
 import { modmail } from './moderation/modmail.js';
 import { modmailreply } from './moderation/security/modmailreply.js';
 import { modmailblacklist } from './moderation/officer/modmailblacklist.js';

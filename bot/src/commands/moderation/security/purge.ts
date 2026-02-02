@@ -1,4 +1,4 @@
-// bot/src/commands/moderation/moderator/purge.ts
+// bot/src/commands/moderation/security/purge.ts
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
@@ -11,7 +11,7 @@ import type { SlashCommand } from '../../_types.js';
 /**
  * /purge - Delete messages in the current channel
  * Security+ command
- * Rate limited: 3 uses per minute, 10 uses per hour
+ * Rate limited: 3 uses per minute
  */
 export const purge: SlashCommand = {
     requiredRole: 'security',
@@ -26,7 +26,6 @@ export const purge: SlashCommand = {
                 .setMinValue(1)
                 .setMaxValue(25)
         )
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
         .setDMPermission(false),
 
     async run(interaction: ChatInputCommandInteraction) {
