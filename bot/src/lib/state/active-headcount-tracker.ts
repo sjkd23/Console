@@ -1,6 +1,8 @@
 import { createLogger } from '../logging/logger.js';
+import { getDefaultAutoEndMinutes } from '../../config/raid-config.js';
 
 const logger = createLogger('ActiveHeadcountTracker');
+const HEADCOUNT_AUTO_END_MINUTES = getDefaultAutoEndMinutes();
 
 /**
  * In-memory tracking of active headcounts
@@ -11,6 +13,7 @@ const activeHeadcounts = new Map<string, {
     messageId: string;
     channelId: string;
     createdAt: Date;
+    autoEndAt: Date;
     dungeons: string[];
 }>();
 
@@ -25,10 +28,14 @@ export function registerHeadcount(
     dungeons: string[]
 ): void {
     const key = `${guildId}:${organizerId}`;
+    const createdAt = new Date();
+    const autoEndAt = new Date(createdAt.getTime() + HEADCOUNT_AUTO_END_MINUTES * 60 * 1000);
+
     activeHeadcounts.set(key, {
         messageId,
         channelId,
-        createdAt: new Date(),
+        createdAt,
+        autoEndAt,
         dungeons
     });
     
@@ -36,7 +43,9 @@ export function registerHeadcount(
         guildId,
         organizerId,
         messageId,
-        dungeonCount: dungeons.length
+        dungeonCount: dungeons.length,
+        autoEndMinutes: HEADCOUNT_AUTO_END_MINUTES,
+        autoEndAt: autoEndAt.toISOString()
     });
 }
 
@@ -68,10 +77,71 @@ export function getActiveHeadcount(
     messageId: string;
     channelId: string;
     createdAt: Date;
+    autoEndAt: Date;
     dungeons: string[];
 } | null {
     const key = `${guildId}:${organizerId}`;
     return activeHeadcounts.get(key) || null;
+}
+
+/**
+ * Get all active headcounts with guild/organizer metadata.
+ * Used by scheduled tasks for automatic expiration.
+ */
+export function getAllActiveHeadcounts(): Array<{
+    guildId: string;
+    organizerId: string;
+    messageId: string;
+    channelId: string;
+    createdAt: Date;
+    autoEndAt: Date;
+    dungeons: string[];
+}> {
+    const entries: Array<{
+        guildId: string;
+        organizerId: string;
+        messageId: string;
+        channelId: string;
+        createdAt: Date;
+        autoEndAt: Date;
+        dungeons: string[];
+    }> = [];
+
+    for (const [key, value] of activeHeadcounts.entries()) {
+        const separatorIndex = key.indexOf(':');
+        if (separatorIndex === -1) {
+            continue;
+        }
+
+        const guildId = key.substring(0, separatorIndex);
+        const organizerId = key.substring(separatorIndex + 1);
+
+        entries.push({
+            guildId,
+            organizerId,
+            messageId: value.messageId,
+            channelId: value.channelId,
+            createdAt: value.createdAt,
+            autoEndAt: value.autoEndAt,
+            dungeons: value.dungeons,
+        });
+    }
+
+    return entries;
+}
+
+/**
+ * Check if a tracked headcount is expired based on its configured auto-end time.
+ */
+export function isHeadcountExpired(headcount: { autoEndAt: Date }, now: Date = new Date()): boolean {
+    return headcount.autoEndAt.getTime() <= now.getTime();
+}
+
+/**
+ * Get default auto-end duration for headcounts (in minutes).
+ */
+export function getHeadcountAutoEndMinutes(): number {
+    return HEADCOUNT_AUTO_END_MINUTES;
 }
 
 /**

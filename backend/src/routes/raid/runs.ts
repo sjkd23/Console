@@ -449,6 +449,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             actorId: zSnowflake,
             actorRoles: z.array(zSnowflake).optional(),
             actorRolePositions: z.record(z.string(), z.number()).optional(),
+            organizerRoles: z.array(zSnowflake).optional(),
+            organizerRolePositions: z.record(z.string(), z.number()).optional(),
             status: z.enum(['live', 'ended']),
             isAutoEnd: z.boolean().optional(), // Flag for automatic ending
         });
@@ -459,7 +461,15 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.validation(reply);
         }
         const runId = Number(p.data.id);
-        const { actorId, actorRoles, actorRolePositions, status, isAutoEnd } = b.data;
+        const {
+            actorId,
+            actorRoles,
+            actorRolePositions,
+            organizerRoles,
+            organizerRolePositions,
+            status,
+            isAutoEnd
+        } = b.data;
 
         // Read current status AND organizer_id AND guild_id AND dungeon_key AND party AND location AND screenshot_url
         const cur = await query<RunRow & { dungeon_key: string; party: string | null; location: string | null; screenshot_url: string | null }>(
@@ -548,18 +558,33 @@ export default async function runsRoutes(app: FastifyInstance) {
             
             // End run with transaction (ensures atomicity of status update + quota/points awards)
             try {
-                const organizerRoles = actorId === run.organizer_id ? actorRoles : undefined;
-                const organizerRolePositions = actorId === run.organizer_id ? actorRolePositions : undefined;
+                const resolvedOrganizerRoles =
+                    organizerRoles ?? (actorId === run.organizer_id ? actorRoles : undefined);
+                const resolvedOrganizerRolePositions =
+                    organizerRolePositions ?? (actorId === run.organizer_id ? actorRolePositions : undefined);
 
-                await endRunWithTransaction({
+                const endResult = await endRunWithTransaction({
                     runId,
                     guildId: run.guild_id,
                     organizerId: run.organizer_id,
                     dungeonKey,
                     keyPopCount,
-                    organizerRoles,
-                    organizerRolePositions,
+                    organizerRoles: resolvedOrganizerRoles,
+                    organizerRolePositions: resolvedOrganizerRolePositions,
                 });
+
+                logger.info(
+                    {
+                        runId,
+                        guildId: run.guild_id,
+                        organizerId: run.organizer_id,
+                        dungeonKey,
+                        keyPopCount,
+                        organizerQuotaPoints: endResult.organizerQuotaPoints,
+                        raiderPointsAwarded: endResult.raiderPointsAwarded,
+                    },
+                    'Run ended and quota pipeline processed'
+                );
             } catch (err) {
                 logger.error({ err, runId, guildId: run.guild_id, organizerId: run.organizer_id }, 
                     'Failed to end run with transaction');
@@ -748,6 +773,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             organizer_id: string;
             started_at: string | null;
             ended_at: string | null;
+            created_at: string;
+            auto_end_minutes: number;
             key_window_ends_at: string | null;
             party: string | null;
             location: string | null;
@@ -760,8 +787,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             o3_stage: string | null;
             join_locked: boolean;
         }>(
-            `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
-                    started_at, ended_at, key_window_ends_at, party, location, description, role_id, ping_message_id,
+                `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
+                    started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
                     key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked
          FROM run
         WHERE id = $1::bigint`,
@@ -785,6 +812,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             organizerId: r.organizer_id,
             startedAt: r.started_at,
             endedAt: r.ended_at,
+            createdAt: r.created_at,
+            autoEndMinutes: r.auto_end_minutes,
             keyWindowEndsAt: r.key_window_ends_at,
             party: r.party,
             location: r.location,

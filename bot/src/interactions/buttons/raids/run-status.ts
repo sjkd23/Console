@@ -54,6 +54,8 @@ async function handleStatusInternal(
         status: string;
         startedAt: string | null;
         endedAt: string | null;
+        createdAt: string;
+        autoEndMinutes: number;
         keyWindowEndsAt: string | null;
         party: string | null;
         location: string | null;
@@ -86,6 +88,7 @@ async function handleStatusInternal(
     }
 
     const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
+    const organizerMember = await btn.guild.members.fetch(run.organizerId).catch(() => null);
     const guildId = btn.guildId!;
 
     // 1) Update backend status (PATCH for live/ended, DELETE for cancelled) with actorId
@@ -101,6 +104,8 @@ async function handleStatusInternal(
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member),
                 actorRolePositions: member ? getRolePositions(member) : undefined,
+                organizerRoles: organizerMember ? getMemberRoleIds(organizerMember) : undefined,
+                organizerRolePositions: organizerMember ? getRolePositions(organizerMember) : undefined,
                 status
             }, { guildId });
         }

@@ -686,14 +686,16 @@ export async function deleteKeyPopPointsForDungeon(
 
 /**
  * Get the quota role that should award points for a dungeon action.
- * Returns the highest-ranked Discord role that:
- * - User currently has
- * - Has quota config with points > 0 for this dungeon
+ * Returns the role that yields the HIGHEST point value for the given dungeon.
+ * Tie-breaker (when points are equal): highest Discord role position.
+ *
+ * This ensures dungeon overrides are respected (e.g., Advanced Nest override = 2)
+ * instead of being shadowed by a higher staff role with lower base points.
  * 
  * @param guildId - Discord guild ID
  * @param dungeonKey - Dungeon identifier (e.g., 'shatters', 'fungal')
  * @param userRoleIds - Array of Discord role IDs the user has
- * @param userRolePositions - Optional map of roleId -> Discord position (higher = more authority)
+ * @param userRolePositions - Optional map of roleId -> Discord position (higher = more authority), used as tie-breaker
  * @returns Object with roleId and points, or null if no role awards points
  */
 export async function getQuotaRoleForDungeon(
@@ -728,21 +730,26 @@ export async function getQuotaRoleForDungeon(
         return null;
     }
     
-    // If multiple roles could award, use highest role position (failsafe)
+    // If multiple roles could award:
+    // 1) Prefer highest point value for this dungeon
+    // 2) Tie-break by highest role position (failsafe)
     if (activeConfigs.length > 1) {
         logger.warn({ 
             guildId, 
             dungeonKey, 
             roleCount: activeConfigs.length,
             roleIds: activeConfigs.map(c => c.roleId)
-        }, 'Multiple quota roles could award points - using highest role by position');
-        
-        if (userRolePositions) {
-            // Sort by Discord role position (higher position = higher authority)
-            activeConfigs.sort((a, b) => 
-                (userRolePositions[b.roleId] ?? 0) - (userRolePositions[a.roleId] ?? 0)
-            );
-        }
+        }, 'Multiple quota roles could award points - selecting highest points, then highest role position');
+
+        activeConfigs.sort((a, b) => {
+            if (b.points !== a.points) {
+                return b.points - a.points;
+            }
+
+            const posA = userRolePositions?.[a.roleId] ?? 0;
+            const posB = userRolePositions?.[b.roleId] ?? 0;
+            return posB - posA;
+        });
     }
     
     return activeConfigs[0];

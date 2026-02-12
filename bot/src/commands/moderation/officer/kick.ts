@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds } from '../../../lib/permissions/permissions.js';
-import { getGuildChannels } from '../../../lib/utilities/http.js';
+import { getGuildChannels, unverifyRaider, BackendError } from '../../../lib/utilities/http.js';
 
 /**
  * /kick - Remove a member from the server
@@ -52,6 +52,7 @@ export const kick: SlashCommand = {
 
             // Fetch members
             const invokerMember = await interaction.guild.members.fetch(interaction.user.id);
+            const actorRoles = getMemberRoleIds(invokerMember);
 
             // Get options
             const targetUser = interaction.options.getUser('member', true);
@@ -131,6 +132,24 @@ export const kick: SlashCommand = {
                 return;
             }
 
+            // If the user is verified, remove verification record so IGN is freed
+            let verificationCleanupSummary = 'ℹ️ No verification record found';
+            try {
+                const cleanup = await unverifyRaider(interaction.guildId, targetUser.id, {
+                    actor_user_id: interaction.user.id,
+                    actor_roles: actorRoles,
+                    reason: `Auto-unverify from /kick: ${reason}`,
+                });
+                verificationCleanupSummary = `✅ Verification removed (IGN freed: ${cleanup.ign})`;
+            } catch (cleanupErr) {
+                if (cleanupErr instanceof BackendError && cleanupErr.code === 'RAIDER_NOT_FOUND') {
+                    verificationCleanupSummary = 'ℹ️ No verification record found';
+                } else {
+                    verificationCleanupSummary = '⚠️ Failed to remove verification record';
+                    console.warn('[Kick] Failed to auto-unverify after kick:', cleanupErr);
+                }
+            }
+
             // Build success response
             const responseEmbed = new EmbedBuilder()
                 .setTitle('👢 Member Kicked')
@@ -140,7 +159,8 @@ export const kick: SlashCommand = {
                     { name: 'User Tag', value: targetUser.tag, inline: true },
                     { name: 'User ID', value: targetUser.id, inline: true },
                     { name: 'Kicked By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: 'Reason', value: reason }
+                    { name: 'Reason', value: reason },
+                    { name: 'Verification Cleanup', value: verificationCleanupSummary }
                 )
                 .setFooter({ text: dmSent ? '✓ User notified via DM' : '⚠️ Could not DM user (DMs may be disabled)' })
                 .setTimestamp();
@@ -164,6 +184,7 @@ export const kick: SlashCommand = {
                                 { name: 'User ID', value: targetUser.id, inline: true },
                                 { name: 'Kicked By', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
                                 { name: 'DM Sent', value: dmSent ? '✅ Yes' : '❌ No', inline: true },
+                                { name: 'Verification Cleanup', value: verificationCleanupSummary, inline: false },
                                 { name: 'Reason', value: reason }
                             )
                             .setTimestamp();

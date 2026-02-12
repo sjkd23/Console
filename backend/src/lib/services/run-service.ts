@@ -176,24 +176,19 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
             [input.runId]
         );
 
-        // Step 2: Award organizer quota points using QuotaService
-        // Only award at run end if no key pops occurred (otherwise awarded per key pop)
-        let organizerQuotaPoints = 0;
-        if (input.keyPopCount === 0) {
-            organizerQuotaPoints = await quotaService.awardOrganizerQuota({
-                guildId: input.guildId,
-                dungeonKey: input.dungeonKey,
-                runId: input.runId,
-                organizerDiscordId: input.organizerId,
-                organizerRoles: input.organizerRoles,
-                organizerRolePositions: input.organizerRolePositions,
-            }, client);
-            logger.debug({ runId: input.runId, organizerQuotaPoints }, 
-                'Awarded organizer quota at run end (no key pops)');
-        } else {
-            logger.debug({ runId: input.runId, keyPopCount: input.keyPopCount }, 
-                'Skipping organizer quota at run end (already awarded per key pop - organizer received quota for each of the ' + input.keyPopCount + ' key pops)');
-        }
+        // Step 2: Award organizer quota points at run end.
+        // This shares the same run-completion write pipeline as manual /logrun.
+        const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
+            guildId: input.guildId,
+            dungeonKey: input.dungeonKey,
+            runId: input.runId,
+            organizerDiscordId: input.organizerId,
+            organizerRoles: input.organizerRoles,
+            organizerRolePositions: input.organizerRolePositions,
+        }, client);
+
+        logger.debug({ runId: input.runId, organizerQuotaPoints, keyPopCount: input.keyPopCount },
+            'Processed organizer quota award at run end');
 
         // Step 3: Award raider points using QuotaService
         let raiderPointsAwarded = 0;
@@ -231,9 +226,7 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         organizerQuotaPoints: result.organizerQuotaPoints,
         raiderPointsAwarded: result.raiderPointsAwarded,
         keyPopCount: input.keyPopCount,
-        note: input.keyPopCount > 0 
-            ? `Organizer received ${input.keyPopCount} quota point(s) during key pops` 
-            : 'Organizer received quota at run end'
+        note: 'Organizer quota processed at run end'
     }, 'Run ended successfully');
 
     return result;

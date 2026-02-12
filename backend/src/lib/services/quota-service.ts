@@ -58,6 +58,78 @@ export interface KeyPopQuotaInput extends QuotaContext {
 
 export class QuotaService {
     /**
+     * Shared run-completion event writer for organizer quota.
+     *
+     * This is the single source of truth for writing organizer run-completion
+     * quota events (manual /logrun and automated end-run paths).
+     *
+     * @returns Number of quota points written (0 if duplicate/idempotent no-op)
+     */
+    async logOrganizerRunCompletionEvent(
+        input: {
+            guildId: string;
+            organizerDiscordId: string;
+            dungeonKey: string;
+            subjectId: string;
+            quotaPoints: number;
+            quotaRoleId: string;
+            runId?: number;
+            keyPopNumber?: number;
+        },
+        client?: PoolClient
+    ): Promise<number> {
+        const db = client || pool;
+
+        const res = await db.query<{ id: number; quota_points: string }>(
+            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points, quota_role_id)
+             VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5, $6::bigint)
+             ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
+             DO NOTHING
+             RETURNING id, quota_points`,
+            [
+                input.guildId,
+                input.organizerDiscordId,
+                input.subjectId,
+                input.dungeonKey,
+                input.quotaPoints,
+                input.quotaRoleId,
+            ]
+        );
+
+        if (res.rowCount === 0) {
+            logger.debug(
+                {
+                    guildId: input.guildId,
+                    organizerId: input.organizerDiscordId,
+                    subjectId: input.subjectId,
+                    runId: input.runId,
+                    keyPopNumber: input.keyPopNumber,
+                },
+                'Organizer run-completion quota event already logged (idempotent no-op)'
+            );
+            return 0;
+        }
+
+        const quotaPoints = Number(res.rows[0].quota_points);
+
+        logger.info(
+            {
+                guildId: input.guildId,
+                organizerId: input.organizerDiscordId,
+                dungeonKey: input.dungeonKey,
+                subjectId: input.subjectId,
+                runId: input.runId,
+                keyPopNumber: input.keyPopNumber,
+                quotaPoints,
+                quotaRoleId: input.quotaRoleId,
+            },
+            'Logged organizer run-completion quota event'
+        );
+
+        return quotaPoints;
+    }
+
+    /**
      * Award organizer quota points for completing a run.
      * 
      * This logs a quota event with quota_points based on dungeon configuration.
@@ -127,29 +199,24 @@ export class QuotaService {
             ? `run:${input.runId}:keypop:${input.keyPopNumber}` 
             : `run:${input.runId}`;
         
-        const res = await db.query<{ id: number; quota_points: string }>(
-            `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points, quota_role_id)
-             VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5, $6::bigint)
-             ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
-             DO NOTHING
-             RETURNING id, quota_points`,
-            [
-                input.guildId,
-                input.organizerDiscordId,
-                idempotencyKey,
-                input.dungeonKey,
-                quotaRole.points,
-                quotaRole.roleId,
-            ]
+        const quotaPoints = await this.logOrganizerRunCompletionEvent(
+            {
+                guildId: input.guildId,
+                organizerDiscordId: input.organizerDiscordId,
+                dungeonKey: input.dungeonKey,
+                subjectId: idempotencyKey,
+                quotaPoints: quotaRole.points,
+                quotaRoleId: quotaRole.roleId,
+                runId: input.runId,
+                keyPopNumber: input.keyPopNumber,
+            },
+            client
         );
 
-        if (res.rowCount === 0) {
-            logger.debug({ runId: input.runId, guildId: input.guildId, keyPopNumber: input.keyPopNumber }, 
-                'Organizer quota event already logged (idempotent no-op)');
+        if (quotaPoints === 0) {
             return 0;
         }
 
-        const quotaPoints = Number(res.rows[0].quota_points);
         logger.info({ 
             runId: input.runId, 
             guildId: input.guildId, 

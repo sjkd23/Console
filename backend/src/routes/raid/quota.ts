@@ -33,8 +33,12 @@ import {
     getLeaderboard,
     recalculateQuotaPoints,
 } from '../../lib/quota/quota.js';
+import { QuotaService } from '../../lib/services/quota-service.js';
 
-const logger = createLogger('Quota');/**
+const logger = createLogger('Quota');
+const quotaService = new QuotaService();
+
+/**
  * Body schema for manually logging run quota.
  */
 const LogRunBody = z.object({
@@ -159,23 +163,18 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 adjustedTotalPoints = adjustedAmount * pointsPerRun;
             }
 
-            // Log a single event with the total amount
-            const event = await logQuotaEvent(
+            // Log a single run-completion event via shared QuotaService pipeline
+            // (same internal function used by automated run-end awards)
+            const subjectId = `manual_log_run:${Date.now()}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`;
+            totalPoints = await quotaService.logOrganizerRunCompletionEvent({
                 guildId,
-                targetOrganizerId,
-                'run_completed',
-                `manual_log_run:${Date.now()}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`, // Unique subject_id
+                organizerDiscordId: targetOrganizerId,
                 dungeonKey,
-                adjustedTotalPoints, // Total quota points (can be positive or negative)
-                quotaRoleId // quota_role_id
-            );
-
-            if (event) {
-                // Use quota_points (organizer points), NOT points (raider points)
-                // Convert to number in case DB returns string
-                totalPoints = Number(event.quota_points);
-                loggedCount = Math.abs(adjustedAmount);
-            }
+                subjectId,
+                quotaPoints: adjustedTotalPoints,
+                quotaRoleId,
+            });
+            loggedCount = totalPoints === 0 ? 0 : Math.abs(adjustedAmount);
 
             logger.info({ 
                 loggedCount, 

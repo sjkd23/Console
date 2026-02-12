@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds } from '../../../lib/permissions/permissions.js';
-import { getGuildChannels } from '../../../lib/utilities/http.js';
+import { getGuildChannels, unverifyRaider, BackendError } from '../../../lib/utilities/http.js';
 
 /**
  * /ban - Permanently ban a member from the server
@@ -52,6 +52,7 @@ export const ban: SlashCommand = {
 
             // Fetch members
             const invokerMember = await interaction.guild.members.fetch(interaction.user.id);
+            const actorRoles = getMemberRoleIds(invokerMember);
 
             // Get options
             const targetUser = interaction.options.getUser('member', true);
@@ -134,6 +135,24 @@ export const ban: SlashCommand = {
                 return;
             }
 
+            // If the user is verified, remove verification record so IGN is freed
+            let verificationCleanupSummary = 'ℹ️ No verification record found';
+            try {
+                const cleanup = await unverifyRaider(interaction.guildId, targetUser.id, {
+                    actor_user_id: interaction.user.id,
+                    actor_roles: actorRoles,
+                    reason: `Auto-unverify from /ban: ${reason}`,
+                });
+                verificationCleanupSummary = `✅ Verification removed (IGN freed: ${cleanup.ign})`;
+            } catch (cleanupErr) {
+                if (cleanupErr instanceof BackendError && cleanupErr.code === 'RAIDER_NOT_FOUND') {
+                    verificationCleanupSummary = 'ℹ️ No verification record found';
+                } else {
+                    verificationCleanupSummary = '⚠️ Failed to remove verification record';
+                    console.warn('[Ban] Failed to auto-unverify after ban:', cleanupErr);
+                }
+            }
+
             // Build success response
             const responseEmbed = new EmbedBuilder()
                 .setTitle('🔨 Member Banned')
@@ -144,6 +163,7 @@ export const ban: SlashCommand = {
                     { name: 'User ID', value: targetUser.id, inline: true },
                     { name: 'Banned By', value: `<@${interaction.user.id}>`, inline: true },
                     { name: 'Message Deletion', value: 'Last 24 hours', inline: true },
+                    { name: 'Verification Cleanup', value: verificationCleanupSummary, inline: false },
                     { name: 'Reason', value: reason }
                 )
                 .setFooter({ text: dmSent ? 'User notified via DM' : 'Could not DM user' })
@@ -169,6 +189,7 @@ export const ban: SlashCommand = {
                                 { name: 'Banned By', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
                                 { name: 'DM Sent', value: dmSent ? '✅ Yes' : '❌ No', inline: true },
                                 { name: 'Message Deletion', value: 'Last 24 hours', inline: true },
+                                { name: 'Verification Cleanup', value: verificationCleanupSummary, inline: false },
                                 { name: 'Reason', value: reason }
                             )
                             .setTimestamp();

@@ -1,10 +1,16 @@
 // bot/src/lib/scheduled-tasks.ts
 import { Client, EmbedBuilder, type GuildTextBasedChannel, type TextChannel } from 'discord.js';
 import { getJSON, patchJSON, postJSON } from '../utilities/http.js';
+import { getRolePositions } from '../utilities/http.js';
 import { OperationContext } from '../utilities/operation-context.js';
 import { createLogger } from '../logging/logger.js';
 import { deleteRunRole } from '../utilities/run-role-manager.js';
+import { getMemberRoleIds } from '../permissions/permissions.js';
 import { updateQuotaPanelsForUser, updateAllQuotaPanels } from '../ui/quota-panel.js';
+import { getAllActiveHeadcounts, isHeadcountExpired, unregisterHeadcount } from '../state/active-headcount-tracker.js';
+import { clearParticipants } from '../state/headcount-state.js';
+import { clearKeyOffers } from '../../interactions/buttons/raids/headcount-key.js';
+import { clearHeadcountPanels } from '../state/headcount-panel-tracker.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -81,22 +87,28 @@ async function checkExpiredRuns(client: Client): Promise<void> {
         
         // Process batch in parallel (within reasonable limits)
         const results = await Promise.allSettled(batch.map(async (run) => {
-            // Get the guild
             const guild = client.guilds.cache.get(run.guild_id);
-            if (!guild) {
-                logger.warn(`Guild not found for run`, { 
-                    guildId: run.guild_id, 
-                    runId: run.id 
-                });
-                throw new Error('Guild not found');
-            }
+            const organizerMember = guild
+                ? await guild.members.fetch(run.organizer_id).catch(() => null)
+                : null;
 
             // End the run via the API
             await patchJSON(`/runs/${run.id}`, {
                 actorId: client.user!.id, // Bot acts as the ender
                 status: 'ended',
-                isAutoEnd: true // Flag to bypass authorization and allow any->ended transition
+                isAutoEnd: true, // Flag to bypass authorization and allow any->ended transition
+                organizerRoles: organizerMember ? getMemberRoleIds(organizerMember) : undefined,
+                organizerRolePositions: organizerMember ? getRolePositions(organizerMember) : undefined,
             }, { guildId: run.guild_id });
+
+            // Get the guild for Discord-side cleanup tasks (optional)
+            if (!guild) {
+                logger.warn(`Auto-ended run but guild not found in cache for Discord cleanup`, {
+                    guildId: run.guild_id,
+                    runId: run.id
+                });
+                return;
+            }
 
             logger.info(`Auto-ended run`, {
                 runId: run.id,
@@ -170,7 +182,7 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                             // Update the embed to show it's ended
                             const embed = new EmbedBuilder()
                                 .setTitle(`✅ Run Ended: ${run.dungeon_label}`)
-                                .setDescription(`Organizer: <@${run.organizer_id}>\n\n**Status:** Auto-ended (exceeded ${run.auto_end_minutes} minutes)`)
+                                .setDescription(`Organizer: <@${run.organizer_id}>\n\n**Status:** Ended`)
                                 .setColor(0x808080) // Gray color
                                 .setTimestamp();
 
@@ -204,6 +216,125 @@ async function checkExpiredRuns(client: Client): Promise<void> {
         total: expired.length,
         succeeded: successCount,
         failed: failureCount
+    });
+}
+
+/**
+ * Auto-end active headcounts that exceed the configured timeout.
+ * Headcounts are in-memory only, so this task handles Discord message cleanup and state teardown.
+ */
+async function checkExpiredHeadcounts(client: Client): Promise<void> {
+    logger.debug('Starting expired headcounts check');
+
+    const activeHeadcounts = getAllActiveHeadcounts();
+    if (activeHeadcounts.length === 0) {
+        logger.debug('No active headcounts tracked');
+        return;
+    }
+
+    const now = new Date();
+    const expiredHeadcounts = activeHeadcounts.filter(headcount => isHeadcountExpired(headcount, now));
+
+    if (expiredHeadcounts.length === 0) {
+        logger.debug('No expired headcounts found');
+        return;
+    }
+
+    logger.info(`Found ${expiredHeadcounts.length} expired headcounts to auto-end`);
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const headcount of expiredHeadcounts) {
+        try {
+            const guild = client.guilds.cache.get(headcount.guildId);
+            if (!guild) {
+                unregisterHeadcount(headcount.guildId, headcount.organizerId);
+                clearKeyOffers(headcount.messageId);
+                clearParticipants(headcount.messageId);
+                clearHeadcountPanels(headcount.messageId);
+
+                logger.warn('Expired headcount auto-cleaned without Discord update (guild not cached)', {
+                    guildId: headcount.guildId,
+                    organizerId: headcount.organizerId,
+                    messageId: headcount.messageId,
+                });
+                successCount++;
+                continue;
+            }
+
+            const channel = await guild.channels.fetch(headcount.channelId).catch(() => null);
+            if (!channel || !channel.isTextBased()) {
+                unregisterHeadcount(headcount.guildId, headcount.organizerId);
+                clearKeyOffers(headcount.messageId);
+                clearParticipants(headcount.messageId);
+                clearHeadcountPanels(headcount.messageId);
+
+                logger.warn('Expired headcount auto-cleaned without Discord update (channel unavailable)', {
+                    guildId: headcount.guildId,
+                    channelId: headcount.channelId,
+                    organizerId: headcount.organizerId,
+                    messageId: headcount.messageId,
+                });
+                successCount++;
+                continue;
+            }
+
+            const message = await channel.messages.fetch(headcount.messageId).catch(() => null);
+
+            if (message && message.editable) {
+                const existingEmbed = message.embeds[0];
+                const endedEmbed = existingEmbed
+                    ? EmbedBuilder.from(existingEmbed)
+                        .setTitle(
+                            (existingEmbed.title ?? 'Headcount')
+                                .replace('🎯', '❌')
+                                .replace('Headcount', 'Headcount Ended')
+                        )
+                        .setColor(0xff0000)
+                        .setTimestamp(new Date())
+                        .setDescription(`${existingEmbed.description ?? `Organizer: <@${headcount.organizerId}>`}`)
+                    : new EmbedBuilder()
+                        .setTitle('❌ Headcount Ended')
+                        .setColor(0xff0000)
+                        .setDescription(`Organizer: <@${headcount.organizerId}>`)
+                        .setTimestamp(new Date());
+
+                await message.edit({
+                    embeds: [endedEmbed],
+                    components: []
+                });
+            }
+
+            unregisterHeadcount(headcount.guildId, headcount.organizerId);
+            clearKeyOffers(headcount.messageId);
+            clearParticipants(headcount.messageId);
+            clearHeadcountPanels(headcount.messageId);
+
+            logger.info('Auto-ended headcount', {
+                guildId: headcount.guildId,
+                organizerId: headcount.organizerId,
+                messageId: headcount.messageId,
+                createdAt: headcount.createdAt.toISOString(),
+                autoEndAt: headcount.autoEndAt.toISOString(),
+            });
+
+            successCount++;
+        } catch (err) {
+            failureCount++;
+            logger.error('Failed to auto-end expired headcount', {
+                guildId: headcount.guildId,
+                organizerId: headcount.organizerId,
+                messageId: headcount.messageId,
+                error: err instanceof Error ? err.message : String(err),
+            });
+        }
+    }
+
+    logger.info('Completed expired headcounts check', {
+        total: expiredHeadcounts.length,
+        succeeded: successCount,
+        failed: failureCount,
     });
 }
 
@@ -593,6 +724,11 @@ export function startScheduledTasks(client: Client): () => void {
             name: 'Expired Runs',
             intervalMinutes: 5,
             handler: checkExpiredRuns
+        },
+        {
+            name: 'Expired Headcounts',
+            intervalMinutes: 5,
+            handler: checkExpiredHeadcounts
         },
         {
             name: 'Expired Punishments',

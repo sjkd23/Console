@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds, canBotManageRole } from '../../../lib/permissions/permissions.js';
-import { unverifyRaider, BackendError, getGuildChannels, getRaider, getGuildRoles } from '../../../lib/utilities/http.js';
+import { unverifyRaider, BackendError, getGuildChannels, getRaider } from '../../../lib/utilities/http.js';
 import { logCommandExecution, logVerificationAction } from '../../../lib/logging/bot-logger.js';
 
 /**
@@ -55,16 +55,22 @@ export const unverify: SlashCommand = {
         const targetUser = interaction.options.getUser('member', true);
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
-        // Ensure target is in this guild
-        let targetMember;
-        try {
-            targetMember = await interaction.guild.members.fetch(targetUser.id);
-        } catch {
+        // Can't unverify yourself
+        if (targetUser.id === interaction.user.id) {
             await interaction.reply({
-                content: `<@${targetUser.id}> is not a member of this server.`,
+                content: '❌ You cannot unverify yourself.',
                 flags: MessageFlags.Ephemeral,
             });
             return;
+        }
+
+        // Try to fetch target from this guild.
+        // If they already left, continue with DB-only cleanup.
+        let targetMember: typeof invokerMember | null = null;
+        try {
+            targetMember = await interaction.guild.members.fetch(targetUser.id);
+        } catch {
+            targetMember = null;
         }
 
         // Defer reply (backend call may take a moment)
@@ -89,14 +95,16 @@ export const unverify: SlashCommand = {
         }
 
         // Check role hierarchy: actor must outrank target
-        const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
-            allowSelf: false,
-            checkBotPosition: true
-        });
-        
-        if (!targetCheck.canTarget) {
-            await interaction.editReply(targetCheck.reason || '❌ You cannot unverify this member.');
-            return;
+        if (targetMember) {
+            const targetCheck = await canActorTargetMember(invokerMember, targetMember, {
+                allowSelf: false,
+                checkBotPosition: true
+            });
+
+            if (!targetCheck.canTarget) {
+                await interaction.editReply(targetCheck.reason || '❌ You cannot unverify this member.');
+                return;
+            }
         }
 
         try {
@@ -114,7 +122,7 @@ export const unverify: SlashCommand = {
             let nicknameRemoved = false;
             let nicknameError = '';
             try {
-                if (targetMember.nickname) {
+                if (targetMember?.nickname) {
                     await targetMember.setNickname(null, `Unverified by ${interaction.user.tag}`);
                     nicknameRemoved = true;
                 }
@@ -138,9 +146,10 @@ export const unverify: SlashCommand = {
             };
 
             // Get all roles except @everyone
-            const rolesToRemove = targetMember.roles.cache.filter(role => role.id !== interaction.guildId);
+            if (targetMember) {
+                const rolesToRemove = targetMember.roles.cache.filter(role => role.id !== interaction.guildId);
 
-            if (rolesToRemove.size > 0) {
+                if (rolesToRemove.size > 0) {
                 for (const [roleId, role] of rolesToRemove) {
                     try {
                         // Check if bot can manage this specific role
@@ -162,6 +171,7 @@ export const unverify: SlashCommand = {
                         console.warn(`[Unverify] Failed to remove role ${role.name} (${roleId}):`, roleErr?.message || roleErr);
                     }
                 }
+                }
             }
 
             // Build success embed
@@ -170,6 +180,7 @@ export const unverify: SlashCommand = {
                 .setColor(0xff9900)
                 .addFields(
                     { name: 'Member', value: `<@${targetUser.id}>`, inline: true },
+                    { name: 'In Server', value: targetMember ? 'Yes' : 'No (DB cleanup only)', inline: true },
                     { name: 'IGN (Freed)', value: `\`${result.ign}\``, inline: true },
                     { name: 'Previous Status', value: existingRaider.status, inline: true },
                     { name: 'Unverified By', value: `<@${interaction.user.id}>`, inline: true },
@@ -211,6 +222,10 @@ export const unverify: SlashCommand = {
                 footerParts.push('✓ Nickname removed');
             } else if (nicknameError) {
                 footerParts.push(`⚠️ Nickname: ${nicknameError}`);
+            }
+
+            if (!targetMember) {
+                footerParts.push('ℹ️ Member not in server; removed DB record only');
             }
 
             if (footerParts.length > 0) {

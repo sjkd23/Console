@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import type { SlashCommand } from '../../_types.js';
 import { canActorTargetMember, getMemberRoleIds } from '../../../lib/permissions/permissions.js';
-import { getGuildChannels } from '../../../lib/utilities/http.js';
+import { getGuildChannels, unverifyRaider, BackendError } from '../../../lib/utilities/http.js';
 
 /**
  * /softban - Ban and immediately unban a member to delete their messages
@@ -53,6 +53,7 @@ export const softban: SlashCommand = {
 
             // Fetch members
             const invokerMember = await interaction.guild.members.fetch(interaction.user.id);
+            const actorRoles = getMemberRoleIds(invokerMember);
 
             // Get options
             const targetUser = interaction.options.getUser('member', true);
@@ -151,6 +152,24 @@ export const softban: SlashCommand = {
                 return;
             }
 
+            // If the user is verified, remove verification record so IGN is freed
+            let verificationCleanupSummary = 'ℹ️ No verification record found';
+            try {
+                const cleanup = await unverifyRaider(interaction.guildId, targetUser.id, {
+                    actor_user_id: interaction.user.id,
+                    actor_roles: actorRoles,
+                    reason: `Auto-unverify from /softban: ${reason}`,
+                });
+                verificationCleanupSummary = `✅ Verification removed (IGN freed: ${cleanup.ign})`;
+            } catch (cleanupErr) {
+                if (cleanupErr instanceof BackendError && cleanupErr.code === 'RAIDER_NOT_FOUND') {
+                    verificationCleanupSummary = 'ℹ️ No verification record found';
+                } else {
+                    verificationCleanupSummary = '⚠️ Failed to remove verification record';
+                    console.warn('[Softban] Failed to auto-unverify after soft-ban:', cleanupErr);
+                }
+            }
+
             // Build response based on success/failure
             if (unbanSuccess) {
                 // Full success
@@ -164,6 +183,7 @@ export const softban: SlashCommand = {
                         { name: 'User ID', value: targetUser.id, inline: true },
                         { name: 'Actioned By', value: `<@${interaction.user.id}>`, inline: true },
                         { name: 'Message Deletion', value: 'Last 7 days', inline: true },
+                        { name: 'Verification Cleanup', value: verificationCleanupSummary, inline: false },
                         { name: 'Reason', value: reason }
                     )
                     .setFooter({ text: dmSent ? '✓ User notified via DM | ✓ User can rejoin' : '⚠️ Could not DM user | ✓ User can rejoin' })
@@ -172,7 +192,7 @@ export const softban: SlashCommand = {
                 await interaction.editReply({ embeds: [responseEmbed] });
             } else {
                 // Partial success - banned but not unbanned
-                await interaction.editReply(errorMessage);
+                await interaction.editReply(`${errorMessage}\n\n${verificationCleanupSummary}`);
             }
 
             // Log to punishment_log channel if configured
@@ -198,6 +218,7 @@ export const softban: SlashCommand = {
                                 { name: 'Unban Success', value: unbanSuccess ? '✅ Yes' : '❌ No', inline: true },
                                 { name: 'DM Sent', value: dmSent ? '✅ Yes' : '❌ No', inline: true },
                                 { name: 'Message Deletion', value: 'Last 7 days', inline: true },
+                                { name: 'Verification Cleanup', value: verificationCleanupSummary, inline: false },
                                 { name: 'Reason', value: reason }
                             )
                             .setTimestamp();
