@@ -448,6 +448,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         const Body = z.object({
             actorId: zSnowflake,
             actorRoles: z.array(zSnowflake).optional(),
+            actorRolePositions: z.record(z.string(), z.number()).optional(),
             status: z.enum(['live', 'ended']),
             isAutoEnd: z.boolean().optional(), // Flag for automatic ending
         });
@@ -458,7 +459,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.validation(reply);
         }
         const runId = Number(p.data.id);
-        const { actorId, actorRoles, status, isAutoEnd } = b.data;
+        const { actorId, actorRoles, actorRolePositions, status, isAutoEnd } = b.data;
 
         // Read current status AND organizer_id AND guild_id AND dungeon_key AND party AND location AND screenshot_url
         const cur = await query<RunRow & { dungeon_key: string; party: string | null; location: string | null; screenshot_url: string | null }>(
@@ -547,13 +548,17 @@ export default async function runsRoutes(app: FastifyInstance) {
             
             // End run with transaction (ensures atomicity of status update + quota/points awards)
             try {
+                const organizerRoles = actorId === run.organizer_id ? actorRoles : undefined;
+                const organizerRolePositions = actorId === run.organizer_id ? actorRolePositions : undefined;
+
                 await endRunWithTransaction({
                     runId,
                     guildId: run.guild_id,
                     organizerId: run.organizer_id,
                     dungeonKey,
                     keyPopCount,
-                    actorRoles,
+                    organizerRoles,
+                    organizerRolePositions,
                 });
             } catch (err) {
                 logger.error({ err, runId, guildId: run.guild_id, organizerId: run.organizer_id }, 
@@ -996,6 +1001,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             actor_user_id: zSnowflake,
+            actor_roles: z.array(zSnowflake).optional(),
+            actor_role_positions: z.record(z.string(), z.number()).optional(),
             seconds: z.number().int().positive().max(RAID_BEHAVIOR.maxKeyWindowSeconds).default(RAID_BEHAVIOR.defaultKeyWindowSeconds),
         });
 
@@ -1005,7 +1012,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.validation(reply);
         }
         const runId = Number(p.data.id);
-        const { actor_user_id, seconds } = b.data;
+        const { actor_user_id, actor_roles, actor_role_positions, seconds } = b.data;
 
         // Read current status, organizer_id, guild_id, dungeon_key, and key_pop_count
         const cur = await query<RunRow & { dungeon_key: string; key_pop_count: number }>(
@@ -1088,6 +1095,8 @@ export default async function runsRoutes(app: FastifyInstance) {
                 dungeonKey: dungeon_key,
                 runId: runId,
                 organizerDiscordId: organizer_id,
+                organizerRoles: actor_roles,
+                organizerRolePositions: actor_role_positions,
                 keyPopNumber: newKeyPopCount,
             });
             logger.info({ runId, keyPopNumber: newKeyPopCount, organizerQuotaPoints }, 'Awarded organizer quota for key pop');

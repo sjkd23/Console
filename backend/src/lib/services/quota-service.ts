@@ -74,13 +74,42 @@ export class QuotaService {
         const db = client || pool;
 
         // Step 1: Determine which quota role should award points
-        const { getQuotaRoleForDungeon } = await import('../quota/quota.js');
-        const quotaRole = await getQuotaRoleForDungeon(
+        const { getQuotaRoleForDungeon, getAllQuotaRoleConfigs, getPointsForDungeon } = await import('../quota/quota.js');
+
+        let quotaRole = await getQuotaRoleForDungeon(
             input.guildId,
             input.dungeonKey,
             input.organizerRoles || [],
             input.organizerRolePositions
         );
+
+        // Fallback: if roles are missing (auto-end / privileged actor ending another organizer's run),
+        // resolve from all quota configs so organizer events still attach to a panel role.
+        if (!quotaRole) {
+            const allConfigs = await getAllQuotaRoleConfigs(input.guildId);
+            const candidates: Array<{ roleId: string; points: number }> = [];
+
+            for (const config of allConfigs) {
+                const points = await getPointsForDungeon(input.guildId, input.dungeonKey, [config.discord_role_id]);
+                if (points > 0) {
+                    candidates.push({ roleId: config.discord_role_id, points });
+                }
+            }
+
+            if (candidates.length > 0) {
+                candidates.sort((a, b) => b.points - a.points);
+                quotaRole = candidates[0];
+
+                logger.warn({
+                    runId: input.runId,
+                    guildId: input.guildId,
+                    organizerId: input.organizerDiscordId,
+                    dungeonKey: input.dungeonKey,
+                    resolvedQuotaRoleId: quotaRole.roleId,
+                    resolvedPoints: quotaRole.points,
+                }, 'Resolved organizer quota role using fallback (no organizer role context)');
+            }
+        }
 
         if (!quotaRole || quotaRole.points === 0) {
             logger.debug({ 

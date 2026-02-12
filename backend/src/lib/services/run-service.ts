@@ -49,7 +49,8 @@ export interface EndRunInput {
     organizerId: string;
     dungeonKey: string;
     keyPopCount: number;
-    actorRoles?: string[];
+    organizerRoles?: string[];
+    organizerRolePositions?: Record<string, number>;
 }
 
 export interface EndRunResult {
@@ -184,7 +185,8 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
                 dungeonKey: input.dungeonKey,
                 runId: input.runId,
                 organizerDiscordId: input.organizerId,
-                organizerRoles: input.actorRoles,
+                organizerRoles: input.organizerRoles,
+                organizerRolePositions: input.organizerRolePositions,
             }, client);
             logger.debug({ runId: input.runId, organizerQuotaPoints }, 
                 'Awarded organizer quota at run end (no key pops)');

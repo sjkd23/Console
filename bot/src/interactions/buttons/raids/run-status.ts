@@ -1,6 +1,6 @@
 import { ButtonInteraction, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
-import { getJSON, patchJSON, deleteJSON, BackendError } from '../../../lib/utilities/http.js';
-import { getMemberRoleIds } from '../../../lib//permissions/permissions.js';
+import { getJSON, patchJSON, deleteJSON, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
+import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
@@ -100,6 +100,7 @@ async function handleStatusInternal(
             await patchJSON(`/runs/${runId}`, {
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member),
+                actorRolePositions: member ? getRolePositions(member) : undefined,
                 status
             }, { guildId });
         }
