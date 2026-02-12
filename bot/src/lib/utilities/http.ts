@@ -338,7 +338,7 @@ export async function unblacklistModmail(payload: {
 /** Set key window for a run (PATCH /runs/:id/key-window) */
 export async function setKeyWindow(
     runId: number,
-    payload: { actor_user_id: string; seconds?: number },
+    payload: { actor_user_id: string; actor_roles?: string[]; actor_role_positions?: Record<string, number>; seconds?: number },
     guildId: string
 ): Promise<{ key_window_ends_at: string }> {
     return patchJSON(`/runs/${runId}/key-window`, payload, { guildId });

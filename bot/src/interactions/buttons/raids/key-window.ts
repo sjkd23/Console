@@ -1,5 +1,5 @@
 import { ButtonInteraction, ChannelType, EmbedBuilder } from 'discord.js';
-import { setKeyWindow, getJSON, BackendError } from '../../../lib/utilities/http.js';
+import { setKeyWindow, getJSON, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyWindow } from '../../../lib/logging/raid-logger.js';
 import { sendKeyPoppedPing } from '../../../lib/utilities/run-ping.js';
@@ -7,6 +7,7 @@ import { getDefaultKeyWindowSeconds } from '../../../config/raid-config.js';
 import { updateQuotaPanelsForUser } from '../../../lib/ui/quota-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
+import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 
 const logger = createLogger('KeyWindow');
 
@@ -25,10 +26,14 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
 
     const keyWindowSeconds = getDefaultKeyWindowSeconds();
 
+    const member = btn.guild ? await btn.guild.members.fetch(btn.user.id).catch(() => null) : null;
+
     try {
         // Call backend to set the key window
         const { key_window_ends_at } = await setKeyWindow(Number(runId), {
             actor_user_id: btn.user.id,
+            actor_roles: getMemberRoleIds(member),
+            actor_role_positions: member ? getRolePositions(member) : undefined,
             seconds: keyWindowSeconds,
         }, guildId);
 
