@@ -8,6 +8,7 @@ import {
     TimestampStyles,
 } from 'discord.js';
 import { getGuildChannels, unverifyRaider, BackendError } from '../utilities/http.js';
+import { hasRequiredRoleOrHigher } from '../permissions/permissions.js';
 
 /**
  * In-memory guard to prevent duplicate processing while a soft-ban is in progress.
@@ -48,6 +49,10 @@ export async function handleBotBaitMessage(message: Message): Promise<void> {
             member.permissions.has(PermissionFlagsBits.ManageGuild) ||
             member.permissions.has(PermissionFlagsBits.BanMembers)
         ) return;
+
+        // Skip users with any internal staff role (organizer or higher = team/staff role)
+        const { hasRole: isStaff } = await hasRequiredRoleOrHigher(member, 'organizer');
+        if (isStaff) return;
 
         // Acquire in-progress guard
         inProgress.add(guard);
