@@ -121,7 +121,7 @@ export async function handleBotBaitMessage(message: Message): Promise<void> {
         try {
             const cleanup = await unverifyRaider(guildId, message.author.id, {
                 actor_user_id: message.client.user!.id,
-                actor_roles: [],
+                actor_has_admin_permission: true,
                 reason: `Auto-unverify from bot-bait: ${reason}`,
             });
             verificationCleanupSummary = `✅ Verification removed (IGN freed: ${cleanup.ign})`;

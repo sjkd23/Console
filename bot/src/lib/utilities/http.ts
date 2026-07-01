@@ -485,6 +485,7 @@ export async function unverifyRaider(
         actor_user_id: string;
         actor_roles?: string[];
         reason?: string;
+        actor_has_admin_permission?: boolean;
     }
 ): Promise<{
     success: boolean;

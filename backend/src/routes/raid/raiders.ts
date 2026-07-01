@@ -721,6 +721,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
             actor_user_id: zSnowflake,
             actor_roles: z.array(zSnowflake).optional(),
             reason: z.string().optional(), // Optional reason for audit log
+            // Set to true when the action is performed by the bot itself (automated system)
+            actor_has_admin_permission: z.boolean().optional(),
         });
 
         const p = Params.safeParse(req.params);
@@ -734,20 +736,23 @@ export default async function raidersRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, user_id } = p.data;
-        const { actor_user_id, actor_roles, reason } = b.data;
+        const { actor_user_id, actor_roles, reason, actor_has_admin_permission } = b.data;
 
         console.log(`[Unverify] Actor ${actor_user_id} in guild ${guild_id} unverifying ${user_id}`);
 
-        // Authorization: actor must have the 'security' role or higher
-        try {
-            await requireSecurity(guild_id, actor_user_id, actor_roles);
-        } catch (err: any) {
-            return reply.code(403).send({
-                error: {
-                    code: 'NOT_SECURITY',
-                    message: err.message || 'You need the Security role or higher to unverify users',
-                },
-            });
+        // Authorization: actor must have the 'security' role or higher,
+        // OR the caller is the bot acting as an automated system.
+        if (!actor_has_admin_permission) {
+            try {
+                await requireSecurity(guild_id, actor_user_id, actor_roles);
+            } catch (err: any) {
+                return reply.code(403).send({
+                    error: {
+                        code: 'NOT_SECURITY',
+                        message: err.message || 'You need the Security role or higher to unverify users',
+                    },
+                });
+            }
         }
 
         // Ensure actor exists in member table before audit logging
