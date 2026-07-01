@@ -88,6 +88,7 @@ import {
 import { handleModmailClose } from './interactions/buttons/modmail/modmail-close.js';
 import { startScheduledTasks } from './lib/tasks/scheduled-tasks.js';
 import { syncTeamRoleForMember } from './lib/team/team-role-manager.js';
+import { handleBotBaitMessage } from './lib/moderation/bot-bait.js';
 import { logCommandExecution, createSuccessResult, createErrorResult } from './lib/logging/command-logging.js';
 import { BackendError } from './lib/utilities/http.js';
 import { applyButtonRateLimit } from './lib/utilities/rate-limit-middleware.js';
@@ -135,6 +136,15 @@ client.once(Events.ClientReady, () => {
 
     // Start all scheduled maintenance tasks (runs, suspensions, verification cleanup, etc.)
     startScheduledTasks(client);
+});
+
+// Bot-bait: automatically soft-ban any non-privileged user who posts in the configured channel
+client.on(Events.MessageCreate, async (message) => {
+    try {
+        await handleBotBaitMessage(message);
+    } catch (err) {
+        console.error('[MessageCreate] Bot-bait handler error:', err);
+    }
 });
 
 // Listen for role changes on guild members

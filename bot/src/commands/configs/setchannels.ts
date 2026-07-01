@@ -27,6 +27,7 @@ const CHANNEL_OPTIONS = [
     { key: 'role_ping', label: 'Role Ping', description: 'Channel for the role ping panel where users can self-assign dungeon ping roles' },
     { key: 'party_finder', label: 'Party Finder', description: 'Channel where verified raiders can organize their own parties' },
     { key: 'early_loc', label: 'Early Loc', description: 'Priority/staff channel for location/party notifications when set or updated' },
+    { key: 'bot_bait', label: 'Bot-Bait', description: 'Any non-admin/mod user who posts here is automatically soft-banned' },
 ] as const;
 
 export const setchannels: SlashCommand = {
@@ -47,6 +48,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('role_ping').setDescription('Role ping panel channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('party_finder').setDescription('Party finder channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('early_loc').setDescription('Priority/staff channel for location/party notifications').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('bot_bait').setDescription('Auto soft-ban any non-admin/mod user who posts here').addChannelTypes(ChannelType.GuildText))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .setDMPermission(false),
 
