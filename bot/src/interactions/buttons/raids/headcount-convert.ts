@@ -13,7 +13,8 @@ import {
     ComponentType,
     MessageFlags,
     ChannelType,
-    type GuildTextBasedChannel
+    type Message,
+    type StringSelectMenuInteraction
 } from 'discord.js';
 import { getOrganizerId, getParticipants, clearParticipants } from '../../../lib/state/headcount-state.js';
 import { getKeyOffers, clearKeyOffers } from './headcount-key.js';
@@ -27,7 +28,7 @@ import { logRaidCreation } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { withButtonLock, getHeadcountLockKey } from '../../../lib/utilities/button-mutex.js';
 import { getDefaultAutoEndMinutes } from '../../../config/raid-config.js';
-import { unregisterHeadcount } from '../../../lib/state/active-headcount-tracker.js';
+import { unregisterHeadcount, unregisterHeadcountByMessageId } from '../../../lib/state/active-headcount-tracker.js';
 import { clearHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
 import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-tracker.js';
 import { createRunRole } from '../../../lib/utilities/run-role-manager.js';
@@ -65,6 +66,19 @@ async function handleHeadcountConvertInternal(btn: ButtonInteraction, publicMess
 
     const publicMsg = await btn.channel.messages.fetch(publicMessageId).catch(() => null);
     if (!publicMsg) {
+        if (btn.guild) {
+            const result = unregisterHeadcountByMessageId(btn.guild.id, publicMessageId);
+            clearKeyOffers(publicMessageId);
+            clearParticipants(publicMessageId);
+            clearHeadcountPanels(publicMessageId);
+            logger.warn('Headcount public message missing during convert; cleaned local state', {
+                guildId: btn.guild.id,
+                channelId: btn.channel.id,
+                messageId: publicMessageId,
+                organizerId: result.organizerId,
+                removed: result.removed,
+            });
+        }
         await btn.reply({
             content: 'Could not find headcount panel message.',
             flags: MessageFlags.Ephemeral
@@ -198,8 +212,8 @@ function createDungeonSelectMenu(dungeonCodes: string[]): ActionRowBuilder<Strin
  * Converts a headcount to a run with the selected dungeon
  */
 async function convertHeadcountToRun(
-    interaction: ButtonInteraction | any, // StringSelectMenuInteraction
-    publicMsg: any,
+    interaction: ButtonInteraction | StringSelectMenuInteraction,
+    publicMsg: Message<true>,
     dungeonCode: string,
     organizerId: string
 ) {
@@ -450,7 +464,7 @@ async function convertHeadcountToRun(
         role?.id || null
     ).catch(err => {
         logger.error('Failed to auto-join organizer to converted run', {
-            guildId: interaction.guild.id,
+            guildId,
             runId,
             error: err instanceof Error ? err.message : String(err)
         });

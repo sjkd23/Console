@@ -137,11 +137,19 @@ export default async function verificationRoutes(app: FastifyInstance) {
              DO UPDATE SET
                 rotmg_ign = NULL,
                 verification_code = NULL,
+                verification_method = 'realmeye',
+                screenshot_url = NULL,
+                ticket_message_id = NULL,
+                reviewed_by_user_id = NULL,
+                reviewed_at = NULL,
+                denial_reason = NULL,
                 status = 'pending_ign',
                 created_at = NOW(),
                 updated_at = NOW(),
                 expires_at = NOW() + INTERVAL '1 hour'
              RETURNING guild_id, user_id, rotmg_ign, verification_code, status, 
+                       verification_method, screenshot_url, ticket_message_id,
+                       reviewed_by_user_id, denial_reason,
                        created_at, updated_at, expires_at`,
             [guild_id, user_id]
         );
@@ -173,7 +181,7 @@ export default async function verificationRoutes(app: FastifyInstance) {
 
         // Build dynamic update query
         const setClauses: string[] = ['updated_at = NOW()'];
-        const values: any[] = [];
+        const values: string[] = [];
         let paramIndex = 1;
 
         if (updates.rotmg_ign !== undefined) {
@@ -230,6 +238,8 @@ export default async function verificationRoutes(app: FastifyInstance) {
              SET ${setClauses.join(', ')}
              WHERE guild_id = $${paramIndex++}::bigint AND user_id = $${paramIndex++}::bigint
              RETURNING guild_id, user_id, rotmg_ign, verification_code, status,
+                       verification_method, screenshot_url, ticket_message_id,
+                       reviewed_by_user_id, denial_reason,
                        created_at, updated_at, expires_at`,
             values
         );

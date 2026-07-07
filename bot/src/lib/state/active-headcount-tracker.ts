@@ -68,6 +68,41 @@ export function unregisterHeadcount(
 }
 
 /**
+ * Remove a tracked headcount by its public Discord message ID.
+ * Useful when a stale organizer panel still points at a deleted public panel.
+ */
+export function unregisterHeadcountByMessageId(
+    guildId: string,
+    messageId: string
+): {
+    removed: boolean;
+    organizerId: string | null;
+} {
+    for (const [key, headcount] of activeHeadcounts.entries()) {
+        const separatorIndex = key.indexOf(':');
+        if (separatorIndex === -1) {
+            continue;
+        }
+
+        const entryGuildId = key.substring(0, separatorIndex);
+        const organizerId = key.substring(separatorIndex + 1);
+
+        if (entryGuildId === guildId && headcount.messageId === messageId) {
+            activeHeadcounts.delete(key);
+            logger.warn('Unregistered stale headcount by message ID', {
+                guildId,
+                organizerId,
+                messageId,
+                channelId: headcount.channelId,
+            });
+            return { removed: true, organizerId };
+        }
+    }
+
+    return { removed: false, organizerId: null };
+}
+
+/**
  * Get active headcount for an organizer
  */
 export function getActiveHeadcount(

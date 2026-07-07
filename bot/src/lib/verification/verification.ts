@@ -8,7 +8,7 @@
  * 4. Role and nickname application
  */
 
-import { GuildMember, User, Guild, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { GuildMember, User, Guild, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, type MessageCreateOptions } from 'discord.js';
 import { postJSON, getJSON, patchJSON, verifyRaider, BackendError, unverifyRaider } from '../utilities/http.js';
 import { getGuildChannels } from '../utilities/http.js';
 import { createLogger } from '../logging/logger.js';
@@ -158,6 +158,28 @@ export async function deleteSession(guildId: string, userId: string): Promise<vo
     });
 }
 
+/**
+ * Best-effort cancellation for failure paths. This intentionally never throws so
+ * Discord error handling can still tell the user what happened.
+ */
+export async function cancelSessionSafely(
+    guildId: string,
+    userId: string,
+    reason: string
+): Promise<void> {
+    try {
+        await updateSession(guildId, userId, { status: 'cancelled' });
+        logger.info('Verification session cancelled', { guildId, userId, reason });
+    } catch (err) {
+        logger.warn('Failed to cancel verification session', {
+            guildId,
+            userId,
+            reason,
+            error: err instanceof Error ? err.message : String(err),
+        });
+    }
+}
+
 // ===== CODE GENERATION =====
 
 /**
@@ -284,9 +306,6 @@ export async function applyVerification(
     let nicknameSet = false;
 
     try {
-        // Get guild config to find verified_raider role
-        const { channels } = await getGuildChannels(guild.id);
-        
         // We need to get the role from guild_role mapping
         // Use the existing http helper pattern
         const rolesResponse = await getJSON<{ roles: Record<string, string | null> }>(
@@ -302,46 +321,11 @@ export async function applyVerification(
             return { success: false, roleApplied, nicknameSet, errors };
         }
 
-        // Try to add role
-        try {
-            const role = await guild.roles.fetch(verifiedRaiderRoleId);
-            if (!role) {
-                errors.push(
-                    `Verified Raider role (ID: ${verifiedRaiderRoleId}) no longer exists. Please ask a Moderator to reconfigure it.`
-                );
-            } else {
-                await member.roles.add(role);
-                roleApplied = true;
-            }
-        } catch (roleErr: any) {
-            if (roleErr.code === 50013) {
-                errors.push(
-                    'Bot lacks permission to assign roles. Please ask a server admin to check bot permissions and role hierarchy.'
-                );
-            } else {
-                errors.push(`Failed to assign Verified Raider role: ${roleErr.message}`);
-            }
-        }
-
-        // Try to set nickname
-        try {
-            await member.setNickname(ign);
-            nicknameSet = true;
-        } catch (nickErr: any) {
-            if (nickErr.code === 50013) {
-                errors.push(
-                    'Bot lacks permission to change your nickname. This is usually because you have a higher role than the bot.'
-                );
-            } else {
-                errors.push(`Failed to set nickname: ${nickErr.message}`);
-            }
-        }
-
-        // Call backend to record verification
         // Get actor's roles if actorMember is provided (needed for both success and error paths)
         const actorRoles = actorMember ? Array.from(actorMember.roles.cache.keys()) : undefined;
         
         try {
+            // Persist verification before granting Discord permissions.
             await verifyRaider({
                 actor_user_id: actorUserId,
                 actor_roles: actorRoles,
@@ -380,9 +364,13 @@ export async function applyVerification(
                         });
                         
                         return { success: false, roleApplied, nicknameSet, errors };
-                    } catch (fetchErr: any) {
+                    } catch (fetchErr: unknown) {
                         // User not found in server (likely left) - unverify them and retry
-                        if (fetchErr.code === 10007 || fetchErr.code === 10013) {
+                        const fetchErrorCode = typeof fetchErr === 'object' && fetchErr !== null && 'code' in fetchErr
+                            ? (fetchErr as { code?: unknown }).code
+                            : undefined;
+
+                        if (fetchErrorCode === 10007 || fetchErrorCode === 10013) {
                             logger.info('IGN conflict: User not in server, unverifying and retrying', {
                                 ign: conflictIgn,
                                 conflictUserId,
@@ -449,8 +437,57 @@ export async function applyVerification(
                 }
             } else {
                 // Other backend error
-                console.error('[Verification] Failed to record verification in backend:', backendErr);
-                errors.push('Verification recorded in Discord but may not be saved in database');
+                logger.error('Failed to record verification in backend before Discord changes', {
+                    guildId: guild.id,
+                    userId: member.id,
+                    ign,
+                    error: backendErr instanceof Error ? backendErr.message : String(backendErr),
+                });
+                errors.push('Verification could not be saved in the database. No role was assigned.');
+                return { success: false, roleApplied, nicknameSet, errors };
+            }
+        }
+
+        // Try to add role only after backend persistence succeeded
+        try {
+            const role = await guild.roles.fetch(verifiedRaiderRoleId);
+            if (!role) {
+                errors.push(
+                    `Verified Raider role (ID: ${verifiedRaiderRoleId}) no longer exists. Please ask a Moderator to reconfigure it.`
+                );
+            } else {
+                await member.roles.add(role);
+                roleApplied = true;
+            }
+        } catch (roleErr: unknown) {
+            const code = typeof roleErr === 'object' && roleErr !== null && 'code' in roleErr
+                ? (roleErr as { code?: unknown }).code
+                : undefined;
+            const message = roleErr instanceof Error ? roleErr.message : String(roleErr);
+            if (code === 50013) {
+                errors.push(
+                    'Bot lacks permission to assign roles. Please ask a server admin to check bot permissions and role hierarchy.'
+                );
+            } else {
+                errors.push(`Failed to assign Verified Raider role: ${message}`);
+            }
+        }
+
+        // Try to set nickname after persistence as a non-critical Discord-side update
+        try {
+            await member.setNickname(ign);
+            nicknameSet = true;
+        } catch (nickErr: unknown) {
+            const code = typeof nickErr === 'object' && nickErr !== null && 'code' in nickErr
+                ? (nickErr as { code?: unknown }).code
+                : undefined;
+            const message = nickErr instanceof Error ? nickErr.message : String(nickErr);
+            if (code === 50013) {
+                errors.push(
+                    'Bot lacks permission to change your nickname. This is usually because you have a higher role than the bot.'
+                );
+            } else {
+                errors.push(`Failed to set nickname: ${message}`);
             }
         }
 
@@ -856,13 +893,14 @@ export async function logVerificationEvent(
                 .setColor(color)
                 .setTimestamp();
 
-            const messageOptions: any = { embeds: [logEmbed] };
+            const embedsToSend: EmbedBuilder[] = [logEmbed];
             
             // Add custom embed if provided
             if (options?.embed) {
-                messageOptions.embeds.push(options.embed);
+                embedsToSend.push(options.embed);
             }
 
+            const messageOptions: MessageCreateOptions = { embeds: embedsToSend };
             await thread.send(messageOptions);
         }
     } catch (err) {

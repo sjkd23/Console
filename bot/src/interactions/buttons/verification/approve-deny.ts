@@ -21,6 +21,7 @@ import {
     applyVerification,
     createSuccessEmbed,
     deleteSession,
+    cancelSessionSafely,
     validateIGN,
     logVerificationEvent,
 } from '../../../lib/verification/verification.js';
@@ -399,29 +400,35 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
         }
 
         // Update ticket message
-        const ticketMessage = interaction.message || await interaction.channel?.messages.fetch(session.ticket_message_id!);
-        
-        if (ticketMessage) {
-            const ticketEmbed = new EmbedBuilder()
-                .setTitle('✅ Verification Approved')
-                .setDescription(
-                    `**User:** <@${userId}>\n` +
-                    `**IGN:** ${ign}\n` +
-                    `**Approved by:** <@${interaction.user.id}>\n\n` +
-                    `**Result:**\n` +
-                    `${applyResult.roleApplied ? '✅' : '❌'} Role applied\n` +
-                    `${applyResult.nicknameSet ? '✅' : '❌'} Nickname set\n\n` +
-                    (applyResult.errors.length > 0
-                        ? `**Issues:**\n${applyResult.errors.map(e => `• ${e}`).join('\n')}`
-                        : '')
-                )
-                .setColor(0x00FF00)
-                .setTimestamp();
+        try {
+            const ticketMessage = interaction.message || (session.ticket_message_id
+                ? await interaction.channel?.messages.fetch(session.ticket_message_id).catch(() => null)
+                : null);
 
-            await ticketMessage.edit({
-                embeds: [ticketEmbed],
-                components: [], // Remove buttons
-            });
+            if (ticketMessage) {
+                const ticketEmbed = new EmbedBuilder()
+                    .setTitle('✅ Verification Approved')
+                    .setDescription(
+                        `**User:** <@${userId}>\n` +
+                        `**IGN:** ${ign}\n` +
+                        `**Approved by:** <@${interaction.user.id}>\n\n` +
+                        `**Result:**\n` +
+                        `${applyResult.roleApplied ? '✅' : '❌'} Role applied\n` +
+                        `${applyResult.nicknameSet ? '✅' : '❌'} Nickname set\n\n` +
+                        (applyResult.errors.length > 0
+                            ? `**Issues:**\n${applyResult.errors.map(e => `• ${e}`).join('\n')}`
+                            : '')
+                    )
+                    .setColor(0x00FF00)
+                    .setTimestamp();
+
+                await ticketMessage.edit({
+                    embeds: [ticketEmbed],
+                    components: [], // Remove buttons
+                });
+            }
+        } catch (ticketErr) {
+            console.error('[VerificationApproveModal] Failed to update ticket message after approval:', ticketErr);
         }
 
         await interaction.editReply(
@@ -600,6 +607,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         const channel = interaction.channel;
         if (!channel || !channel.isTextBased()) {
             console.error('[VerificationDeny] Channel is not text-based or null');
+            await cancelSessionSafely(guildId, userId, 'manual verification denial channel unavailable');
             await interaction.followUp({
                 content: '❌ Could not set up message collector - invalid channel type.',
                 ephemeral: true,
@@ -610,6 +618,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
         // Type guard: ensure channel supports message collection
         if (!('createMessageCollector' in channel)) {
             console.error('[VerificationDeny] Channel does not support createMessageCollector');
+            await cancelSessionSafely(guildId, userId, 'manual verification denial collector unavailable');
             await interaction.followUp({
                 content: '❌ This channel type does not support message collection.',
                 ephemeral: true,

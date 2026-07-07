@@ -28,6 +28,7 @@ import {
     createVerificationTicketEmbed,
     createVerificationTicketButtons,
     deleteSession,
+    cancelSessionSafely,
     logVerificationEvent,
     type VerificationSession,
 } from '../../../lib/verification/verification.js';
@@ -35,6 +36,39 @@ import { getJSON, getGuildVerificationConfig, getGuildChannels } from '../../../
 
 const MAX_IGN_ATTEMPTS = 3;
 const MESSAGE_COLLECT_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const manualTicketCreationLocks = new Set<string>();
+
+type GuildVerificationConfig = Awaited<ReturnType<typeof getGuildVerificationConfig>>;
+
+async function manualReviewTicketExists(session: VerificationSession, interaction: ButtonInteraction): Promise<boolean> {
+    if (!session.ticket_message_id) {
+        return false;
+    }
+
+    try {
+        const { channels } = await getGuildChannels(session.guild_id);
+        const manualVerificationChannelId = channels.manual_verification;
+        if (!manualVerificationChannelId) {
+            return false;
+        }
+
+        const guild = interaction.client.guilds.cache.get(session.guild_id);
+        if (!guild) {
+            return true;
+        }
+
+        const channel = await guild.channels.fetch(manualVerificationChannelId).catch(() => null);
+        if (!channel || !channel.isTextBased()) {
+            return false;
+        }
+
+        const message = await channel.messages.fetch(session.ticket_message_id).catch(() => null);
+        return message !== null;
+    } catch (err) {
+        console.error('[GetVerified] Failed to verify manual review ticket existence:', err);
+        return true;
+    }
+}
 
 /**
  * Handle "Get Verified" button click
@@ -71,16 +105,41 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
         // Check if user already has an active verification session
         try {
             const existingSession = await getSessionByUserId(interaction.user.id);
-            if (existingSession && 
-                existingSession.status !== 'expired' && 
-                existingSession.status !== 'verified' && 
+            if (existingSession &&
+                existingSession.status !== 'expired' &&
+                existingSession.status !== 'verified' &&
                 existingSession.status !== 'cancelled' &&
                 existingSession.status !== 'denied') {
-                await interaction.editReply(
-                    `⚠️ You already have an active verification (status: ${existingSession.status}). ` +
-                    'Complete or cancel it before starting a new one.'
-                );
-                return;
+                if (existingSession.guild_id !== interaction.guildId) {
+                    await interaction.editReply(
+                        `⚠️ You already have an active verification (status: ${existingSession.status}). ` +
+                        'Complete or cancel it before starting a new one.'
+                    );
+                    return;
+                }
+
+                if (existingSession.status === 'pending_review') {
+                    const ticketExists = await manualReviewTicketExists(existingSession, interaction);
+                    if (!ticketExists) {
+                        await cancelSessionSafely(
+                            existingSession.guild_id,
+                            interaction.user.id,
+                            'stale manual verification review ticket missing during restart'
+                        );
+                    } else {
+                        await interaction.editReply(
+                            '⚠️ Your manual verification is already waiting for staff review. ' +
+                            'Please wait for Security+ to approve or deny it.'
+                        );
+                        return;
+                    }
+                } else {
+                    await cancelSessionSafely(
+                        existingSession.guild_id,
+                        interaction.user.id,
+                        'user restarted verification from get-verified panel'
+                    );
+                }
             }
         } catch (err) {
             // Session not found is OK, continue
@@ -131,6 +190,17 @@ export async function handleGetVerified(interaction: ButtonInteraction): Promise
                 components: [buttons]
             });
         } catch (err) {
+            await cancelSessionSafely(
+                interaction.guildId!,
+                interaction.user.id,
+                'initial verification DM send failed'
+            );
+            await logVerificationEvent(
+                interaction.guild,
+                interaction.user.id,
+                '**Failed to send DM message** - Session cancelled so user can retry.',
+                { error: true }
+            );
             await interaction.editReply(
                 '❌ **Cannot Send DM**\n\n' +
                 'I couldn\'t send you a direct message. Please check your privacy settings and try again.'
@@ -638,7 +708,17 @@ export async function handleRealmEyeVerification(interaction: ButtonInteraction)
         }
 
         // Get DM channel and guild
-        const dmChannel = await interaction.user.createDM();
+        let dmChannel: DMChannel;
+        try {
+            dmChannel = await interaction.user.createDM();
+        } catch (err) {
+            await cancelSessionSafely(guildId, interaction.user.id, 'RealmEye DM channel creation failed');
+            await interaction.editReply(
+                '❌ **Cannot Send DM**\n\n' +
+                'I couldn\'t open a direct message. Please check your privacy settings and click "Get Verified" again.'
+            );
+            return;
+        }
         const guild = interaction.client.guilds.cache.get(guildId);
         if (!guild) {
             await interaction.editReply('❌ Could not find guild. Please contact staff.');
@@ -661,7 +741,16 @@ export async function handleRealmEyeVerification(interaction: ButtonInteraction)
 
         // Send IGN request
         const embed = createIgnRequestEmbed(guild.name);
-        await dmChannel.send({ embeds: [embed] });
+        try {
+            await dmChannel.send({ embeds: [embed] });
+        } catch (err) {
+            await cancelSessionSafely(guildId, interaction.user.id, 'RealmEye IGN prompt DM send failed');
+            await interaction.editReply(
+                '❌ **Cannot Send DM**\n\n' +
+                'I couldn\'t send the IGN prompt. Please check your privacy settings and click "Get Verified" again.'
+            );
+            return;
+        }
 
         // Start IGN collection
         collectIGN(dmChannel, guildId, interaction.user.id, guild.name, member);
@@ -735,7 +824,17 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
         }
 
         // Get DM channel
-        const dmChannel = await interaction.user.createDM();
+        let dmChannel: DMChannel;
+        try {
+            dmChannel = await interaction.user.createDM();
+        } catch (err) {
+            await cancelSessionSafely(guildId, interaction.user.id, 'manual verification DM channel creation failed');
+            await interaction.editReply(
+                '❌ **Cannot Send DM**\n\n' +
+                'I couldn\'t open a direct message. Please check your privacy settings and click "Get Verified" again.'
+            );
+            return;
+        }
 
         // Get guild name and custom instructions
         const guild = interaction.client.guilds.cache.get(guildId);
@@ -793,9 +892,18 @@ export async function handleManualVerifyScreenshot(interaction: ButtonInteractio
             .setColor(0xFFA500)
             .setFooter({ text: 'Type your IGN next or "cancel" to abort' });
 
-        await dmChannel.send({
-            embeds: [ignPromptEmbed],
-        });
+        try {
+            await dmChannel.send({
+                embeds: [ignPromptEmbed],
+            });
+        } catch (err) {
+            await cancelSessionSafely(guildId, interaction.user.id, 'manual verification IGN prompt DM send failed');
+            await interaction.editReply(
+                '❌ **Cannot Send DM**\n\n' +
+                'I couldn\'t send the manual verification prompt. Please check your privacy settings and click "Get Verified" again.'
+            );
+            return;
+        }
 
         // Start IGN collection, then screenshot collection
         collectIgnThenScreenshot(dmChannel, guildId, interaction.user.id, guild.name, config);
@@ -815,7 +923,7 @@ async function collectIgnThenScreenshot(
     guildId: string,
     userId: string,
     guildName: string,
-    config: any
+    config: GuildVerificationConfig
 ): Promise<void> {
     const ignCollector = dmChannel.createMessageCollector({
         filter: (m: Message) => m.author.id === userId && !m.author.bot,
@@ -1060,12 +1168,34 @@ async function collectScreenshot(
         });
 
         // Create ticket in manual-verification channel
+        const ticketLockKey = `${guildId}:${userId}`;
+        if (manualTicketCreationLocks.has(ticketLockKey)) {
+            await dmChannel.send(
+                '⚠️ **Verification Already Processing**\n\n' +
+                'Your screenshot is already being turned into a staff review ticket. Please wait a moment.'
+            );
+            return;
+        }
+
+        manualTicketCreationLocks.add(ticketLockKey);
         try {
+            const currentSession = await getJSON<VerificationSession>(
+                `/verification/session/${guildId}/${userId}`
+            );
+            if (currentSession.ticket_message_id) {
+                await dmChannel.send(
+                    '⚠️ **Ticket Already Exists**\n\n' +
+                    'Your manual verification ticket is already waiting for staff review.'
+                );
+                return;
+            }
+
             const { channels } = await getGuildChannels(guildId);
             const manualVerificationChannelId = channels.manual_verification;
 
             if (!manualVerificationChannelId) {
                 console.error('[ManualVerification] No manual-verification channel configured');
+                await cancelSessionSafely(guildId, userId, 'manual verification channel not configured');
                 if (guild) {
                     await logVerificationEvent(
                         guild,
@@ -1087,6 +1217,11 @@ async function collectScreenshot(
             const channel = await guild.channels.fetch(manualVerificationChannelId);
             if (!channel || !channel.isTextBased()) {
                 console.error('[ManualVerification] Invalid manual-verification channel');
+                await cancelSessionSafely(guildId, userId, 'manual verification channel invalid or unavailable');
+                await dmChannel.send(
+                    '❌ **Configuration Error**\n\n' +
+                    'The manual verification channel is unavailable. Please contact a staff member.'
+                );
                 return;
             }
 
@@ -1122,10 +1257,13 @@ async function collectScreenshot(
             );
         } catch (err) {
             console.error('[ManualVerification] Error creating ticket:', err);
+            await cancelSessionSafely(guildId, userId, 'manual verification ticket creation failed');
             await dmChannel.send(
                 '❌ **Error**\n\n' +
-                'Failed to create verification ticket. Please contact a staff member.'
+                'Failed to create verification ticket. Your attempt was cancelled so you can retry, or contact a staff member.'
             );
+        } finally {
+            manualTicketCreationLocks.delete(ticketLockKey);
         }
     });
 
