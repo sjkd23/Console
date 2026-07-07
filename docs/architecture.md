@@ -60,12 +60,13 @@ The RotMG Raid Bot is a full-stack application with three primary components:
 
 ```typescript
 // bot/src/commands/_types.ts
-export interface Command {
-  data: SlashCommandBuilder;
-  requiredRole?: RoleName;
-  execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
+export type SlashCommand = {
+  data: SlashCommandBuilder | SlashCommandSubcommandsOnlyBuilder | SlashCommandOptionsOnlyBuilder;
+  run: (interaction: ChatInputCommandInteraction) => Promise<void>;
   autocomplete?: (interaction: AutocompleteInteraction) => Promise<void>;
-}
+  requiredRole?: RoleKey | RoleKey[];
+  mutatesRoles?: boolean; // Enforces bot role position check before execution
+};
 ```
 
 All commands follow this interface and are auto-registered in [commands/index.ts](../bot/src/commands/index.ts).
@@ -94,11 +95,10 @@ Update Discord UI (reply/edit)
 
 **Responsibilities:**
 - Expose REST API for bot to consume
-- Authenticate requests (JWT + API key)
+- Authenticate requests (shared API key)
 - Validate all inputs with Zod
 - Execute database queries via connection pool
 - Log all actions to audit table
-- Rate limit sensitive endpoints
 
 **Entry Point:** [backend/src/server.ts](../backend/src/server.ts)
 
@@ -132,9 +132,9 @@ Bot HTTP Request
         ↓
 Fastify Router
         ↓
-Auth Plugin (verify JWT/API key)
+Auth Plugin (verify x-api-key header)
         ↓
-Validation Plugin (Zod schemas)
+Validation (Zod schemas)
         ↓
 Route Handler
         ↓
@@ -152,7 +152,7 @@ Bot Processes Response
 **Technology:** PostgreSQL 14+ with pg connection pool
 
 **Schema Management:**
-- Sequential numbered migrations: `001_init.sql` → `034_add_ping_message_id.sql`
+- Sequential numbered migrations: `001_init.sql` → `058_bot_bait_channel.sql`
 - Auto-run on backend startup via [scripts/migrate.ts](../backend/src/scripts/migrate.ts)
 - Versioned in `schema_migrations` table
 
@@ -180,24 +180,17 @@ Bot Processes Response
 **Indexes:**
 - Primary keys on all tables
 - Foreign keys with cascading deletes
-- Performance indexes on frequently queried columns:
-  - `raiders.discord_id`, `raiders.guild_id`
-  - `runs.status`, `runs.guild_id`, `runs.created_at`
-  - `punishments.target_id`, `punishments.expires_at`
+- Performance indexes on frequently queried columns (see `045_performance_indexes.sql`)
 
 **Connection Pool:**
 
 ```typescript
 // backend/src/db/pool.ts
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  max: 20, // Max connections
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL, // Single connection string
+  max: 10,                   // Maximum connections in pool
+  idleTimeoutMillis: 30000,  // Release idle connections after 30s
+  connectionTimeoutMillis: 5000, // Fail fast if pool exhausted
 });
 ```
 
@@ -230,26 +223,18 @@ verified_raider
 **Implementation:**
 
 ```typescript
-// bot/src/lib/permissions/hierarchy.ts
-const roleHierarchy: Record<RoleName, number> = {
-  administrator: 8,
-  moderator: 7,
-  head_organizer: 6,
-  officer: 5,
-  security: 4,
-  organizer: 3,
-  team: 2,
-  verified_raider: 1,
-};
-
-export function hasRequiredRole(
-  memberRoles: RoleName[],
-  requiredRole: RoleName
-): boolean {
-  const memberLevel = Math.max(...memberRoles.map(r => roleHierarchy[r]));
-  const requiredLevel = roleHierarchy[requiredRole];
-  return memberLevel >= requiredLevel;
-}
+// bot/src/lib/permissions/permissions.ts
+const ROLE_HIERARCHY: RoleKey[] = [
+  'verified_raider',
+  'organizer',
+  'security',
+  'officer',
+  'head_organizer',
+  'moderator',
+  'administrator',
+];
+// Higher index = higher authority.
+// A user holding a role at index N can execute commands requiring any role at index ≤ N.
 ```
 
 ### Command Authorization
@@ -263,48 +248,33 @@ export function hasRequiredRole(
 
 ```typescript
 // Command requires Security role
-export const warnCommand: Command = {
+export const warn: SlashCommand = {
   data: new SlashCommandBuilder()
     .setName('warn')
     .setDescription('Issue a warning'),
   requiredRole: 'security',
-  async execute(interaction) {
-    const target = interaction.options.getMember('member');
-    
-    // Check if actor can target this member
-    if (!canActorTargetMember(interaction.member, target)) {
-      return interaction.reply('Cannot warn members with equal/higher role');
-    }
-    
-    // Proceed with warning
+  async run(interaction) {
+    // canActorTargetMember() prevents targeting equal/higher roles
+    // Permission middleware applied in commands/index.ts via withMiddleware()
   }
 };
 ```
 
 ### Backend Authorization
 
-Backend authenticates via JWT tokens issued by bot:
+The backend authenticates every request using a **shared API key** (`BACKEND_API_KEY`) passed in the `x-api-key` request header. This is a server-to-server secret set in both `.env` files and checked by the auth Fastify plugin.
 
 ```typescript
-// backend/src/lib/auth/verify-token.ts
-export async function verifyToken(token: string): Promise<TokenPayload> {
-  const payload = jwt.verify(token, JWT_SECRET);
-  
-  // Payload contains: guildId, userId, roles
-  return payload;
-}
-```
-
-**Rate limiting** applied per-user:
-
-```typescript
-// backend/src/plugins/rate-limit.ts
-fastify.register(rateLimitPlugin, {
-  max: 100, // Max requests
-  timeWindow: '1 minute',
-  keyGenerator: (req) => req.headers['user-id'],
+// backend/src/plugins/auth.ts (simplified)
+fastify.addHook('onRequest', async (req, reply) => {
+  const headerKey = req.headers['x-api-key'];
+  if (!headerKey || headerKey !== backendConfig.BACKEND_API_KEY) {
+    return reply.status(401).send({ error: 'Unauthorized' });
+  }
 });
 ```
+
+Rate limiting for sensitive commands (e.g., `/purge`) is applied **in the bot** via middleware in `bot/src/lib/utilities/rate-limit-middleware.ts`.
 
 ---
 
@@ -328,10 +298,10 @@ export function setRunSession(messageId: string, session: RunSession): void {
 ```
 
 **Stored in memory:**
-- Active run sessions (participants, reactions)
+- Active headcount sessions (dungeon, participant counts, organizer)
 - Modmail ticket state (guild selection, message content)
-- Verification sessions (IGN, method, verification code)
-- Headcount sessions (dungeon, count)
+- Verification sessions (IGN, method, verification code — also persisted to DB)
+- Party finder posts (per-user active party tracking)
 
 **Persisted to database:**
 - Completed runs
@@ -382,74 +352,46 @@ export async function createRun(guildId: string, data: CreateRunData) {
 
 ### Implementation
 
-Tasks run on intervals using `node-schedule`:
+Tasks are registered in `bot/src/lib/tasks/scheduled-tasks.ts` and run via `setInterval`. The scheduler wraps each handler in error isolation so a failing task never crashes the process.
 
 ```typescript
-// bot/src/lib/tasks/index.ts
-import schedule from 'node-schedule';
+// bot/src/lib/tasks/scheduled-tasks.ts (simplified)
+const tasks: TaskConfig[] = [
+  { name: 'Expired Runs',           intervalMinutes: 5,  handler: checkExpiredRuns },
+  { name: 'Expired Headcounts',     intervalMinutes: 5,  handler: checkExpiredHeadcounts },
+  { name: 'Expired Punishments',    intervalMinutes: 2,  handler: checkExpiredPunishments },
+  { name: 'Expired Verification',   intervalMinutes: 5,  handler: checkExpiredVerificationSessions },
+  { name: 'Orphaned Run Roles',     intervalMinutes: 15, handler: cleanupOrphanedRunRoles },
+  { name: 'Quota Panel Updates',    intervalMinutes: 10, handler: updateQuotaPanels },
+];
 
-export function startScheduledTasks() {
-  // Check expired runs every 5 minutes
-  schedule.scheduleJob('*/5 * * * *', checkExpiredRuns);
-  
-  // Check expired suspensions every 5 minutes
-  schedule.scheduleJob('*/5 * * * *', checkExpiredSuspensions);
+export function startScheduledTasks(client: Client) {
+  for (const task of tasks) {
+    const wrapped = wrapTaskHandler(task);
+    setInterval(() => wrapped(client), task.intervalMinutes * 60_000);
+  }
 }
 ```
 
 ### Active Tasks
 
-**1. Expired Runs Checker**
+**1. Expired Runs Checker** — every 5 minutes
+Auto-ends runs that have exceeded their `auto_end_minutes` duration. Queries the backend for expired run IDs, ends them via API, deletes the temporary run role and ping message in Discord, and updates the run embed.
 
-**Frequency:** Every 5 minutes
+**2. Expired Headcounts Checker** — every 5 minutes
+Expires in-memory headcounts that have exceeded their timeout. Edits the Discord message to show the headcount ended, then clears all in-memory state.
 
-**Purpose:** Auto-end runs that exceed auto-end duration
+**3. Expired Punishments Checker** — every 2 minutes
+Removes `suspended` and `muted` Discord roles from members whose punishment duration has elapsed, marks the punishment as expired in the backend, and logs to the `punishment_log` channel.
 
-**Logic:**
-```typescript
-// bot/src/lib/tasks/check-expired-runs.ts
-export async function checkExpiredRuns() {
-  const expiredRuns = await backend.get('/runs/expired');
-  
-  for (const run of expiredRuns) {
-    await endRun(run.id, 'Auto-ended: duration exceeded');
-    await logAction('run_auto_ended', { runId: run.id });
-  }
-}
-```
+**4. Expired Verification Sessions** — every 5 minutes
+Calls the backend to clean up stale verification sessions that members abandoned.
 
-**2. Expired Suspensions Checker**
+**5. Orphaned Run Roles Cleanup** — every 15 minutes
+Deletes Discord roles matching the run-role naming pattern that are no longer associated with any active run (e.g., from a bot restart mid-run).
 
-**Frequency:** Every 5 minutes
-
-**Purpose:** Remove `suspended` and `muted` roles after duration expires
-
-**Logic:**
-```typescript
-// bot/src/lib/tasks/check-expired-suspensions.ts
-export async function checkExpiredSuspensions() {
-  const expired = await backend.get('/punishments/expired');
-  
-  for (const punishment of expired) {
-    const member = await guild.members.fetch(punishment.targetId);
-    await member.roles.remove(punishment.roleId);
-    await backend.patch(`/punishments/${punishment.id}`, { active: false });
-    await logAction('punishment_expired', { punishmentId: punishment.id });
-  }
-}
-```
-
-**3. Quota Reset Handler** (Manual trigger)
-
-When admins run `/configquota` and set reset date/time, task scheduled dynamically:
-
-```typescript
-const resetDate = new Date(config.resetDateTime);
-schedule.scheduleJob(resetDate, async () => {
-  await backend.post('/quota/reset', { guildId });
-  await logAction('quota_reset', { guildId });
-});
-```
+**6. Quota Panel Updates** — every 10 minutes
+Refreshes quota leaderboard embeds in configured `quota` channels with current point totals.
 
 ---
 
@@ -488,10 +430,11 @@ export async function logCommand(
 
 | Log Type | Channel Mapping | Events |
 |----------|----------------|--------|
-| Bot logs | `bot_log` | Errors, warnings, startup |
-| Punishment logs | `punishment_log` | Warns, suspensions, kicks, bans |
+| Bot logs | `bot_log` | Command executions, errors, startup |
+| Punishment logs | `punishment_log` | Warns, suspensions, mutes, kicks, bans, expirations |
 | Verification logs | `veri_log` | Verifications, unverifications, IGN changes |
-| Quota logs | `quota_log` | Manual adjustments, resets |
+| Raid logs | `raid_log` | Run creation, status changes |
+| Staff updates | `staff_updates` | Role promotions/demotions |
 
 **Implementation:**
 
@@ -542,11 +485,10 @@ try {
 **Sequential numbered files** in `backend/src/db/migrations/`:
 
 ```
-001_init.sql               — Initial schema
+001_init.sql               — Initial schema (guild, member, raider, run, reaction, audit)
 002_contract_safety.sql    — Add contract safety features
-003_remove_cap.sql         — Remove quota cap
 ...
-034_add_ping_message_id.sql — Add ping message tracking
+058_bot_bait_channel.sql   — Add bot-bait channel mapping
 ```
 
 **Migration runner:**

@@ -195,7 +195,7 @@ Click the panel to see full list with classes.
 
 From the headcount organizer panel:
 
-**"Start as Run"** button:
+**"Convert to Run"** button:
 - Converts headcount to actual run
 - Creates database record
 - All reactions carry over

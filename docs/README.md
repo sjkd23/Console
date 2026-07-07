@@ -2,7 +2,7 @@
 
 Complete documentation for the Discord raid coordination bot designed for Realm of the Mad God guilds.
 
-> **Documentation Version:** Reflects v1.1 behavior and features. Last updated December 2025.
+> **Documentation Version:** Reflects current codebase behavior. Last updated July 2026.
 
 ---
 
@@ -50,7 +50,7 @@ The bot enforces this permission hierarchy (higher roles inherit all permissions
 | **Officer** | Promoted staff | Kick/ban, quota management, modmail blacklist |
 | **Security** | Verification & discipline | Verify, warn, suspend, mute, notes |
 | **Organizer** | Run raid events | Create runs, log runs, log keys |
-| **Team** | Special access group | (Optional custom permissions) |
+| **Team** | Special access group | Auto-assigned to members who hold any staff role |
 | **Verified Raider** | Verified members | Join runs, create party finder posts |
 
 > **Note:** Roles are mapped to Discord roles during setup. See [setup.md](setup.md) for configuration.
@@ -80,6 +80,6 @@ For new guilds getting started:
 
 ## Version
 
-**Current Version:** 1.1  
-**Last Updated:** December 2025  
+**Current Version:** 0.1.0  
+**Last Updated:** July 2026  
 **Status:** Production Ready

@@ -74,10 +74,12 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
    ```env
    APPLICATION_ID=your_discord_app_id
    SECRET_KEY=your_discord_bot_token
-   DISCORD_DEV_GUILD_ID=your_server_id
+   DISCORD_GUILD_IDS=your_server_id
    BACKEND_URL=http://backend:4000/v1
    BACKEND_API_KEY=your_random_secure_key_here
    ```
+
+   > **Multi-server:** Set `DISCORD_GUILD_IDS` to a comma-separated list of server IDs to support multiple guilds (e.g., `123,456,789`).
 
    > **Critical:** The `BACKEND_API_KEY` must match in both files.
 
@@ -215,6 +217,8 @@ Configure where the bot sends logs and creates panels.
 | `modmail` | Support ticket forum | If using modmail |
 | `role_ping` | Self-assign dungeon pings | Optional |
 | `party_finder` | User-created parties | Optional |
+| `early_loc` | Priority/staff channel for location notifications | Optional |
+| `bot_bait` | Auto soft-ban any non-admin/mod user who posts here | Optional |
 
 ### Configure with `/setchannels`
 
@@ -256,16 +260,16 @@ Configure where the bot sends logs and creates panels.
 Verify the setup is working:
 
 1. **Configure verification panel** (optional):
-   - Use `/configverification` to customize the verification system
+   - Use `/configverification send-panel` to post the verification panel to a channel
    - See [verification.md](verification.md) for detailed configuration options
 
-2. **Verify yourself:**
+2. **Verify a member:**
+   As a staff member with the `security` role or higher, run:
    ```
-   /verify
+   /verify member:@yourself ign:YourIGN
    ```
-   - The bot will DM you with instructions
-   - Follow the RealmEye verification flow
-   - Confirm you receive the `verified_raider` role
+   - Grants the `verified_raider` role and updates the nickname
+   - For self-service verification, members click the **Get Verified** button on the panel posted by `/configverification send-panel`
 
 3. **Check logs:**
    - Verification event should appear in the channel mapped to `veri_log`
@@ -297,6 +301,11 @@ After successful setup:
 **Fix:**
 ```bash
 docker-compose restart bot
+```
+
+**Re-register commands** if slash commands are missing from Discord:
+```bash
+docker-compose run --rm bot npm run register
 ```
 
 ### `/setroles` or `/setchannels` says "Access Denied"

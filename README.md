@@ -52,7 +52,7 @@ A comprehensive Discord bot for organizing **Realm of the Mad God** raids. Featu
     ```env
     APPLICATION_ID=your_app_id
     SECRET_KEY=your_bot_token
-    DISCORD_DEV_GUILD_ID=your_guild_id
+    DISCORD_GUILD_IDS=your_guild_id
     BACKEND_URL=http://backend:4000/v1
     BACKEND_API_KEY=your_secret_key
     ```
@@ -75,10 +75,11 @@ For local development without Docker, install dependencies and run `npm run dev`
 
 ## Usage
 
-- **Raids:** `/run`, `/headcount`, `/logrun`
-- **Verification:** `/configverification`, `/verify`
-- **Moderation:** `/warn`, `/suspend`, `/find`
-- **Quota:** `/configquota`, `/stats`, `/logkey`
+- **Raids:** `/run`, `/headcount`, `/logrun`, `/taken`, `/party`
+- **Verification:** `/configverification`, `/verify` (staff), `/createrole`
+- **Moderation:** `/warn`, `/suspend`, `/mute`, `/kick`, `/ban`, `/find`
+- **Quota:** `/configquota`, `/configpoints`, `/stats`, `/leaderboard`, `/logkey`
+- **Config:** `/setroles`, `/setchannels`, `/configrolepings`
 
 ## License
 

@@ -159,13 +159,9 @@ Configure raider points for all dungeons:
 
 ### How Raider Points Are Earned
 
-**Automatic (future feature):**
-- Join run with `/run` reactions → track completion
-- React with key emoji → log key contribution
-
-**Manual (current system):**
-- `/logkey member:@Raider dungeon:Shatters amount:1` → awards key pop points
-- `/addpoints member:@Raider amount:50` → directly adds raider points
+**Manual:**
+- `/logkey member:@Raider dungeon:Shatters amount:1` → awards key pop points to a raider (Organizer+)
+- `/addpoints member:@Raider amount:50` → directly adds raider points (Officer+)
 
 ### Key Pop Points
 
@@ -546,8 +542,7 @@ Configure separately with `/configquota` for each role.
 **Previous period stats are stored** but not visible in main leaderboard.
 
 **To view history:**
-- Backend API: Query `quota_event` table with date filters
-- Future feature: In-bot historical leaderboards
+- Backend API: Query the `quota_event` table with date filters to see historical period data
 
 ---
 

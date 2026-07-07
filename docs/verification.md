@@ -253,77 +253,60 @@ Member can re-verify later through normal flow.
 
 ---
 
-## Bulk Team Sync
+## Bulk IGN Sync
 
-Import existing verified members without manual verification (admin only).
+Sync all verified members' IGNs from their Discord nicknames into the database (admin only).
 
 ### Use Case
 
-- Migrating from another bot
-- Onboarding established guild
-- Mass-importing from spreadsheet
+- Migrating an existing guild where members already have their IGN as their nickname
+- Recovering after a database issue where raider records are missing
+- Onboarding an established guild that was managing nicknames manually
 
-### Format
+### How It Works
 
-Prepare a list with one entry per line:
+`/forcesync` reads the Discord nickname of every member who has the `verified_raider` or `suspended` role and creates or updates the raider record in the database using that nickname as their IGN.
 
-```
-DiscordUserID MainIGN AltIGN(optional)
-```
-
-**Example:**
-
-```
-123456789012345678 PlayerOne
-234567890123456789 PlayerTwo AltTwo
-345678901234567890 PlayerThree
-```
+**Nickname parsing:**
+- `"PlayerOne"` → main IGN: `PlayerOne`
+- `"MainIGN | AltIGN"` → main IGN: `MainIGN`, alt: `AltIGN`
 
 ### Import Process
+
+```
+/forcesync
+```
+
+The command runs automatically with live progress updates. No additional input is required.
+
+**The command will:**
+
+- Fetch all guild members with `verified_raider` or `suspended` roles
+- Parse IGNs from their server nicknames
+- Bulk-sync those IGNs to the database
+- Report progress, successes, and failures
+
+**Authorization:** Requires `administrator` role (only one instance runs at a time)
+
+### After Sync
+
+1. Check logs in `veri_log` channel
+2. Verify key members received roles
+3. Review any reported failures
+
+---
+
+## Team Role Sync
+
+Manually sync the `team` marker role for all members in the guild.
 
 ```
 /syncteam
 ```
 
-Then paste the formatted list when prompted.
-
-**The command will:**
-
-- Create raider records for each entry
-- Grant `verified_raider` role
-- Update nicknames
-- Skip entries that are already verified
-- Report conflicts (IGN already in use)
+The `team` role is automatically assigned to any member who holds at least one staff role (organizer, security, officer, etc.) and removed from those who don't. This command triggers that sync manually for the entire guild — useful after initially configuring the `team` role mapping.
 
 **Authorization:** Requires `administrator` role
-
-### Validation
-
-After sync:
-
-1. Check logs in `veri_log` channel
-2. Verify key members received roles
-3. Check for any skipped/failed entries
-
----
-
-## Force Sync
-
-Manually verify a member bypassing normal flow (admin override):
-
-```
-/forcesync
-  member: @Member
-  ign: TheirIGN
-```
-
-**When to use:**
-
-- Verification system is temporarily down
-- Member cannot complete RealmEye verification (technical issue)
-- Emergency access needed
-
-**Caution:** This bypasses all validation. Ensure IGN accuracy before using.
 
 ---
 
@@ -356,13 +339,13 @@ Verification commands require specific roles:
 
 | Command | Required Role | Notes |
 |---------|---------------|-------|
-| `/verify` | Security | Manual verification approval |
+| `/verify` | Security | Manual verification (staff grants role directly) |
 | `/unverify` | Security | Remove verification |
 | `/editname` | Security | Update main IGN |
 | `/addalt` | Security | Add alternate IGN |
 | `/removealt` | Security | Remove alternate IGN |
-| `/forcesync` | Administrator | Emergency override |
-| `/syncteam` | Administrator | Bulk import |
+| `/forcesync` | Administrator | Bulk-sync IGNs from nicknames into DB |
+| `/syncteam` | Administrator | Re-sync Team role for all guild members |
 | `/configverification` | Moderator | Panel and system config |
 
 Role hierarchy allows higher roles to use lower-level commands (e.g., Moderator can use Security commands).
