@@ -36,7 +36,7 @@ export async function sendEarlyLocNotification(
     notificationData: EarlyLocNotificationData
 ): Promise<void> {
     if (!notificationData.shouldNotify) {
-        logger.debug({ guildId }, 'No early-loc notification needed');
+        logger.debug('No early-loc notification needed', { guildId });
         return;
     }
 
@@ -48,15 +48,17 @@ export async function sendEarlyLocNotification(
 
         const earlyLocChannelId = response.channels['early_loc'];
         if (!earlyLocChannelId) {
-            logger.debug({ guildId }, 'No early_loc channel configured, skipping notification');
+            logger.debug('No early_loc channel configured, skipping notification', { guildId });
             return;
         }
 
         // Fetch the channel
         const channel = await client.channels.fetch(earlyLocChannelId).catch(() => null);
         if (!channel || channel.type !== ChannelType.GuildText) {
-            logger.warn({ guildId, earlyLocChannelId }, 
-                'early_loc channel not found or not a text channel');
+            logger.warn('early_loc channel not found or not a text channel', {
+                guildId,
+                earlyLocChannelId
+            });
             return;
         }
 
@@ -97,8 +99,10 @@ export async function sendEarlyLocNotification(
                 content = `<@&${roleId}>`;
             }
         } catch (e) {
-            logger.warn({ guildId, dungeonKey }, 
-                'Failed to fetch dungeon role pings for early-loc notification');
+            logger.warn('Failed to fetch dungeon role pings for early-loc notification', {
+                guildId,
+                dungeonKey
+            });
             // Continue without role ping
         }
 
@@ -108,11 +112,14 @@ export async function sendEarlyLocNotification(
             embeds: [embed] 
         });
 
-        logger.info({ guildId, isInitialSet, party: notificationData.party, location: notificationData.location }, 
-            'Sent early-loc notification');
+        logger.info('Sent early-loc notification', {
+            guildId,
+            isInitialSet,
+            party: notificationData.party,
+            location: notificationData.location
+        });
     } catch (err) {
-        logger.error({ err, guildId }, 
-            'Failed to send early-loc notification');
+        logger.error('Failed to send early-loc notification', { err, guildId });
         // Don't throw - notification failure shouldn't block the main operation
     }
 }

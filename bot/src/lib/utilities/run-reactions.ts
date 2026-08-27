@@ -1,6 +1,4 @@
 import { Message } from 'discord.js';
-import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
-import { getReactionEmoji } from '../../constants/emojis/MappedAfkCheckReactions.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('RunReactions');
@@ -22,89 +20,6 @@ const logger = createLogger('RunReactions');
 export async function addRunReactions(message: Message, dungeonKey: string): Promise<void> {
     // Reactions disabled - return early without adding any reactions
     logger.debug('Reactions disabled for run message', {
-        dungeonKey,
-        messageId: message.id
-    });
-    return;
-
-    // eslint-disable-next-line no-unreachable
-    const dungeon = dungeonByCode[dungeonKey];
-    if (!dungeon) {
-        logger.warn('Cannot add reactions - unknown dungeon', { dungeonKey });
-        return;
-    }
-
-    // Only use otherReactions - keyReactions are handled via buttons
-    const allReactions = [
-        ...(dungeon.otherReactions || [])
-    ];
-
-    if (allReactions.length === 0) {
-        logger.debug('No reactions to add for dungeon', { dungeonKey });
-        return;
-    }
-
-    logger.info('Adding reactions to run message', {
-        dungeonKey,
-        messageId: message.id,
-        reactionCount: allReactions.length
-    });
-
-    // Add each reaction in sequence
-    for (const reaction of allReactions) {
-        try {
-            const emojiIdentifier = getReactionEmoji(reaction.mapKey);
-            
-            if (!emojiIdentifier) {
-                logger.warn('No emoji found for reaction', {
-                    dungeonKey,
-                    mapKey: reaction.mapKey,
-                    messageId: message.id
-                });
-                continue;
-            }
-
-            // Try to add the reaction
-            await message.react(emojiIdentifier);
-            
-            logger.debug('Added reaction', {
-                dungeonKey,
-                mapKey: reaction.mapKey,
-                emojiIdentifier,
-                messageId: message.id
-            });
-        } catch (err) {
-            // Log and continue - don't let one failed reaction break the rest
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            
-            // Check if it's a known Discord API error
-            if (errorMessage.includes('Unknown Emoji')) {
-                logger.warn('Emoji not available to bot', {
-                    dungeonKey,
-                    mapKey: reaction.mapKey,
-                    messageId: message.id,
-                    error: 'Unknown Emoji'
-                });
-            } else if (errorMessage.includes('Missing Permissions')) {
-                logger.error('Bot lacks permission to add reactions', {
-                    dungeonKey,
-                    messageId: message.id,
-                    error: errorMessage
-                });
-                // If we lack permissions, no point trying more reactions
-                break;
-            } else {
-                logger.error('Failed to add reaction', {
-                    dungeonKey,
-                    mapKey: reaction.mapKey,
-                    messageId: message.id,
-                    error: errorMessage
-                });
-            }
-        }
-    }
-
-    logger.info('Finished adding reactions', {
         dungeonKey,
         messageId: message.id
     });
