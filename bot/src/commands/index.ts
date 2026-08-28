@@ -43,6 +43,7 @@ import { mute } from './moderation/security/mute.js';
 import { unmute } from './moderation/security/unmute.js';
 import { headcount } from './organizer/headcount.js';
 import { leaderboard } from './leaderboard.js';
+import { listrole } from './listrole.js';
 import { purge } from './moderation/security/purge.js';
 import { modmail } from './moderation/modmail.js';
 import { modmailreply } from './moderation/security/modmailreply.js';
@@ -109,6 +110,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(mute),
     withMiddleware(unmute),
     withMiddleware(leaderboard),
+    withMiddleware(listrole),
     withMiddleware(purge, PURGE_RATE_LIMIT),
     withMiddleware(modmail),
     withMiddleware(modmailreply),
