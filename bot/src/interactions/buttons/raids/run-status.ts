@@ -184,14 +184,14 @@ async function handleStatusInternal(
                     btn,
                     runId,
                     `❌ **Cannot Start Oryx 3 Run**\n\n` +
-                    `You must submit a completion screenshot before starting Oryx 3 runs.\n\n` +
+                    `You must submit a "Taken?" screenshot before starting Oryx 3 runs.\n\n` +
                     `**How to submit:**\n` +
                     `• Use the \`/taken\` command in the raid channel\n` +
                     `• Attach your screenshot with the \`screenshot\` option\n` +
                     `• Screenshot must be fullscreen showing \`/who\` and \`/server\` in chat\n\n` +
                     `**Why is this required?**\n` +
                     'O3 runs require a taken screenshot to prove that our organizers made sure to check if the location was available.\n\n' +
-                    '⏱️ **You must submit a screenshot before starting the run.**'
+                    '**You must submit a screenshot before starting the run.**'
                 );
                 return;
             }

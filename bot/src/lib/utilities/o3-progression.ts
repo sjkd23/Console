@@ -96,12 +96,27 @@ export async function sendO3ProgressionPing(options: O3ProgressionOptions): Prom
         content += `\n[Jump to Raid Panel](${raidPanelUrl})`;
 
         // Send the new ping message
-        const pingMessage = await textChannel.send({ content });
+        const pingMessage = await textChannel.send({
+            content,
+            reply: {
+                messageReference: run.postMessageId,
+                failIfNotExists: true
+            }
+        });
 
-        // Store the new ping message ID in the database
-        await postJSON(`/runs/${runId}/ping-message`, {
-            pingMessageId: pingMessage.id
-        }, { guildId: guild.id });
+        // The Discord notification has already succeeded at this point. A tracking-write
+        // failure should not make callers report that the announcement itself failed.
+        try {
+            await postJSON(`/runs/${runId}/ping-message`, {
+                pingMessageId: pingMessage.id
+            }, { guildId: guild.id });
+        } catch (error) {
+            logger.error('Sent O3 progression ping but failed to store its message ID', {
+                runId,
+                pingMessageId: pingMessage.id,
+                error
+            });
+        }
 
         logger.info('Sent O3 progression ping', {
             runId,

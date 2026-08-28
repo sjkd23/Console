@@ -4,13 +4,13 @@ import {
     StringSelectMenuBuilder,
     ActionRowBuilder,
     ButtonBuilder,
-    ButtonStyle,
-    MessageFlags
+    ButtonStyle
 } from 'discord.js';
 import { sendO3ProgressionPing } from '../../../lib/utilities/o3-progression.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { patchJSON } from '../../../lib/utilities/http.js';
+import { updateRunPublicPanelContent } from '../../../lib/utilities/run-public-panel-updater.js';
 
 const logger = createLogger('O3Progression');
 
@@ -32,26 +32,36 @@ export async function handleRealmClosed(btn: ButtonInteraction, runId: string) {
     }
 
     try {
+        // Persist first so stale or repeated interactions cannot emit progression pings.
+        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'closed' }, { guildId });
+
         // Send the "Realm Closed" ping message
-        await sendO3ProgressionPing({
+        const pingMessageId = await sendO3ProgressionPing({
             messageText: 'Realm Closed',
             runId: parseInt(runId),
             guild: btn.guild,
             client: btn.client,
-            includePartyLocation: true
+            includePartyLocation: false
         });
 
-        // Update the O3 stage to 'closed'
-        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'closed' }, { guildId });
+        await updateRunPublicPanelContent(btn.client, guildId, runId);
 
-        logger.info('Realm Closed message sent', {
-            runId,
-            guildId,
-            userId: btn.user.id
-        });
+        logger[pingMessageId ? 'info' : 'warn'](
+            pingMessageId ? 'Realm Closed message sent' : 'Realm Closed persisted without a progression ping', {
+                runId,
+                guildId,
+                userId: btn.user.id
+            }
+        );
 
         // Refresh the organizer panel with confirmation and updated buttons
-        await refreshOrganizerPanel(btn, runId, '✅ **Realm Closed** message sent (raiders have been pinged!)');
+        await refreshOrganizerPanel(
+            btn,
+            runId,
+            pingMessageId
+                ? '✅ **Realm Closed** message sent (raiders have been pinged!)'
+                : '⚠️ **Realm Closed** was saved, but the raider announcement could not be sent.'
+        );
     } catch (err) {
         logger.error('Failed to send Realm Closed message', {
             runId,
@@ -96,10 +106,10 @@ export async function handleMiniboss(btn: ButtonInteraction, runId: string) {
 
     const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(minibossSelect);
 
-    await btn.reply({
+    await btn.update({
         content: 'Select which miniboss to announce:',
-        components: [row],
-        flags: MessageFlags.Ephemeral
+        embeds: [],
+        components: [row]
     });
 }
 
@@ -122,35 +132,34 @@ export async function handleMinibossSelect(interaction: StringSelectMenuInteract
     const selectedMiniboss = interaction.values[0];
 
     try {
+        // Persist first so stale selectors cannot emit pings or regress progression.
+        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'miniboss' }, { guildId });
+
         // Send the "Mini: [Miniboss]" ping message
-        await sendO3ProgressionPing({
+        const pingMessageId = await sendO3ProgressionPing({
             messageText: `Mini: ${selectedMiniboss}`,
             runId: parseInt(runId),
             guild: interaction.guild,
             client: interaction.client,
-            includePartyLocation: true
+            includePartyLocation: false
         });
 
-        // Update the O3 stage to 'miniboss'
-        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'miniboss' }, { guildId });
+        logger[pingMessageId ? 'info' : 'warn'](
+            pingMessageId ? 'Miniboss announcement sent' : 'Miniboss persisted without a progression ping', {
+                runId,
+                guildId,
+                userId: interaction.user.id,
+                miniboss: selectedMiniboss
+            }
+        );
 
-        logger.info('Miniboss announcement sent', {
+        await refreshOrganizerPanel(
+            interaction,
             runId,
-            guildId,
-            userId: interaction.user.id,
-            miniboss: selectedMiniboss
-        });
-
-        // Close the dropdown message and refresh organizer panel
-        await interaction.deleteReply();
-
-        // Need to get the original button interaction to refresh the panel
-        // Since we're in a select menu interaction, we need to fetch and update differently
-        // For now, just send a simple confirmation
-        await interaction.followUp({
-            content: `✅ **Mini: ${selectedMiniboss}** announced! Raiders have been pinged. Open the Organizer Panel to continue.`,
-            flags: MessageFlags.Ephemeral
-        });
+            pingMessageId
+                ? `✅ **Mini: ${selectedMiniboss}** announced! Raiders have been pinged.`
+                : `⚠️ **Mini: ${selectedMiniboss}** was saved, but the raider announcement could not be sent.`
+        );
     } catch (err) {
         logger.error('Failed to send miniboss announcement', {
             runId,
@@ -183,26 +192,34 @@ export async function handleThirdRoom(btn: ButtonInteraction, runId: string) {
     }
 
     try {
+        // Persist first so stale or repeated interactions cannot emit progression pings.
+        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'third_room' }, { guildId });
+
         // Send the "Third Room - Join Sanctuary now!" ping message
-        await sendO3ProgressionPing({
+        const pingMessageId = await sendO3ProgressionPing({
             messageText: 'Third Room - Join Sanctuary now!',
             runId: parseInt(runId),
             guild: btn.guild,
             client: btn.client,
-            includePartyLocation: true
+            includePartyLocation: false
         });
 
-        // Update the O3 stage to 'third_room'
-        await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'third_room' }, { guildId });
-
-        logger.info('Third Room message sent', {
-            runId,
-            guildId,
-            userId: btn.user.id
-        });
+        logger[pingMessageId ? 'info' : 'warn'](
+            pingMessageId ? 'Third Room message sent' : 'Third Room persisted without a progression ping', {
+                runId,
+                guildId,
+                userId: btn.user.id
+            }
+        );
 
         // Refresh the organizer panel with confirmation
-        await refreshOrganizerPanel(btn, runId, '✅ **Third Room** announced (raiders have been pinged!)');
+        await refreshOrganizerPanel(
+            btn,
+            runId,
+            pingMessageId
+                ? '✅ **Third Room** announced (raiders have been pinged!)'
+                : '⚠️ **Third Room** was saved, but the raider announcement could not be sent.'
+        );
     } catch (err) {
         logger.error('Failed to send Third Room message', {
             runId,

@@ -271,8 +271,14 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { userId, state } = b.data;
 
         // Block edits for closed runs + load guild_id
-        const statusRes = await query<{ status: string; guild_id: string }>(
-            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
+        const statusRes = await query<{
+            status: string;
+            guild_id: string;
+            dungeon_key: string;
+            o3_stage: string | null;
+            join_locked: boolean;
+        }>(
+            `SELECT status, guild_id, dungeon_key, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -288,17 +294,39 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
+        if (state === 'join' && (
+            run.join_locked
+            || (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null)
+        )) {
+            return Errors.runClosed(reply);
+        }
+
         // Ensure member exists
         await ensureMemberExists(userId);
 
         // Upsert join state
-        await query(
+        const reactionResult = await query(
             `INSERT INTO reaction (run_id, user_id, state)
-        VALUES ($1::bigint, $2::bigint, $3)
+        SELECT id, $2::bigint, $3
+          FROM run
+         WHERE id = $1::bigint
+           AND (
+               $3::text <> 'join'
+               OR (
+                   status IN ('open', 'live')
+                   AND join_locked = FALSE
+                   AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+               )
+           )
         ON CONFLICT (run_id, user_id)
-        DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+        DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+        RETURNING run_id`,
             [runId, userId, state]
         );
+
+        if (reactionResult.rowCount === 0) {
+            return Errors.runClosed(reply);
+        }
 
         // Return count for quick UI updates
         const joinRes = await query<{ count: string }>(
@@ -377,8 +405,14 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { userId, class: selectedClass } = b.data;
 
         // Block edits for closed runs + load guild_id
-        const statusRes = await query<{ status: string; guild_id: string }>(
-            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
+        const statusRes = await query<{
+            status: string;
+            guild_id: string;
+            dungeon_key: string;
+            o3_stage: string | null;
+            join_locked: boolean;
+        }>(
+            `SELECT status, guild_id, dungeon_key, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -390,21 +424,56 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        if (currentStatus === 'ended') {
+        if (currentStatus !== 'open' && currentStatus !== 'live') {
             return Errors.runClosed(reply);
         }
 
         // Ensure member exists
         await ensureMemberExists(userId);
 
-        // Upsert reaction with class (default to 'join' if new)
-        await query(
-            `INSERT INTO reaction (run_id, user_id, state, class)
-        VALUES ($1::bigint, $2::bigint, 'join', $3)
+        // Lock the run row so class selection is ordered against Lock Join, Realm Closed,
+        // and End Run. Existing joined raiders may update their class after joins close;
+        // creating or restoring a join still requires joining to be open.
+        const reactionResult = await query(
+            `WITH current_run AS (
+                SELECT id, dungeon_key, o3_stage, join_locked
+                  FROM run
+                 WHERE id = $1::bigint
+                   AND status IN ('open', 'live')
+                 FOR UPDATE
+             )
+        INSERT INTO reaction (run_id, user_id, state, class)
+        SELECT id, $2::bigint, 'join', $3
+          FROM current_run
+         WHERE (
+             (join_locked = FALSE AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL))
+             OR EXISTS (
+                 SELECT 1
+                   FROM reaction existing
+                  WHERE existing.run_id = current_run.id
+                    AND existing.user_id = $2::bigint
+                    AND existing.state = 'join'
+             )
+         )
         ON CONFLICT (run_id, user_id)
-        DO UPDATE SET class = EXCLUDED.class, updated_at = now()`,
+        DO UPDATE SET
+            state = 'join',
+            class = EXCLUDED.class,
+            updated_at = now()
+        WHERE reaction.state = 'join'
+           OR EXISTS (
+               SELECT 1
+                 FROM current_run
+                WHERE join_locked = FALSE
+                  AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+           )
+        RETURNING run_id`,
             [runId, userId, selectedClass]
         );
+
+        if (reactionResult.rowCount === 0) {
+            return Errors.runClosed(reply);
+        }
 
         // Get join count
         const joinRes = await query<{ count: string }>(
@@ -725,8 +794,9 @@ export default async function runsRoutes(app: FastifyInstance) {
             organizer_id: string;
             guild_id: string;
             dungeon_key: string;
+            o3_stage: string | null;
         }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key FROM run WHERE id = $1::bigint`,
+            `SELECT status, organizer_id, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -740,11 +810,34 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.validation(reply, 'O3 progression is only available for Oryx 3 runs');
         }
 
-        // Update O3 stage
-        await query(
-            `UPDATE run SET o3_stage = $2 WHERE id = $1::bigint`,
-            [runId, o3Stage]
+        if (run.status !== 'live') {
+            return Errors.runClosed(reply);
+        }
+
+        const expectedPreviousStage: string | null = o3Stage === 'closed'
+            ? null
+            : o3Stage === 'miniboss'
+                ? 'closed'
+                : 'miniboss';
+
+        if (run.o3_stage !== expectedPreviousStage) {
+            return Errors.invalidStatusTransition(reply, run.o3_stage ?? 'not_started', o3Stage);
+        }
+
+        // Compare-and-set prevents concurrent or stale interactions from regressing progression.
+        const updateResult = await query(
+            `UPDATE run
+             SET o3_stage = $2
+             WHERE id = $1::bigint
+               AND status = 'live'
+               AND o3_stage IS NOT DISTINCT FROM $3
+             RETURNING o3_stage`,
+            [runId, o3Stage, expectedPreviousStage]
         );
+
+        if (updateResult.rowCount === 0) {
+            return Errors.invalidStatusTransition(reply, 'changed concurrently', o3Stage);
+        }
 
         logger.info({ runId, guildId: run.guild_id, o3Stage }, 
             'O3 progression stage updated');
@@ -1083,14 +1176,25 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         // Increment key_pop_count and set key_window_ends_at
         const newKeyPopCount = key_pop_count + 1;
-        const res = await query<{ key_window_ends_at: string }>(
+        const res = await query<{ key_window_ends_at: string; key_pop_count: number }>(
             `UPDATE run
              SET key_window_ends_at = now() + ($2 || ' seconds')::interval,
-                 key_pop_count = $3
+                 key_pop_count = key_pop_count + 1
              WHERE id = $1::bigint
-             RETURNING key_window_ends_at`,
-            [runId, seconds, newKeyPopCount]
+               AND status = 'live'
+               AND key_pop_count = $3
+             RETURNING key_window_ends_at, key_pop_count`,
+            [runId, seconds, key_pop_count]
         );
+
+        if (res.rowCount === 0) {
+            return reply.code(409).send({
+                error: {
+                    code: 'CONFLICT',
+                    message: 'Run state changed while processing the key pop. Please retry.'
+                }
+            });
+        }
 
         // If this is not the first key pop, award completions to the previous snapshot
         if (key_pop_count > 0) {
@@ -1136,7 +1240,7 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         return reply.send({ 
             key_window_ends_at: res.rows[0].key_window_ends_at,
-            key_pop_count: newKeyPopCount
+            key_pop_count: res.rows[0].key_pop_count
         });
     });
 
@@ -1316,8 +1420,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles, joinLocked } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<RunRow>(
-            `SELECT status, organizer_id, guild_id FROM run WHERE id = $1::bigint`,
+        const cur = await query<RunRow & { dungeon_key: string; o3_stage: string | null }>(
+            `SELECT status, organizer_id, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -1348,11 +1452,24 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
+        if (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null) {
+            return Errors.runClosed(reply);
+        }
+
         // Update join_locked state
-        await query(
-            `UPDATE run SET join_locked = $2 WHERE id = $1::bigint`,
+        const updateResult = await query(
+            `UPDATE run
+             SET join_locked = $2
+             WHERE id = $1::bigint
+               AND status IN ('open', 'live')
+               AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+             RETURNING join_locked`,
             [runId, joinLocked]
         );
+
+        if (updateResult.rowCount === 0) {
+            return Errors.runClosed(reply);
+        }
 
         logger.info({ runId, guildId: run.guild_id, actorId, joinLocked }, 
             'Join locked state updated');
@@ -1451,8 +1568,13 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { userId, keyType } = b.data;
 
         // Block edits for closed runs + load guild_id
-        const statusRes = await query<{ status: string; guild_id: string }>(
-            `SELECT status, guild_id FROM run WHERE id = $1::bigint`,
+        const statusRes = await query<{
+            status: string;
+            guild_id: string;
+            dungeon_key: string;
+            o3_stage: string | null;
+        }>(
+            `SELECT status, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -1464,7 +1586,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        if (currentStatus === 'ended') {
+        if (currentStatus !== 'open' && currentStatus !== 'live') {
+            return Errors.runClosed(reply);
+        }
+
+        if (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null) {
             return Errors.runClosed(reply);
         }
 

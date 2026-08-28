@@ -7,6 +7,7 @@ import {
     MessageFlags,
     MessageEditOptions,
     ModalSubmitInteraction,
+    StringSelectMenuInteraction,
     ChatInputCommandInteraction,
     Message
 } from 'discord.js';
@@ -15,6 +16,7 @@ import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permi
 import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logButtonClick } from '../../../lib/logging/raid-logger.js';
 import { registerOrganizerPanel, RunOrganizerPanelHandle } from '../../../lib/state/organizer-panel-tracker.js';
+import { isO3RealmClosedStage } from '../../../lib/utilities/run-message-helpers.js';
 
 /**
  * Build the organizer panel content (embed and components) for a run.
@@ -47,6 +49,8 @@ export async function buildRunOrganizerPanelContent(
     if (run.status !== 'open' && run.status !== 'live') {
         return null;
     }
+
+    const realmIsClosed = run.dungeonKey === 'ORYX_3' && isO3RealmClosedStage(run.o3Stage);
 
     // Fetch key reaction users
     let headcountKeys: Record<string, string[]> = {};
@@ -89,6 +93,9 @@ export async function buildRunOrganizerPanelContent(
     
     // Show raider count
     description += `**Raiders Joined:** ${joinCount}\n\n`;
+    if (realmIsClosed) {
+        description += '**Realm Score:** 100%\n\n';
+    }
     description += 'Manage the raid with the controls below.';
 
     // Show Headcount Keys
@@ -212,13 +219,14 @@ export async function buildRunOrganizerPanelContent(
             actionButtons.push(keyPoppedButton);
         }
 
-        // Add Lock/Unlock Join button to the action buttons
-        actionButtons.push(
-            new ButtonBuilder()
-                .setCustomId(`run:lockjoin:${runId}`)
-                .setLabel(run.joinLocked ? '🔓 Unlock Join' : '🔒 Lock Join')
-                .setStyle(run.joinLocked ? ButtonStyle.Success : ButtonStyle.Secondary)
-        );
+        if (!realmIsClosed) {
+            actionButtons.push(
+                new ButtonBuilder()
+                    .setCustomId(`run:lockjoin:${runId}`)
+                    .setLabel(run.joinLocked ? '🔓 Unlock Join' : '🔒 Lock Join')
+                    .setStyle(run.joinLocked ? ButtonStyle.Success : ButtonStyle.Secondary)
+            );
+        }
 
         const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
@@ -228,12 +236,16 @@ export async function buildRunOrganizerPanelContent(
             ...actionButtons
         );
         
-        const row2Components = [
-            new ButtonBuilder()
+        const row2Components: ButtonBuilder[] = [];
+
+        if (!realmIsClosed) {
+            row2Components.push(
+                new ButtonBuilder()
                 .setCustomId(`run:setpartyloc:${runId}`)
                 .setLabel('Set Party/Loc')
                 .setStyle(ButtonStyle.Secondary)
-        ];
+            );
+        }
         
         if (run.dungeonKey !== 'ORYX_3') {
             row2Components.push(
@@ -328,7 +340,7 @@ export async function updateRunOrganizerPanel(
  * @param confirmationMessage Optional message to show at the top of the panel (e.g., "✅ Party set to: USW3")
  */
 export async function showOrganizerPanel(
-    btn: ButtonInteraction | ModalSubmitInteraction, 
+    btn: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     runId: number, 
     guildId: string, 
     run: {
@@ -547,7 +559,7 @@ export async function handleOrganizerPanelDeny(btn: ButtonInteraction, runId: st
  * @param confirmationMessage Optional confirmation message to display at the top
  */
 export async function refreshOrganizerPanel(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     runId: string,
     confirmationMessage?: string
 ) {

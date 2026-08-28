@@ -55,7 +55,7 @@ export async function handleScreenshotButton(btn: ButtonInteraction, runId: stri
     // Show instructions for using /taken command
     await btn.reply({
         content:
-            '📸 **Submit Your Oryx 3 Completion Screenshot**\n\n' +
+            '📸 **Submit Your Oryx 3 "Taken?" Screenshot**\n\n' +
             'To submit your screenshot, use the `/taken` command in this channel:\n\n' +
             '**How to submit:**\n' +
             '1. Type `/taken` in this channel\n' +
@@ -63,7 +63,7 @@ export async function handleScreenshotButton(btn: ButtonInteraction, runId: stri
             '3. Make sure the screenshot is **fullscreen** and shows both `/who` and `/server` commands visible in the in-game chat\n\n' +
             '**Why is this required?**\n' +
             'O3 runs require a taken screenshot to prove that our organizers made sure to check if the location was available.\n\n' +
-            '⏱️ **You must submit a screenshot before starting the run.**',
+            '**You must submit a screenshot before starting the run.**',
         flags: MessageFlags.Ephemeral
     });
 }

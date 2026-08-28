@@ -12,7 +12,7 @@ import {
     fetchMemberWithRoles,
     getModalFieldValues
 } from '../../../lib/utilities/modal-helpers.js';
-import { buildRunMessageContent } from '../../../lib/utilities/run-message-helpers.js';
+import { updateRunPublicPanelContent } from '../../../lib/utilities/run-public-panel-updater.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { notifyKeyReactors } from '../../../lib/utilities/key-reactor-notifications.js';
 import { sendEarlyLocNotification } from '../../../lib/utilities/early-loc-notifier.js';
@@ -60,27 +60,6 @@ async function notifyKeyReactorsIfReady(
         run.location,
         isUpdate
     );
-}
-
-/**
- * Updates the public run message content if the run is live
- */
-async function updatePublicRunMessage(
-    btn: ButtonInteraction,
-    run: RunDetails
-): Promise<void> {
-    if (run.status !== 'live' || !run.channelId || !run.postMessageId) {
-        return;
-    }
-
-    const ch = await btn.client.channels.fetch(run.channelId).catch(() => null);
-    if (ch && ch.type === ChannelType.GuildText) {
-        const pubMsg = await ch.messages.fetch(run.postMessageId).catch(() => null);
-        if (pubMsg) {
-            const content = buildRunMessageContent(run.party, run.location);
-            await pubMsg.edit({ content });
-        }
-    }
 }
 
 /**
@@ -192,7 +171,7 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     }
 
     // Update the public message content with party/location ONLY if run is live
-    await updatePublicRunMessage(btn, run);
+    await updateRunPublicPanelContent(btn.client, guildCtx.guildId, runId);
 
     // Log updates to raid-log
     if (btn.guild) {
@@ -334,7 +313,7 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
     }
 
     // Update the public message content with party/location ONLY if run is live
-    await updatePublicRunMessage(btn, run);
+    await updateRunPublicPanelContent(btn.client, guildCtx.guildId, runId);
 
     // Log party update to raid-log
     if (party && btn.guild) {
@@ -463,7 +442,7 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
     }
 
     // Update the public message content with party/location only if the run is live
-    await updatePublicRunMessage(btn, run);
+    await updateRunPublicPanelContent(btn.client, guildCtx.guildId, runId);
 
     // Log location update to raid-log
     if (location && btn.guild) {

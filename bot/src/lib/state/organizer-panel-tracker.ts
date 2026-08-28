@@ -1,4 +1,4 @@
-import { ButtonInteraction, ModalSubmitInteraction, Message, InteractionWebhook } from 'discord.js';
+import { ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, Message, InteractionWebhook } from 'discord.js';
 
 /**
  * Handle type for run organizer panels, abstracting over different edit methods.
@@ -10,7 +10,7 @@ import { ButtonInteraction, ModalSubmitInteraction, Message, InteractionWebhook 
 export type RunOrganizerPanelHandle =
     | {
         type: 'interactionReply';
-        interaction: ButtonInteraction | ModalSubmitInteraction;
+        interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction;
     }
     | {
         type: 'followup';

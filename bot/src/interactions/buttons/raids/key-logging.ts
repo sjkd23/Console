@@ -20,6 +20,7 @@ import { logKeyLogged, clearLogThreadCache } from '../../../lib/logging/raid-log
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { findMemberByName } from '../../../lib/utilities/member-helpers.js';
+import { buttonMutex } from '../../../lib/utilities/button-mutex.js';
 
 const logger = createLogger('KeyLogging');
 
@@ -193,112 +194,125 @@ export async function handleKeyLogKeyCount(
     await interaction.deferUpdate();
 
     const runIdNum = parseInt(runId);
-    const state = keyLoggingSessions.get(runIdNum);
+    const lockKey = `run:keylog:${runId}`;
+    const lockResult = await buttonMutex.acquire(
+        lockKey,
+        interaction.user.id,
+        interaction.user.username
+    );
 
-    if (!state) {
-        await interaction.editReply({
-            content: 'Key logging session expired. Please restart the process.',
-            embeds: [],
-            components: [],
-        });
-        return;
-    }
-
-    const keyCount = parseInt(interaction.values[0]);
-
-    // Validate key count doesn't exceed remaining
-    if (keyCount > state.remainingKeys) {
+    if (!lockResult.acquired) {
         await interaction.followUp({
-            content: `❌ Cannot log ${keyCount} keys. Only ${state.remainingKeys} remaining.`,
+            content: lockResult.message ?? 'Another key logging action is already in progress.',
             flags: MessageFlags.Ephemeral,
         });
         return;
     }
-
-    // Get member for role IDs
-    const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
-    const actorRoles = member ? getMemberRoleIds(member) : [];
 
     try {
-        // Call backend to log keys
-        const result = await postJSON<{
-            logged: number;
-            new_total: number;
-            points_awarded: number;
-            user_id: string;
-        }>(
-            '/quota/log-key',
-            {
-                actorId: interaction.user.id,
-                actorRoles,
-                guildId: interaction.guildId!,
-                userId: userId,
-                dungeonKey: state.dungeonKey,
-                amount: keyCount,
-            }
-        );
+        const state = keyLoggingSessions.get(runIdNum);
 
-        // Fetch username for display
-        const user = await interaction.client.users.fetch(userId).catch(() => null);
-        const username = user?.username ?? 'Unknown User';
-
-        // Update state
-        state.remainingKeys -= keyCount;
-        state.logs.push({
-            userId: result.user_id,
-            username,
-            amount: keyCount,
-            pointsAwarded: Number(result.points_awarded), // Ensure it's a number
-        });
-
-        // Log to raid-log
-        if (interaction.guild) {
-            try {
-                await logKeyLogged(
-                    interaction.client,
-                    {
-                        guildId: interaction.guild.id,
-                        organizerId: interaction.user.id,
-                        organizerUsername: interaction.user.username,
-                        dungeonName: state.dungeonLabel,
-                        type: 'run',
-                        runId: runIdNum,
-                    },
-                    userId,
-                    username,
-                    keyCount,
-                    result.points_awarded
-                );
-            } catch (e) {
-                logger.error('Failed to log key logging to raid-log', {
-                    runId: runIdNum,
-                    userId,
-                    error: e instanceof Error ? e.message : String(e),
-                });
-            }
+        if (!state) {
+            await interaction.editReply({
+                content: 'Key logging session expired. Please restart the process.',
+                embeds: [],
+                components: [],
+            });
+            return;
         }
 
-        // Rebuild and show updated panel
-        const { embed, components } = buildKeyLoggingPanel(state);
-        await interaction.editReply({ embeds: [embed], components });
+        const keyCount = parseInt(interaction.values[0]);
 
-        logger.info('Logged keys', {
-            runId: runIdNum,
-            userId,
-            keyCount,
-            remainingKeys: state.remainingKeys,
-        });
-    } catch (err) {
-        logger.error('Failed to log keys', {
-            runId: runIdNum,
-            userId,
-            keyCount,
-            error: err instanceof Error ? err.message : String(err),
-        });
-        await interaction.followUp({
-            content: '❌ Failed to log keys. Please try again or use /logkey manually.',
-            flags: MessageFlags.Ephemeral,
-        });
+        // Validate key count doesn't exceed remaining while holding the session lock.
+        if (keyCount > state.remainingKeys) {
+            await interaction.followUp({
+                content: `❌ Cannot log ${keyCount} keys. Only ${state.remainingKeys} remaining.`,
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
+
+        const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+        const actorRoles = member ? getMemberRoleIds(member) : [];
+
+        try {
+            const result = await postJSON<{
+                logged: number;
+                new_total: number;
+                points_awarded: number;
+                user_id: string;
+            }>(
+                '/quota/log-key',
+                {
+                    actorId: interaction.user.id,
+                    actorRoles,
+                    guildId: interaction.guildId!,
+                    userId,
+                    dungeonKey: state.dungeonKey,
+                    amount: keyCount,
+                }
+            );
+
+            const user = await interaction.client.users.fetch(userId).catch(() => null);
+            const username = user?.username ?? 'Unknown User';
+
+            state.remainingKeys -= keyCount;
+            state.logs.push({
+                userId: result.user_id,
+                username,
+                amount: keyCount,
+                pointsAwarded: Number(result.points_awarded),
+            });
+
+            if (interaction.guild) {
+                try {
+                    await logKeyLogged(
+                        interaction.client,
+                        {
+                            guildId: interaction.guild.id,
+                            organizerId: interaction.user.id,
+                            organizerUsername: interaction.user.username,
+                            dungeonName: state.dungeonLabel,
+                            type: 'run',
+                            runId: runIdNum,
+                        },
+                        userId,
+                        username,
+                        keyCount,
+                        result.points_awarded
+                    );
+                } catch (e) {
+                    logger.error('Failed to log key logging to raid-log', {
+                        runId: runIdNum,
+                        userId,
+                        error: e instanceof Error ? e.message : String(e),
+                    });
+                }
+            }
+
+            const { embed, components } = buildKeyLoggingPanel(state);
+            await interaction.editReply({ embeds: [embed], components });
+
+            logger.info('Logged keys', {
+                runId: runIdNum,
+                userId,
+                keyCount,
+                remainingKeys: state.remainingKeys,
+            });
+        } catch (err) {
+            logger.error('Failed to log keys', {
+                runId: runIdNum,
+                userId,
+                keyCount,
+                error: err instanceof Error ? err.message : String(err),
+            });
+            await interaction.followUp({
+                content: '❌ Failed to log keys. Please try again or use /logkey manually.',
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    } finally {
+        buttonMutex.release(lockKey, interaction.user.id);
     }
 }
 

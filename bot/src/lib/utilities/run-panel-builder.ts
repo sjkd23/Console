@@ -14,6 +14,7 @@ import {
 import { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
 import { formatKeyLabel, getDungeonKeyEmoji } from './key-emoji-helpers.js';
+import { isO3RealmClosedStage, type O3Stage } from './run-message-helpers.js';
 
 // ============================================================================
 // INTERFACES
@@ -35,6 +36,7 @@ export interface RunButtonsOptions {
     runId: number | string;
     dungeonData: DungeonInfo;
     joinLocked?: boolean;
+    o3Stage?: O3Stage | null;
 }
 
 export interface KeyButtonsResult {
@@ -176,13 +178,24 @@ export function transitionRunEmbed(
 /**
  * Build the main action row (Join, Leave, Organizer Panel)
  */
-export function buildMainActionRow(runId: number | string, joinLocked: boolean = false): ActionRowBuilder<ButtonBuilder> {
-    return new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
+export function buildMainActionRow(
+    runId: number | string,
+    joinLocked: boolean = false,
+    includeJoin: boolean = true
+): ActionRowBuilder<ButtonBuilder> {
+    const buttons: ButtonBuilder[] = [];
+
+    if (includeJoin) {
+        buttons.push(
+            new ButtonBuilder()
             .setCustomId(`run:join:${runId}`)
             .setLabel('Join')
             .setStyle(ButtonStyle.Success)
-            .setDisabled(joinLocked),
+            .setDisabled(joinLocked)
+        );
+    }
+
+    buttons.push(
         new ButtonBuilder()
             .setCustomId(`run:leave:${runId}`)
             .setLabel('Leave')
@@ -192,6 +205,8 @@ export function buildMainActionRow(runId: number | string, joinLocked: boolean =
             .setLabel('Organizer Panel')
             .setStyle(ButtonStyle.Secondary)
     );
+
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 }
 
 /**
@@ -235,10 +250,11 @@ export function buildKeyButtonRows(runId: number | string, dungeonData: DungeonI
  * Returns main action row + key button rows
  */
 export function buildRunButtons(options: RunButtonsOptions): ActionRowBuilder<ButtonBuilder>[] {
-    const { runId, dungeonData, joinLocked = false } = options;
+    const { runId, dungeonData, joinLocked = false, o3Stage = null } = options;
+    const realmIsClosed = dungeonData.codeName === 'ORYX_3' && isO3RealmClosedStage(o3Stage);
 
-    const mainRow = buildMainActionRow(runId, joinLocked);
-    const keyRows = buildKeyButtonRows(runId, dungeonData);
+    const mainRow = buildMainActionRow(runId, joinLocked, !realmIsClosed);
+    const keyRows = realmIsClosed ? [] : buildKeyButtonRows(runId, dungeonData);
 
     return [mainRow, ...keyRows];
 }
