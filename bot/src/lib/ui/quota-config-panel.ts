@@ -6,6 +6,7 @@ import {
     ButtonStyle,
 } from 'discord.js';
 import { getQuotaRoleConfig, BackendError } from '../utilities/http.js';
+import type { QuotaPeriod } from '../utilities/http.js';
 import { formatPoints } from '../utilities/format-helpers.js';
 
 /**
@@ -15,31 +16,17 @@ import { formatPoints } from '../utilities/format-helpers.js';
 export async function buildQuotaConfigPanel(guildId: string, roleId: string, userId?: string): Promise<{
     embed: EmbedBuilder;
     buttons: ActionRowBuilder<ButtonBuilder>[];
-    config: any | null;
+    config: QuotaConfigPanelConfig | null;
 }> {
     // Fetch current config from backend
-    let config: {
-        guild_id: string;
-        discord_role_id: string;
-        required_points: number;
-        reset_at: string;
-        period_start_at: string;
-        panel_message_id: string | null;
-        moderation_points: number;
-        base_exalt_points?: number;
-        base_non_exalt_points?: number;
-        verify_points?: number;
-        warn_points?: number;
-        suspend_points?: number;
-        modmail_reply_points?: number;
-        editname_points?: number;
-        addnote_points?: number;
-    } | null = null;
+    let config: QuotaConfigPanelConfig | null = null;
+    let activePeriod: QuotaPeriod | null = null;
     let dungeonOverrides: Record<string, number> = {};
     
     try {
         const result = await getQuotaRoleConfig(guildId, roleId);
         config = result.config;
+        activePeriod = result.active_period;
         dungeonOverrides = result.dungeon_overrides;
         
         // Debug log to check if base points are being returned
@@ -66,10 +53,10 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         .setColor(0x5865F2)
         .setTimestamp();
 
-    if (config) {
-        const periodStartDate = new Date(config.period_start_at);
+    if (config && activePeriod) {
+        const periodStartDate = new Date(activePeriod.starts_at);
         const periodStartTimestamp = Math.floor(periodStartDate.getTime() / 1000);
-        const resetDate = new Date(config.reset_at);
+        const resetDate = new Date(activePeriod.ends_at);
         const resetTimestamp = Math.floor(resetDate.getTime() / 1000);
         
         // Use ?? instead of || to handle 0 values correctly
@@ -77,13 +64,25 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         const baseNonExaltPoints = config.base_non_exalt_points ?? 1;
         
         embed.addFields(
-            { name: '🎯 Required Points', value: formatPoints(config.required_points), inline: true },
+            { name: '🎯 Next Required Points', value: formatPoints(config.required_points), inline: true },
+            { name: '⏱️ Next Interval', value: `${config.reset_interval_days} day${config.reset_interval_days === 1 ? '' : 's'}`, inline: true },
+            { name: '🔄 Next Rollover', value: config.rollover_enabled ? 'Enabled' : 'Disabled', inline: true },
             { name: '📆 Period Start', value: `<t:${periodStartTimestamp}:F>\n(<t:${periodStartTimestamp}:R>)`, inline: true },
             { name: '📅 Resets', value: `<t:${resetTimestamp}:F>\n(<t:${resetTimestamp}:R>)`, inline: true },
+            { name: '🎯 Active Target', value: formatPoints(activePeriod.required_points), inline: true },
             { name: '⚔️ Base Exalt Points', value: formatPoints(baseExaltPoints), inline: true },
             { name: '🗡️ Base Non-Exalt Points', value: formatPoints(baseNonExaltPoints), inline: true },
             { name: '\u200b', value: '\u200b', inline: true } // Spacer for proper layout
         );
+
+        if (config.required_points !== activePeriod.required_points
+            || config.rollover_enabled !== activePeriod.rollover_enabled) {
+            embed.addFields({
+                name: 'ℹ️ Pending Period Settings',
+                value: 'The target or rollover setting differs from the active snapshot. The updated setting applies when the next period starts.',
+                inline: false,
+            });
+        }
 
         // Build moderation points summary
         const modCommandPoints: string[] = [];
@@ -139,6 +138,17 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 embed.setFooter({ text: `... and ${Object.keys(dungeonOverrides).length - 10} more overrides` });
             }
         }
+    } else if (config) {
+        embed.addFields(
+            {
+                name: 'ℹ️ Status',
+                value: 'Quota automation is inactive because required points are 0. Set a positive requirement to start a fresh period.',
+                inline: false,
+            },
+            { name: '🎯 Required Points', value: formatPoints(config.required_points), inline: true },
+            { name: '⏱️ Configured Interval', value: `${config.reset_interval_days} day${config.reset_interval_days === 1 ? '' : 's'}`, inline: true },
+            { name: '🔄 Rollover', value: config.rollover_enabled ? 'Enabled' : 'Disabled', inline: true },
+        );
     } else {
         embed.addFields({
             name: 'ℹ️ Status',
@@ -177,7 +187,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
                 .setLabel('Update Panel')
                 .setStyle(ButtonStyle.Success)
                 .setEmoji('🔄')
-                .setDisabled(!config) // Only enable if config exists
+                .setDisabled(!activePeriod)
         );
 
     // Second row with Reset Panel, Delete Quota, and Stop buttons
@@ -185,16 +195,22 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         .addComponents(
             new ButtonBuilder()
                 .setCustomId(`quota_reset_panel:${roleId}:${createdAt}${userIdSuffix}`)
-                .setLabel('Reset Panel')
+                .setLabel('Reset Period')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🔁')
-                .setDisabled(!config), // Only enable if config exists
+                .setDisabled(!activePeriod),
             new ButtonBuilder()
                 .setCustomId(`quota_delete_config:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Delete Quota')
                 .setStyle(ButtonStyle.Danger)
                 .setEmoji('🗑️')
                 .setDisabled(!config), // Only enable if config exists
+            new ButtonBuilder()
+                .setCustomId(`quota_toggle_rollover:${roleId}:${createdAt}${userIdSuffix}`)
+                .setLabel(config?.rollover_enabled ? 'Disable Rollover' : 'Enable Rollover')
+                .setStyle(config?.rollover_enabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+                .setEmoji('🔄')
+                .setDisabled(!config),
             new ButtonBuilder()
                 .setCustomId(`quota_config_stop:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Stop')
@@ -203,4 +219,24 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         );
 
     return { embed, buttons: [buttons1, buttons2], config };
+}
+
+interface QuotaConfigPanelConfig {
+    guild_id: string;
+    discord_role_id: string;
+    required_points: number;
+    reset_at: string;
+    period_start_at: string;
+    reset_interval_days: number;
+    rollover_enabled: boolean;
+    panel_message_id: string | null;
+    moderation_points: number;
+    base_exalt_points?: number;
+    base_non_exalt_points?: number;
+    verify_points?: number;
+    warn_points?: number;
+    suspend_points?: number;
+    modmail_reply_points?: number;
+    editname_points?: number;
+    addnote_points?: number;
 }

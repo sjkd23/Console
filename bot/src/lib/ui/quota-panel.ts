@@ -3,12 +3,14 @@ import {
     EmbedBuilder,
     TextChannel,
     Message,
+    Guild,
 } from 'discord.js';
 import { getQuotaLeaderboard, updateQuotaRoleConfig, getJSON, BackendError } from '../utilities/http.js';
 import { OperationContext } from '../utilities/operation-context.js';
 import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
 import { createLogger } from '../logging/logger.js';
 import { formatPoints } from '../utilities/format-helpers.js';
+import { getQuotaLeaderboardPresentation } from './quota-leaderboard-format.js';
 
 const logger = createLogger('QuotaPanel');
 
@@ -112,7 +114,7 @@ export async function updateQuotaPanel(
         // Build embed with config data
         const embed = buildLeaderboardEmbed(
             role.name,
-            result.config.required_points,
+            result.active_period.required_points,
             result.period_start,
             result.period_end,
             result.leaderboard,
@@ -173,8 +175,14 @@ function buildLeaderboardEmbed(
     requiredPoints: number,
     periodStart: string,
     periodEnd: string,
-    leaderboard: Array<{ user_id: string; points: number; runs: number }>,
-    guild: any,
+    leaderboard: Array<{
+        user_id: string;
+        earned_points: number;
+        carry_in: number;
+        effective_total: number;
+        runs: number;
+    }>,
+    guild: Guild,
     config: {
         base_exalt_points: number;
         base_non_exalt_points: number;
@@ -255,7 +263,7 @@ function buildLeaderboardEmbed(
         .setTimestamp();
 
     // Filter to only show members with more than 0 points
-    const activeMembers = leaderboard.filter(entry => entry.points > 0);
+    const activeMembers = leaderboard.filter(entry => entry.effective_total > 0);
 
     if (activeMembers.length === 0) {
         embed.addFields({
@@ -270,8 +278,13 @@ function buildLeaderboardEmbed(
             .map((entry, index) => {
                 const position = index + 1;
                 const emoji = position === 1 ? '🥇' : position === 2 ? '🥈' : position === 3 ? '🥉' : `${position}.`;
-                const metQuota = entry.points >= requiredPoints ? '✅' : '';
-                return `${emoji} <@${entry.user_id}> - **${formatPoints(entry.points)}** pts ${metQuota}`;
+                const presentation = getQuotaLeaderboardPresentation(
+                    entry.effective_total,
+                    entry.carry_in,
+                    requiredPoints
+                );
+                const quotaStatus = presentation.metQuota ? '✅' : '❌';
+                return `${emoji} <@${entry.user_id}> - **${presentation.progress}** ${quotaStatus}`;
             })
             .join('\n');
 
@@ -282,7 +295,7 @@ function buildLeaderboardEmbed(
         });
 
         // Show stats
-        const metQuota = activeMembers.filter(e => e.points >= requiredPoints).length;
+        const metQuota = activeMembers.filter(e => e.effective_total >= requiredPoints).length;
         const totalMembers = activeMembers.length;
         
         embed.setFooter({
@@ -309,7 +322,7 @@ export async function updateAllQuotaPanels(client: Client, guildId: string, ctx?
 
         // Update each panel
         for (const config of configs.configs) {
-            if (config.panel_message_id) {
+            if (config.panel_message_id && config.active_period) {
                 await updateQuotaPanel(client, guildId, config.discord_role_id, config, opCtx);
             }
         }
@@ -360,7 +373,7 @@ export async function updateQuotaPanelsForUser(
         // Update panels for roles this user has
         let updatedCount = 0;
         for (const config of configs.configs) {
-            if (member.roles.cache.has(config.discord_role_id)) {
+            if (config.active_period && member.roles.cache.has(config.discord_role_id)) {
                 logger.debug('Updating panel for user role', { guildId, userId, roleId: config.discord_role_id });
                 await updateQuotaPanel(client, guildId, config.discord_role_id, config, opCtx);
                 updatedCount++;

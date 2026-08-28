@@ -123,7 +123,15 @@ export interface QuotaConfigsResponse {
         discord_role_id: string;
         required_points: number;
         reset_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         panel_message_id: string | null;
+        active_period: {
+            starts_at: string;
+            ends_at: string;
+            required_points: number;
+            rollover_enabled: boolean;
+        } | null;
     }>;
 }
 
@@ -141,6 +149,8 @@ export interface QuotaRoleConfigResponse {
         discord_role_id: string;
         required_points: number;
         reset_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         panel_message_id: string | null;
         moderation_points: number;
         base_exalt_points: number;
@@ -151,6 +161,12 @@ export interface QuotaRoleConfigResponse {
         modmail_reply_points: number;
         editname_points: number;
         addnote_points: number;
+    } | null;
+    active_period: {
+        starts_at: string;
+        ends_at: string;
+        required_points: number;
+        rollover_enabled: boolean;
     } | null;
     dungeon_overrides: Record<string, number>;
 }

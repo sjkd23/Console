@@ -1,6 +1,14 @@
 // bot/src/lib/scheduled-tasks.ts
 import { Client, EmbedBuilder, type GuildTextBasedChannel, type TextChannel } from 'discord.js';
-import { getJSON, patchJSON, postJSON } from '../utilities/http.js';
+import {
+    deleteQuotaRoleConfig,
+    finalizeDueQuotaPeriods,
+    getJSON,
+    getQuotaPeriodScan,
+    getUnpostedQuotaPeriods,
+    patchJSON,
+    postJSON,
+} from '../utilities/http.js';
 import { getRolePositions } from '../utilities/http.js';
 import { OperationContext } from '../utilities/operation-context.js';
 import { createLogger } from '../logging/logger.js';
@@ -11,6 +19,8 @@ import { getAllActiveHeadcounts, isHeadcountExpired, unregisterHeadcount } from 
 import { clearParticipants } from '../state/headcount-state.js';
 import { clearKeyOffers } from '../../interactions/buttons/raids/headcount-key.js';
 import { clearHeadcountPanels } from '../state/headcount-panel-tracker.js';
+import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
+import { deliverQuotaPeriodLog } from '../ui/quota-log.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -640,7 +650,7 @@ async function updateQuotaPanels(client: Client): Promise<void> {
             const configs = await ctx.getQuotaConfigs(guildId);
             
             // Only update panels that have a message_id (i.e., panels that exist)
-            const activePanels = configs.configs.filter(c => c.panel_message_id);
+            const activePanels = configs.configs.filter(c => c.panel_message_id && c.active_period);
             
             if (activePanels.length === 0) {
                 logger.debug('No active quota panels for guild', { 
@@ -684,6 +694,60 @@ async function updateQuotaPanels(client: Client): Promise<void> {
         });
     } else {
         logger.debug('No quota panels to update');
+    }
+}
+
+/** Advance persisted quota chains and retry finalized-period Discord delivery. */
+async function processQuotaPeriods(client: Client): Promise<void> {
+    const scan = await getQuotaPeriodScan();
+
+    for (const item of scan.periods) {
+        try {
+            const guild = client.guilds.cache.get(item.guild_id);
+            if (!guild) {
+                // An unavailable guild is not evidence that either its config or role was deleted.
+                continue;
+            }
+
+            const role = guild.roles.cache.get(item.quota_role_id);
+            if (!role) {
+                const closed = await deleteQuotaRoleConfig(item.guild_id, item.quota_role_id, {
+                    actor_user_id: client.user!.id,
+                    actor_has_admin_permission: true,
+                    deletion_reason: 'role_deleted',
+                });
+                for (const period of closed.finalized_periods) {
+                    await deliverQuotaPeriodLog(client, period);
+                }
+                continue;
+            }
+
+            if (!item.due) continue;
+
+            const { memberIds } = await getRoleMembersWithCache(role);
+            const finalized = await finalizeDueQuotaPeriods(
+                item.guild_id,
+                item.quota_role_id,
+                memberIds,
+                10
+            );
+            for (const period of finalized.periods) {
+                await deliverQuotaPeriodLog(client, period);
+            }
+        } catch (error) {
+            logger.error('Failed to process quota period scan item', {
+                guildId: item.guild_id,
+                roleId: item.quota_role_id,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
+    // At-least-once retry. Unconfigured channels are quietly rotated by recording
+    // an unsuccessful attempt, so they do not permanently starve other guilds.
+    const unposted = await getUnpostedQuotaPeriods(25);
+    for (const period of unposted.periods) {
+        await deliverQuotaPeriodLog(client, period);
     }
 }
 
@@ -744,6 +808,11 @@ export function startScheduledTasks(client: Client): () => void {
             name: 'Orphaned Run Roles',
             intervalMinutes: 15,
             handler: cleanupOrphanedRunRoles
+        },
+        {
+            name: 'Quota Period Finalization',
+            intervalMinutes: 5,
+            handler: processQuotaPeriods
         },
         {
             name: 'Quota Panel Updates',

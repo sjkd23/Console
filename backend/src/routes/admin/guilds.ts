@@ -38,6 +38,7 @@ const CHANNEL_KEYS = [
     'punishment_log',
     'raid_log',
     'quota',
+    'quota_log',
     'bot_log',
     'staff_updates',
     'modmail',

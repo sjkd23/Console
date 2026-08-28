@@ -9,9 +9,8 @@
  * data integrity and prevent partial state on failures.
  */
 
-import { PoolClient } from 'pg';
-import { pool } from '../../db/pool.js';
 import { createLogger } from '../logging/logger.js';
+import { withTransaction } from '../database/transaction.js';
 import { QuotaService } from './quota-service.js';
 
 const logger = createLogger('RunService');
@@ -56,29 +55,6 @@ export interface EndRunInput {
 export interface EndRunResult {
     organizerQuotaPoints: number;
     raiderPointsAwarded: number;
-}
-
-// ============================================================================
-// TRANSACTION HELPERS
-// ============================================================================
-
-/**
- * Execute a function within a transaction.
- * Handles BEGIN/COMMIT/ROLLBACK automatically.
- */
-async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const result = await fn(client);
-        await client.query('COMMIT');
-        return result;
-    } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-    } finally {
-        client.release();
-    }
 }
 
 // ============================================================================

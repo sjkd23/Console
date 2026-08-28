@@ -14,13 +14,9 @@ import {
     getQuotaRoleConfig,
     getAllQuotaRoleConfigs,
     upsertQuotaRoleConfig,
-    deleteQuotaRoleConfig,
     getDungeonOverrides,
     setDungeonOverride,
     deleteDungeonOverride,
-    getQuotaLeaderboard,
-    getQuotaPeriodStart,
-    getQuotaPeriodEnd,
     getPointsForDungeon,
     getRaiderPointsConfig,
     getRaiderPointsForDungeon,
@@ -34,6 +30,17 @@ import {
     recalculateQuotaPoints,
 } from '../../lib/quota/quota.js';
 import { QuotaService } from '../../lib/services/quota-service.js';
+import {
+    closeAndDeleteQuotaConfig,
+    finalizeDueQuotaPeriods,
+    getActiveQuotaLeaderboard,
+    getActiveQuotaPeriod,
+    getQuotaPeriodScanItems,
+    getQuotaPeriodHistory,
+    getUnpostedFinalizedQuotaPeriods,
+    manuallyResetQuotaPeriod,
+    markQuotaLogAttempt,
+} from '../../lib/services/quota-period-service.js';
 
 const logger = createLogger('Quota');
 const quotaService = new QuotaService();
@@ -398,9 +405,11 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             const config = await getQuotaRoleConfig(guild_id, role_id);
             const overrides = config ? await getDungeonOverrides(guild_id, role_id) : {};
+            const activePeriod = config ? await getActiveQuotaPeriod(guild_id, role_id) : null;
 
             return reply.send({
                 config: config || null,
+                active_period: activePeriod,
                 dungeon_overrides: overrides,
             });
         } catch (err) {
@@ -432,6 +441,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             const configsWithOverrides = await Promise.all(
                 configs.map(async (config) => ({
                     ...config,
+                    active_period: await getActiveQuotaPeriod(guild_id, config.discord_role_id),
                     dungeon_overrides: await getDungeonOverrides(guild_id, config.discord_role_id),
                 }))
             );
@@ -441,6 +451,113 @@ export default async function quotaRoutes(app: FastifyInstance) {
             logger.error({ err, guild_id }, 'Failed to get configs for guild');
             return Errors.internal(reply, 'Failed to retrieve quota configurations');
         }
+    });
+
+    /** All configured active periods, including non-due roles for deleted-role detection. */
+    app.get('/quota/periods/scan', async (_req, reply) => {
+        try {
+            return reply.send({ periods: await getQuotaPeriodScanItems() });
+        } catch (err) {
+            logger.error({ err }, 'Failed to scan quota periods');
+            return Errors.internal(reply, 'Failed to scan quota periods');
+        }
+    });
+
+    app.get('/quota/periods/:guild_id/:role_id/history', async (req, reply) => {
+        const Params = z.object({ guild_id: zSnowflake, role_id: zSnowflake });
+        const Query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) });
+        const params = Params.safeParse(req.params);
+        const queryParams = Query.safeParse(req.query);
+        if (!params.success || !queryParams.success) return Errors.validation(reply, 'Invalid request');
+
+        try {
+            return reply.send({ periods: await getQuotaPeriodHistory(
+                params.data.guild_id,
+                params.data.role_id,
+                queryParams.data.limit
+            ) });
+        } catch (err) {
+            logger.error({ err, ...params.data }, 'Failed to retrieve quota period history');
+            return Errors.internal(reply, 'Failed to retrieve quota period history');
+        }
+    });
+
+    /** Finalize a bounded batch of authoritative scheduled boundaries. */
+    app.post('/quota/periods/:guild_id/:role_id/finalize-due', async (req, reply) => {
+        const Params = z.object({ guild_id: zSnowflake, role_id: zSnowflake });
+        const Body = z.object({
+            member_user_ids: z.array(zSnowflake).default([]),
+            max_periods: z.number().int().min(1).max(100).default(10),
+        });
+        const params = Params.safeParse(req.params);
+        const body = Body.safeParse(req.body);
+        if (!params.success || !body.success) return Errors.validation(reply, 'Invalid request');
+
+        try {
+            return reply.send(await finalizeDueQuotaPeriods(
+                params.data.guild_id,
+                params.data.role_id,
+                body.data.member_user_ids,
+                body.data.max_periods
+            ));
+        } catch (err) {
+            logger.error({ err, ...params.data }, 'Failed to finalize due quota periods');
+            return Errors.internal(reply, 'Failed to finalize quota periods');
+        }
+    });
+
+    /** Catch up overdue boundaries, then early-close and replace the current period. */
+    app.post('/quota/periods/:guild_id/:role_id/manual-reset', async (req, reply) => {
+        const Params = z.object({ guild_id: zSnowflake, role_id: zSnowflake });
+        const Body = z.object({
+            actor_user_id: zSnowflake,
+            actor_roles: z.array(zSnowflake).optional(),
+            actor_has_admin_permission: z.boolean().optional(),
+            member_user_ids: z.array(zSnowflake).default([]),
+        });
+        const params = Params.safeParse(req.params);
+        const body = Body.safeParse(req.body);
+        if (!params.success || !body.success) return Errors.validation(reply, 'Invalid request');
+
+        const authorized = body.data.actor_has_admin_permission
+            || await canManageGuildRoles(params.data.guild_id, body.data.actor_user_id, body.data.actor_roles);
+        if (!authorized) return Errors.notAuthorized(reply);
+
+        try {
+            return reply.send(await manuallyResetQuotaPeriod(
+                params.data.guild_id,
+                params.data.role_id,
+                body.data.member_user_ids
+            ));
+        } catch (err) {
+            logger.error({ err, ...params.data }, 'Failed to manually reset quota period');
+            return Errors.internal(reply, 'Failed to reset quota period');
+        }
+    });
+
+    /** Bounded at-least-once log retry queue; finalized DB rows remain authoritative. */
+    app.get('/quota/periods/unposted', async (req, reply) => {
+        const Query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(10) });
+        const parsed = Query.safeParse(req.query);
+        if (!parsed.success) return Errors.validation(reply, 'Invalid limit');
+
+        try {
+            return reply.send({ periods: await getUnpostedFinalizedQuotaPeriods(parsed.data.limit) });
+        } catch (err) {
+            logger.error({ err }, 'Failed to retrieve unposted quota periods');
+            return Errors.internal(reply, 'Failed to retrieve quota logs');
+        }
+    });
+
+    app.post('/quota/periods/:period_id/log-delivery', async (req, reply) => {
+        const Params = z.object({ period_id: z.string().regex(/^\d+$/) });
+        const Body = z.object({ posted: z.boolean() });
+        const params = Params.safeParse(req.params);
+        const body = Body.safeParse(req.body);
+        if (!params.success || !body.success) return Errors.validation(reply, 'Invalid request');
+
+        const updated = await markQuotaLogAttempt(params.data.period_id, body.data.posted);
+        return reply.send({ updated });
     });
 
     /**
@@ -464,6 +581,9 @@ export default async function quotaRoutes(app: FastifyInstance) {
             ),
             reset_at: z.string().optional(), // ISO timestamp YYYY-MM-DDTHH:MM:SSZ
             period_start_at: z.string().optional(), // ISO timestamp - custom start date for quota period
+            reset_interval_days: z.number().int().min(1).max(365).optional(),
+            rollover_enabled: z.boolean().optional(),
+            member_user_ids: z.array(zSnowflake).optional(),
             panel_message_id: zSnowflake.nullable().optional(),
             moderation_points: z.number().min(0).optional().refine(
                 (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
@@ -529,9 +649,11 @@ export default async function quotaRoutes(app: FastifyInstance) {
         try {
             const updated = await upsertQuotaRoleConfig(guild_id, role_id, config);
             const overrides = await getDungeonOverrides(guild_id, role_id);
+            const activePeriod = await getActiveQuotaPeriod(guild_id, role_id);
 
             return reply.send({
                 config: updated,
+                active_period: activePeriod,
                 dungeon_overrides: overrides,
             });
         } catch (err) {
@@ -685,6 +807,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
             actor_user_id: zSnowflake,
             actor_roles: z.array(zSnowflake).optional(),
             actor_has_admin_permission: z.boolean().optional(),
+            member_user_ids: z.array(zSnowflake).optional(),
+            deletion_reason: z.enum(['config_deleted', 'role_deleted']).default('config_deleted'),
         });
 
         const p = Params.safeParse(req.params);
@@ -695,7 +819,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, role_id } = p.data;
-        const { actor_user_id, actor_roles, actor_has_admin_permission } = b.data;
+        const { actor_user_id, actor_roles, actor_has_admin_permission, member_user_ids, deletion_reason } = b.data;
 
         // Authorization
         let authorized = false;
@@ -710,9 +834,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         try {
-            const deleted = await deleteQuotaRoleConfig(guild_id, role_id);
-            
-            if (!deleted) {
+            const existing = await getQuotaRoleConfig(guild_id, role_id);
+            if (!existing) {
                 return reply.code(404).send({
                     error: {
                         code: 'CONFIG_NOT_FOUND',
@@ -721,9 +844,17 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 });
             }
 
-            return reply.send({ 
+            const finalized = await closeAndDeleteQuotaConfig(
+                guild_id,
+                role_id,
+                deletion_reason,
+                member_user_ids
+            );
+
+            return reply.send({
                 success: true,
-                message: 'Quota configuration deleted successfully'
+                message: 'Quota configuration deleted successfully',
+                finalized_periods: finalized.periods,
             });
         } catch (err) {
             logger.error({ err, guild_id, role_id }, 'Failed to delete quota config');
@@ -767,28 +898,24 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 });
             }
 
-            const periodStart = getQuotaPeriodStart(config);
-            const periodEnd = getQuotaPeriodEnd(config);
+            const current = await getActiveQuotaLeaderboard(guild_id, role_id, member_user_ids);
             
             logger.info({ 
                 guild_id, 
                 role_id, 
-                period_start_at: config.period_start_at, 
-                reset_at: config.reset_at,
-                period_start: periodStart.toISOString(),
-                period_end: periodEnd.toISOString(),
+                period_start: current.period.starts_at,
+                period_end: current.period.ends_at,
                 member_count: member_user_ids.length
             }, 'Processing quota leaderboard request');
             
-            const leaderboard = await getQuotaLeaderboard(guild_id, role_id, member_user_ids, periodStart, periodEnd);
-            
-            logger.info({ guild_id, role_id, leaderboard_count: leaderboard.length }, 'Returning quota leaderboard entries');
+            logger.info({ guild_id, role_id, leaderboard_count: current.leaderboard.length }, 'Returning quota leaderboard entries');
 
             return reply.send({
                 config,
-                period_start: periodStart.toISOString(),
-                period_end: periodEnd.toISOString(),
-                leaderboard,
+                active_period: current.period,
+                period_start: current.period.starts_at,
+                period_end: current.period.ends_at,
+                leaderboard: current.leaderboard,
             });
         } catch (err) {
             logger.error({ err, guild_id, role_id }, 'Failed to get leaderboard');

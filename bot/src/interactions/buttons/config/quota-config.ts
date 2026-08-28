@@ -13,12 +13,14 @@ import {
     StringSelectMenuInteraction,
     ComponentType,
 } from 'discord.js';
-import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError, recalculateQuotaPoints } from '../../../lib/utilities/http.js';
+import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError, recalculateQuotaPoints, manuallyResetQuotaPeriod } from '../../../lib/utilities/http.js';
 import { DUNGEON_DATA } from '../../../constants/dungeons/DungeonData.js';
 import { updateQuotaPanel } from '../../../lib/ui/quota-panel.js';
 import { formatPoints } from '../../../lib/utilities/format-helpers.js';
 import { buildQuotaConfigPanel } from '../../../lib/ui/quota-config-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
+import { getRoleMembersWithCache } from '../../../lib/utilities/member-fetching.js';
+import { deliverQuotaPeriodLog } from '../../../lib/ui/quota-log.js';
 
 const logger = createLogger('QuotaConfig');
 
@@ -179,7 +181,7 @@ async function buildDungeonSelectorPanel(guildId: string, roleId: string): Promi
 
 /**
  * Handle quota_config_basic button
- * Opens a modal to set required points and reset datetime
+ * Opens a modal to set settings for future quota periods.
  */
 export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
     // Check panel expiry first
@@ -216,25 +218,11 @@ export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
     }
 
     // Fetch current config to pre-fill
-    let config: any = null;
+    let config: Awaited<ReturnType<typeof getQuotaRoleConfig>>['config'] = null;
     try {
         const result = await getQuotaRoleConfig(interaction.guildId!, roleId);
         config = result.config;
     } catch { }
-
-    // Format reset_at for display (YYYY-MM-DD HH:MM)
-    let resetDisplay = '';
-    if (config?.reset_at) {
-        const resetDate = new Date(config.reset_at);
-        resetDisplay = `${resetDate.getUTCFullYear()}-${String(resetDate.getUTCMonth() + 1).padStart(2, '0')}-${String(resetDate.getUTCDate()).padStart(2, '0')} ${String(resetDate.getUTCHours()).padStart(2, '0')}:${String(resetDate.getUTCMinutes()).padStart(2, '0')}`;
-    }
-
-    // Format period_start_at for display (YYYY-MM-DD HH:MM)
-    let periodStartDisplay = '';
-    if (config?.period_start_at) {
-        const periodStartDate = new Date(config.period_start_at);
-        periodStartDisplay = `${periodStartDate.getUTCFullYear()}-${String(periodStartDate.getUTCMonth() + 1).padStart(2, '0')}-${String(periodStartDate.getUTCDate()).padStart(2, '0')} ${String(periodStartDate.getUTCHours()).padStart(2, '0')}:${String(periodStartDate.getUTCMinutes()).padStart(2, '0')}`;
-    }
 
     const modal = new ModalBuilder()
         .setCustomId(`quota_basic_modal:${roleId}:${interaction.message.id}`)
@@ -248,26 +236,17 @@ export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
         .setRequired(true)
         .setValue(config?.required_points?.toFixed(2) || '0.00');
 
-    const periodStartInput = new TextInputBuilder()
-        .setCustomId('period_start_at')
-        .setLabel('Start Date & Time (UTC, YYYY-MM-DD HH:MM)')
+    const resetIntervalInput = new TextInputBuilder()
+        .setCustomId('reset_interval_days')
+        .setLabel('Reset Interval (days, 1-365)')
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 2025-11-19 00:00')
+        .setPlaceholder('e.g., 7')
         .setRequired(true)
-        .setValue(periodStartDisplay || new Date().toISOString().slice(0, 16).replace('T', ' '));
-
-    const resetAtInput = new TextInputBuilder()
-        .setCustomId('reset_at')
-        .setLabel('Reset Date & Time (UTC, YYYY-MM-DD HH:MM)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 2025-11-26 00:00')
-        .setRequired(true)
-        .setValue(resetDisplay);
+        .setValue(String(config?.reset_interval_days ?? 7));
 
     modal.addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(requiredPointsInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(periodStartInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(resetAtInput)
+        new ActionRowBuilder<TextInputBuilder>().addComponents(resetIntervalInput)
     );
 
     await interaction.showModal(modal);
@@ -290,8 +269,7 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
 
     // Parse inputs
     const requiredPoints = parseFloat(interaction.fields.getTextInputValue('required_points'));
-    const periodStartStr = interaction.fields.getTextInputValue('period_start_at').trim();
-    const resetAtStr = interaction.fields.getTextInputValue('reset_at').trim();
+    const resetIntervalDays = Number(interaction.fields.getTextInputValue('reset_interval_days').trim());
 
     // Validate required points (allow decimals up to 2 decimal places)
     if (isNaN(requiredPoints) || requiredPoints < 0) {
@@ -305,58 +283,8 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
         return;
     }
 
-    // Parse and validate period start datetime (YYYY-MM-DD HH:MM)
-    const dateTimeRegex = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/;
-    const periodStartMatch = periodStartStr.match(dateTimeRegex);
-
-    if (!periodStartMatch) {
-        await interaction.editReply('❌ Invalid period start datetime format. Please use: YYYY-MM-DD HH:MM (e.g., 2025-11-19 00:00)');
-        return;
-    }
-
-    const [, startYear, startMonth, startDay, startHour, startMinute] = periodStartMatch;
-    const periodStartDate = new Date(Date.UTC(
-        parseInt(startYear, 10),
-        parseInt(startMonth, 10) - 1, // Months are 0-indexed
-        parseInt(startDay, 10),
-        parseInt(startHour, 10),
-        parseInt(startMinute, 10),
-        0
-    ));
-
-    // Validate period start date
-    if (isNaN(periodStartDate.getTime())) {
-        await interaction.editReply('❌ Invalid period start date. Please check your input.');
-        return;
-    }
-
-    // Parse and validate reset datetime (YYYY-MM-DD HH:MM)
-    const resetMatch = resetAtStr.match(dateTimeRegex);
-
-    if (!resetMatch) {
-        await interaction.editReply('❌ Invalid reset datetime format. Please use: YYYY-MM-DD HH:MM (e.g., 2025-11-19 00:00)');
-        return;
-    }
-
-    const [, resetYear, resetMonth, resetDay, resetHour, resetMinute] = resetMatch;
-    const resetDate = new Date(Date.UTC(
-        parseInt(resetYear, 10),
-        parseInt(resetMonth, 10) - 1, // Months are 0-indexed
-        parseInt(resetDay, 10),
-        parseInt(resetHour, 10),
-        parseInt(resetMinute, 10),
-        0
-    ));
-
-    // Validate reset date
-    if (isNaN(resetDate.getTime())) {
-        await interaction.editReply('❌ Invalid reset date. Please check your input.');
-        return;
-    }
-
-    // Validate that reset date is after period start date
-    if (resetDate <= periodStartDate) {
-        await interaction.editReply('❌ Reset date must be after the period start date.');
+    if (!Number.isInteger(resetIntervalDays) || resetIntervalDays < 1 || resetIntervalDays > 365) {
+        await interaction.editReply('❌ Reset interval must be a whole number from 1 to 365 days.');
         return;
     }
 
@@ -365,19 +293,24 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
     const hasAdminPerm = member?.permissions.has(PermissionFlagsBits.Administrator);
 
     try {
+        const quotaRole = interaction.guild?.roles.cache.get(roleId);
+        const memberUserIds = quotaRole
+            ? (await getRoleMembersWithCache(quotaRole)).memberIds
+            : undefined;
         await updateQuotaRoleConfig(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
             required_points: requiredPoints,
-            period_start_at: periodStartDate.toISOString(),
-            reset_at: resetDate.toISOString(),
+            reset_interval_days: resetIntervalDays,
+            member_user_ids: requiredPoints <= 0 ? memberUserIds : undefined,
         });
 
-        await interaction.editReply(
-            `✅ **Quota configuration updated!**\n\n` +
-            `**Required Points:** ${formatPoints(requiredPoints)}\n` +
-            `**Period Start:** <t:${Math.floor(periodStartDate.getTime() / 1000)}:F> (<t:${Math.floor(periodStartDate.getTime() / 1000)}:R>)\n` +
-            `**Reset Time:** <t:${Math.floor(resetDate.getTime() / 1000)}:F> (<t:${Math.floor(resetDate.getTime() / 1000)}:R>)`
+        await interaction.editReply(requiredPoints <= 0
+            ? '✅ Quota automation is now inactive. Any active partial period was finalized without a successor.'
+            : `✅ **Quota configuration updated!**\n\n` +
+              `**Next Required Points:** ${formatPoints(requiredPoints)}\n` +
+              `**Next Reset Interval:** ${resetIntervalDays} day${resetIntervalDays === 1 ? '' : 's'}\n\n` +
+              `These changes apply to the next period; a newly activated quota starts now.`
         );
 
         // Refresh the original /configquota panel using webhook
@@ -398,6 +331,56 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
         console.error('Failed to update quota config:', err);
         const msg = err instanceof BackendError ? err.message : 'Unknown error';
         await interaction.editReply(`❌ Failed to update configuration: ${msg}`);
+    }
+}
+
+/** Toggle rollover for future periods without asking administrators to type a boolean. */
+export async function handleQuotaToggleRollover(interaction: ButtonInteraction): Promise<void> {
+    const expiryCheck = checkPanelExpiry(interaction.customId);
+    if (expiryCheck.expired) {
+        await handleExpiredPanel(interaction, expiryCheck);
+        return;
+    }
+
+    const parts = interaction.customId.split(':');
+    const roleId = parts[1];
+    const authorizedUserId = parts[3];
+    if (!roleId) {
+        await interaction.reply({ content: '❌ Invalid interaction data', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    if (authorizedUserId && interaction.user.id !== authorizedUserId) {
+        await interaction.reply({ content: '❌ Only the user who ran the command can use these buttons.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: '❌ Administrator permission required', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+        const current = await getQuotaRoleConfig(interaction.guildId!, roleId);
+        if (!current.config) {
+            await interaction.editReply('❌ No quota configuration found for this role.');
+            return;
+        }
+        const enabled = !current.config.rollover_enabled;
+        await updateQuotaRoleConfig(interaction.guildId!, roleId, {
+            actor_user_id: interaction.user.id,
+            actor_has_admin_permission: true,
+            rollover_enabled: enabled,
+        });
+        const { embed, buttons } = await buildQuotaConfigPanel(interaction.guildId!, roleId, authorizedUserId);
+        await interaction.message.edit({ embeds: [embed], components: buttons });
+        await interaction.editReply(
+            `✅ Rollover is now **${enabled ? 'enabled' : 'disabled'}** for the next quota period. The active period is unchanged.`
+        );
+    } catch (err) {
+        const message = err instanceof BackendError ? err.message : 'Unknown error';
+        await interaction.editReply(`❌ Failed to update rollover: ${message}`);
     }
 }
 
@@ -1138,61 +1121,41 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
             return;
         }
 
-        // Delete old panel message if it exists
-        if (result.config.panel_message_id) {
-            try {
-                const channels = await getGuildChannels(interaction.guildId!);
-                const quotaChannelId = channels.channels['quota'];
-
-                if (quotaChannelId) {
-                    const guild = interaction.guild!;
-                    const quotaChannel = await guild.channels.fetch(quotaChannelId);
-
-                    if (quotaChannel?.isTextBased()) {
-                        const oldMessage = await (quotaChannel as any).messages.fetch(result.config.panel_message_id);
-                        if (oldMessage) {
-                            await oldMessage.delete();
-                            console.log(`[Quota Panel] Deleted old panel message ${result.config.panel_message_id}`);
-                        }
-                    }
-                }
-            } catch (err) {
-                console.log(`[Quota Panel] Could not delete old panel message:`, err);
-                // Continue anyway - we'll create a new panel
-            }
+        const role = interaction.guild?.roles.cache.get(roleId);
+        if (!role) {
+            await interaction.editReply('❌ The configured Discord role no longer exists. It will be closed by automatic cleanup.');
+            return;
+        }
+        const { memberIds } = await getRoleMembersWithCache(role);
+        const reset = await manuallyResetQuotaPeriod(interaction.guildId!, roleId, {
+            actor_user_id: interaction.user.id,
+            actor_has_admin_permission: true,
+            member_user_ids: memberIds,
+        });
+        for (const period of reset.periods) {
+            await deliverQuotaPeriodLog(interaction.client, period);
         }
 
-        // Reset the quota period by updating period_start_at to NOW and reset_at to 7 days from now
-        // This starts a fresh quota period
-        const hasAdminPerm = member.permissions.has(PermissionFlagsBits.Administrator);
-        const now = new Date();
-        const newResetAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
-
-        await updateQuotaRoleConfig(interaction.guildId!, roleId, {
-            actor_user_id: interaction.user.id,
-            actor_has_admin_permission: hasAdminPerm,
-            panel_message_id: null,
-            period_start_at: now.toISOString(), // Start the period NOW
-            reset_at: newResetAt.toISOString(), // End in 7 days
-        });
-
-        // Fetch updated config (with null panel_message_id and new period)
+        // Refresh the existing panel against the newly persisted successor.
         const updatedResult = await getQuotaRoleConfig(interaction.guildId!, roleId);
         if (!updatedResult.config) {
             await interaction.editReply('❌ Failed to reset panel configuration.');
             return;
         }
 
-        // Create new panel
         await updateQuotaPanel(interaction.client, interaction.guildId!, roleId, updatedResult.config);
 
-        const resetTimestamp = Math.floor(newResetAt.getTime() / 1000);
+        const activePeriod = updatedResult.active_period;
+        const resetTimestamp = activePeriod ? Math.floor(new Date(activePeriod.ends_at).getTime() / 1000) : null;
+        const catchUpText = reset.caught_up_count > 0
+            ? `• Caught up ${reset.caught_up_count} overdue scheduled period${reset.caught_up_count === 1 ? '' : 's'} first\n`
+            : '';
         await interaction.editReply(
             `✅ **Quota period reset successfully!**\n\n` +
-            `• Period started: NOW\n` +
-            `• Period ends: <t:${resetTimestamp}:F> (<t:${resetTimestamp}:R>)\n` +
-            `• Previous stats have been cleared\n` +
-            `• New panel created in quota channel`
+            catchUpText +
+            `• The current period was closed at the backend's stored reset time\n` +
+            (resetTimestamp ? `• New period ends: <t:${resetTimestamp}:F> (<t:${resetTimestamp}:R>)\n` : '') +
+            `• ${reset.periods.length} finalized period${reset.periods.length === 1 ? '' : 's'} persisted to history`
         );
     } catch (err) {
         logger.error('Failed to reset quota panel', { err, guildId: interaction.guildId, roleId });
@@ -1267,10 +1230,17 @@ export async function handleQuotaDeleteConfig(interaction: ButtonInteraction) {
 
         // Delete the quota configuration from the database
         const hasAdminPerm = member?.permissions.has(PermissionFlagsBits.Administrator);
-        await deleteQuotaRoleConfig(interaction.guildId!, roleId, {
+        const quotaRole = interaction.guild?.roles.cache.get(roleId);
+        const roleMembers = quotaRole ? (await getRoleMembersWithCache(quotaRole)).memberIds : undefined;
+        const deleted = await deleteQuotaRoleConfig(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
+            member_user_ids: roleMembers,
+            deletion_reason: 'config_deleted',
         });
+        for (const period of deleted.finalized_periods) {
+            await deliverQuotaPeriodLog(interaction.client, period);
+        }
 
         // Update the config panel to show no config exists
         const { embed, buttons } = await buildQuotaConfigPanel(interaction.guildId!, roleId, authorizedUserId || undefined);

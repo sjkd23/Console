@@ -1,6 +1,12 @@
 // backend/src/lib/quota.ts
 import { query } from '../../db/pool.js';
 import { createLogger } from '../logging/logger.js';
+import { withTransaction } from '../database/transaction.js';
+import {
+    deactivateQuotaAutomationInTransaction,
+    ensureActiveQuotaPeriod,
+    getActiveQuotaPeriod,
+} from '../services/quota-period-service.js';
 
 const logger = createLogger('Quota');
 
@@ -35,6 +41,8 @@ export interface QuotaRoleConfig {
     reset_at: string; // ISO timestamp
     panel_message_id: string | null;
     period_start_at: string; // ISO timestamp - custom start date for quota period (can be past/future)
+    reset_interval_days: number;
+    rollover_enabled: boolean;
     moderation_points: number; // DEPRECATED: Use individual command points instead
     base_exalt_points: number; // Base points for exaltation dungeons (default: 1.0)
     base_non_exalt_points: number; // Base points for non-exaltation dungeons (default: 1.0)
@@ -69,6 +77,8 @@ export async function getQuotaRoleConfig(
         reset_at: string;
         panel_message_id: string | null;
         period_start_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
@@ -79,7 +89,8 @@ export async function getQuotaRoleConfig(
         editname_points: string; // DECIMAL comes as string from pg
         addnote_points: string; // DECIMAL comes as string from pg
     }>(
-        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at, 
+        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
+                reset_interval_days, rollover_enabled,
                 moderation_points, base_exalt_points, base_non_exalt_points,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points
          FROM quota_role_config
@@ -97,6 +108,8 @@ export async function getQuotaRoleConfig(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         period_start_at: row.period_start_at,
+        reset_interval_days: row.reset_interval_days,
+        rollover_enabled: row.rollover_enabled,
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
@@ -122,6 +135,8 @@ export async function getAllQuotaRoleConfigs(
         reset_at: string;
         panel_message_id: string | null;
         period_start_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
@@ -132,7 +147,8 @@ export async function getAllQuotaRoleConfigs(
         editname_points: string; // DECIMAL comes as string from pg
         addnote_points: string; // DECIMAL comes as string from pg
     }>(
-        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at, 
+        `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
+                reset_interval_days, rollover_enabled,
                 moderation_points, base_exalt_points, base_non_exalt_points,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points
          FROM quota_role_config
@@ -148,6 +164,8 @@ export async function getAllQuotaRoleConfigs(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         period_start_at: row.period_start_at,
+        reset_interval_days: row.reset_interval_days,
+        rollover_enabled: row.rollover_enabled,
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
@@ -171,6 +189,8 @@ export async function upsertQuotaRoleConfig(
         reset_at?: string; // ISO timestamp
         panel_message_id?: string | null;
         period_start_at?: string; // ISO timestamp - custom start date for quota period
+        reset_interval_days?: number;
+        rollover_enabled?: boolean;
         moderation_points?: number; // DEPRECATED: Use individual command points
         base_exalt_points?: number; // Base points for exaltation dungeons
         base_non_exalt_points?: number; // Base points for non-exaltation dungeons
@@ -180,10 +200,11 @@ export async function upsertQuotaRoleConfig(
         modmail_reply_points?: number; // Points for replying to modmail
         editname_points?: number; // Points for /editname command
         addnote_points?: number; // Points for /addnote command
+        member_user_ids?: string[]; // Live roster used only when deactivating quota automation
     }
 ): Promise<QuotaRoleConfig> {
     const fields: string[] = [];
-    const values: any[] = [guildId, discordRoleId];
+    const values: unknown[] = [guildId, discordRoleId];
     let idx = 3;
 
     // For INSERT, we need default values
@@ -199,6 +220,8 @@ export async function upsertQuotaRoleConfig(
     const modmailReplyPoints = config.modmail_reply_points ?? 0;
     const editnamePoints = config.editname_points ?? 0;
     const addnotePoints = config.addnote_points ?? 0;
+    const resetIntervalDays = config.reset_interval_days ?? 7;
+    const rolloverEnabled = config.rollover_enabled ?? false;
 
     values.push(requiredPoints); // $3
     values.push(resetAt); // $4
@@ -212,6 +235,8 @@ export async function upsertQuotaRoleConfig(
     values.push(modmailReplyPoints); // $12
     values.push(editnamePoints); // $13
     values.push(addnotePoints); // $14
+    values.push(resetIntervalDays); // $15
+    values.push(rolloverEnabled); // $16
 
     // Build UPDATE fields
     if (config.required_points !== undefined) {
@@ -274,6 +299,16 @@ export async function upsertQuotaRoleConfig(
     }
     idx++; // Move past $14
 
+    if (config.reset_interval_days !== undefined) {
+        fields.push(`reset_interval_days = $${idx}`);
+    }
+    idx++; // Move past $15
+
+    if (config.rollover_enabled !== undefined) {
+        fields.push(`rollover_enabled = $${idx}`);
+    }
+    idx++; // Move past $16
+
     if (config.panel_message_id !== undefined) {
         fields.push(`panel_message_id = $${idx++}::bigint`);
         values.push(config.panel_message_id);
@@ -281,23 +316,16 @@ export async function upsertQuotaRoleConfig(
 
     const updateClause = fields.length > 0 ? `, ${fields.join(', ')}` : '';
 
-    // CRITICAL: First, try to get the existing config to preserve period_start_at
-    // This prevents accidentally resetting the quota period when only updating panel_message_id
-    const existing = await getQuotaRoleConfig(guildId, discordRoleId);
-    
-    // If we have an existing config and period_start_at is not being explicitly set, preserve it
-    if (existing && config.period_start_at === undefined) {
-        // Override the periodStartAt value with the preserved one
-        values[4] = existing.period_start_at; // $5 position
-    }
-
-    const res = await query<{
+    return withTransaction(async client => {
+    const res = await client.query<{
         guild_id: string;
         discord_role_id: string;
         required_points: string; // DECIMAL comes as string from pg
         reset_at: string;
         panel_message_id: string | null;
         period_start_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
@@ -311,20 +339,33 @@ export async function upsertQuotaRoleConfig(
         `INSERT INTO quota_role_config (guild_id, discord_role_id, required_points, reset_at, period_start_at, 
                 moderation_points, base_exalt_points, base_non_exalt_points,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points,
+                reset_interval_days, rollover_enabled,
                 updated_at)
          VALUES ($1::bigint, $2::bigint, 
                  $3, 
-                 COALESCE($4::timestamptz, NOW() + INTERVAL '7 days'),
+                 COALESCE($4::timestamptz, NOW() + ($15::int * INTERVAL '1 day')),
                  COALESCE($5::timestamptz, NOW()),
-                 $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                 $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                  NOW())
          ON CONFLICT (guild_id, discord_role_id)
          DO UPDATE SET updated_at = NOW() ${updateClause}
-         RETURNING guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at, 
+         RETURNING guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
+                   reset_interval_days, rollover_enabled,
                    moderation_points, base_exalt_points, base_non_exalt_points,
                    verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points`,
         values
     );
+
+    if (Number(res.rows[0].required_points) > 0) {
+        await ensureActiveQuotaPeriod(client, guildId, discordRoleId);
+    } else {
+        await deactivateQuotaAutomationInTransaction(
+            client,
+            guildId,
+            discordRoleId,
+            config.member_user_ids
+        );
+    }
 
     const row = res.rows[0];
     return {
@@ -334,6 +375,8 @@ export async function upsertQuotaRoleConfig(
         reset_at: row.reset_at,
         panel_message_id: row.panel_message_id,
         period_start_at: row.period_start_at,
+        reset_interval_days: row.reset_interval_days,
+        rollover_enabled: row.rollover_enabled,
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
@@ -344,31 +387,7 @@ export async function upsertQuotaRoleConfig(
         editname_points: Number(row.editname_points),
         addnote_points: Number(row.addnote_points),
     };
-}
-
-/**
- * Delete quota role configuration and all associated data.
- * This will cascade delete all dungeon overrides and quota events for this role.
- * 
- * @param guildId - Discord guild ID
- * @param discordRoleId - Discord role ID
- * @returns true if a config was deleted, false if no config existed
- */
-export async function deleteQuotaRoleConfig(
-    guildId: string,
-    discordRoleId: string
-): Promise<boolean> {
-    const res = await query(
-        `DELETE FROM quota_role_config
-         WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
-        [guildId, discordRoleId]
-    );
-
-    const deleted = (res.rowCount ?? 0) > 0;
-    if (deleted) {
-        logger.info({ guildId, discordRoleId }, 'Deleted quota role config');
-    }
-    return deleted;
+    });
 }
 
 /**
@@ -753,44 +772,6 @@ export async function getQuotaRoleForDungeon(
     }
     
     return activeConfigs[0];
-}
-
-/**
- * Calculate the start of the current quota period for a given config
- * Uses period_start_at which can be set to any past or future date
- */
-export function getQuotaPeriodStart(config: QuotaRoleConfig): Date {
-    const resetAt = new Date(config.reset_at);
-    const periodStartAt = new Date(config.period_start_at);
-    const now = new Date();
-
-    // If reset_at is in the future, the current period started at period_start_at
-    if (resetAt > now) {
-        return periodStartAt;
-    }
-
-    // If reset_at has passed, the period started at the last reset time
-    return resetAt;
-}
-
-/**
- * Calculate the end of the current quota period (next reset)
- * For absolute datetime:
- * - If reset_at is in the future, return reset_at (configured end time)
- * - If reset_at has passed, return NOW (the period is ongoing until a new reset is configured)
- */
-export function getQuotaPeriodEnd(config: QuotaRoleConfig): Date {
-    const resetAt = new Date(config.reset_at);
-    const now = new Date();
-
-    // If reset_at is in the future, that's the end of the current period
-    if (resetAt > now) {
-        return resetAt;
-    }
-
-    // If reset_at has passed, the period is ongoing - return NOW as the end
-    // This shows accumulated stats since the last reset
-    return now;
 }
 
 /**
@@ -1583,9 +1564,12 @@ export async function recalculateQuotaPoints(
         throw new Error(`No quota config found for guild ${guildId}, role ${roleId}`);
     }
 
-    // Determine the current quota period
-    const periodStart = getQuotaPeriodStart(config);
-    const periodEnd = getQuotaPeriodEnd(config);
+    const activePeriod = await getActiveQuotaPeriod(guildId, roleId);
+    if (!activePeriod) {
+        throw new Error(`No active quota period found for guild ${guildId}, role ${roleId}`);
+    }
+    const periodStart = new Date(activePeriod.starts_at);
+    const periodEnd = new Date(activePeriod.ends_at);
 
     logger.debug({ 
         guildId, 

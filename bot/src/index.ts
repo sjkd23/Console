@@ -40,6 +40,7 @@ import {
     handleQuotaRefreshPanel,
     handleQuotaResetPanel,
     handleQuotaDeleteConfig,
+    handleQuotaToggleRollover,
     handleQuotaConfigStop,
     handleQuotaBasicModal,
     handleQuotaModerationModal,
@@ -377,6 +378,11 @@ client.on('interactionCreate', async (interaction) => {
             if (interaction.customId.startsWith('quota_delete_config:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
                 await safeHandleInteraction(interaction, () => handleQuotaDeleteConfig(interaction), { ephemeral: true });
+                return;
+            }
+            if (interaction.customId.startsWith('quota_toggle_rollover:')) {
+                if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
+                await safeHandleInteraction(interaction, () => handleQuotaToggleRollover(interaction), { ephemeral: true });
                 return;
             }
             if (interaction.customId.startsWith('quota_config_stop:')) {

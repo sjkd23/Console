@@ -668,6 +668,34 @@ export async function getQuotaStats(
     return getJSON(`/quota/stats/${guildId}/${userId}`);
 }
 
+export interface QuotaPeriodMemberResult {
+    user_id: string;
+    earned_points: number;
+    carry_in: number;
+    effective_total: number;
+    met_quota: boolean;
+    carry_out: number;
+    result_source: string;
+}
+
+export interface QuotaPeriod {
+    id: string;
+    guild_id: string;
+    quota_role_id: string;
+    starts_at: string;
+    ends_at: string;
+    required_points: number;
+    rollover_enabled: boolean;
+    predecessor_period_id: string | null;
+    status: 'active' | 'finalized';
+    close_reason: 'scheduled' | 'manual' | 'config_deleted' | 'role_deleted' | 'deactivated' | null;
+    roster_complete: boolean;
+    created_at: string;
+    finalized_at: string | null;
+    quota_log_posted_at: string | null;
+    results: QuotaPeriodMemberResult[];
+}
+
 /** Get quota role configuration (GET /quota/config/:guild_id/:role_id) */
 export async function getQuotaRoleConfig(
     guildId: string,
@@ -679,11 +707,14 @@ export async function getQuotaRoleConfig(
         required_points: number;
         reset_at: string;
         period_start_at: string;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
         panel_message_id: string | null;
         moderation_points: number;
         base_exalt_points: number;
         base_non_exalt_points: number;
     } | null;
+    active_period: QuotaPeriod | null;
     dungeon_overrides: Record<string, number>;
 }> {
     return getJSON(`/quota/config/${guildId}/${roleId}`);
@@ -700,6 +731,9 @@ export async function updateQuotaRoleConfig(
         required_points?: number;
         reset_at?: string;
         period_start_at?: string;
+        reset_interval_days?: number;
+        rollover_enabled?: boolean;
+        member_user_ids?: string[];
         panel_message_id?: string | null;
         moderation_points?: number;
         base_exalt_points?: number;
@@ -728,6 +762,7 @@ export async function updateQuotaRoleConfig(
         editname_points: number;
         addnote_points: number;
     };
+    active_period: QuotaPeriod;
     dungeon_overrides: Record<string, number>;
 }> {
     return makeRequest('PUT', `/quota/config/${guildId}/${roleId}`, payload);
@@ -774,10 +809,13 @@ export async function deleteQuotaRoleConfig(
         actor_user_id: string;
         actor_roles?: string[];
         actor_has_admin_permission?: boolean;
+        member_user_ids?: string[];
+        deletion_reason?: 'config_deleted' | 'role_deleted';
     }
 ): Promise<{
     success: boolean;
     message: string;
+    finalized_periods: QuotaPeriod[];
 }> {
     return makeRequest('DELETE', `/quota/config/${guildId}/${roleId}`, payload);
 }
@@ -810,12 +848,66 @@ export async function getQuotaLeaderboard(
         required_points: number;
         reset_at: string;
         panel_message_id: string | null;
+        reset_interval_days: number;
+        rollover_enabled: boolean;
     };
+    active_period: QuotaPeriod;
     period_start: string;
     period_end: string;
-    leaderboard: Array<{ user_id: string; points: number; runs: number }>;
+    leaderboard: Array<{
+        user_id: string;
+        earned_points: number;
+        carry_in: number;
+        effective_total: number;
+        runs: number;
+    }>;
 }> {
     return postJSON(`/quota/leaderboard/${guildId}/${roleId}`, { member_user_ids: memberUserIds });
+}
+
+export async function getQuotaPeriodScan(): Promise<{
+    periods: Array<{
+        guild_id: string;
+        quota_role_id: string;
+        reset_interval_days: number;
+        active_period: QuotaPeriod;
+        due: boolean;
+    }>;
+}> {
+    return getJSON('/quota/periods/scan');
+}
+
+export async function finalizeDueQuotaPeriods(
+    guildId: string,
+    roleId: string,
+    memberUserIds: string[],
+    maxPeriods = 10
+): Promise<{ periods: QuotaPeriod[]; remaining_due: boolean }> {
+    return postJSON(`/quota/periods/${guildId}/${roleId}/finalize-due`, {
+        member_user_ids: memberUserIds,
+        max_periods: maxPeriods,
+    });
+}
+
+export async function manuallyResetQuotaPeriod(
+    guildId: string,
+    roleId: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        member_user_ids: string[];
+    }
+): Promise<{ periods: QuotaPeriod[]; remaining_due: boolean; caught_up_count: number }> {
+    return postJSON(`/quota/periods/${guildId}/${roleId}/manual-reset`, payload);
+}
+
+export async function getUnpostedQuotaPeriods(limit = 10): Promise<{ periods: QuotaPeriod[] }> {
+    return getJSON(`/quota/periods/unposted?limit=${limit}`);
+}
+
+export async function markQuotaPeriodLogDelivery(periodId: string, posted: boolean): Promise<{ updated: boolean }> {
+    return postJSON(`/quota/periods/${periodId}/log-delivery`, { posted });
 }
 
 /** Award moderation points for moderation activities (POST /quota/award-moderation-points/:guild_id/:user_id) */

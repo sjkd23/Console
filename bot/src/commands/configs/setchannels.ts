@@ -21,6 +21,7 @@ const CHANNEL_OPTIONS = [
     { key: 'punishment_log', label: 'Punishment Log', description: 'Log channel for moderation actions' },
     { key: 'raid_log', label: 'Raid Log', description: 'Log channel for raid-related events' },
     { key: 'quota', label: 'Quota', description: 'Channel for quota leaderboard panels and tracking' },
+    { key: 'quota_log', label: 'Quota Log', description: 'Historical finalized quota-period results' },
     { key: 'bot_log', label: 'Bot Log', description: 'General bot activity and command execution logs' },
     { key: 'staff_updates', label: 'Staff Updates', description: 'Channel for staff promotion announcements' },
     { key: 'modmail', label: 'Modmail', description: 'Channel for receiving and managing modmail support tickets' },
@@ -42,6 +43,7 @@ export const setchannels: SlashCommand = {
         .addChannelOption(o => o.setName('punishment_log').setDescription('Punishment log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('raid_log').setDescription('Raid log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('quota').setDescription('Quota leaderboard channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('quota_log').setDescription('Finalized quota-period log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('bot_log').setDescription('Bot activity log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('staff_updates').setDescription('Staff promotion announcements channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('modmail').setDescription('Modmail support tickets channel').addChannelTypes(ChannelType.GuildText))
