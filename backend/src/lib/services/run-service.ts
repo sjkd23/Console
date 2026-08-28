@@ -132,7 +132,7 @@ export async function createRunWithTransaction(input: CreateRunInput): Promise<C
  * 
  * Transaction includes:
  * - Updating run status to 'ended'
- * - Logging organizer quota event
+ * - Logging an organizer quota event for Oryx 3
  * - Awarding raider points (from snapshot or all joined)
  * 
  * @param input - Run ending parameters
@@ -152,16 +152,19 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
             [input.runId]
         );
 
-        // Step 2: Award organizer quota points at run end.
-        // This shares the same run-completion write pipeline as manual /logrun.
-        const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
-            guildId: input.guildId,
-            dungeonKey: input.dungeonKey,
-            runId: input.runId,
-            organizerDiscordId: input.organizerId,
-            organizerRoles: input.organizerRoles,
-            organizerRolePositions: input.organizerRolePositions,
-        }, client);
+        // Step 2: Oryx 3 is the only dungeon whose organizer completion is
+        // awarded at run end. Normal dungeons are awarded per key pop.
+        let organizerQuotaPoints = 0;
+        if (input.dungeonKey === 'ORYX_3') {
+            organizerQuotaPoints = await quotaService.awardOrganizerQuota({
+                guildId: input.guildId,
+                dungeonKey: input.dungeonKey,
+                runId: input.runId,
+                organizerDiscordId: input.organizerId,
+                organizerRoles: input.organizerRoles,
+                organizerRolePositions: input.organizerRolePositions,
+            }, client);
+        }
 
         logger.debug({ runId: input.runId, organizerQuotaPoints, keyPopCount: input.keyPopCount },
             'Processed organizer quota award at run end');
