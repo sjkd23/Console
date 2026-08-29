@@ -4,17 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const testState = vi.hoisted(() => ({
     keyPopCount: 0,
     query: vi.fn(),
-    snapshotRaidersAtKeyPop: vi.fn(),
-    awardOrganizerQuota: vi.fn(),
-    awardRaidersQuotaFromSnapshot: vi.fn(),
+    recordKeyPopWithTransaction: vi.fn(),
 }));
 
 vi.mock('../../db/pool.js', () => ({
     query: testState.query,
-}));
-
-vi.mock('../../lib/quota/quota.js', () => ({
-    snapshotRaidersAtKeyPop: testState.snapshotRaidersAtKeyPop,
 }));
 
 vi.mock('../../lib/database/database-helpers.js', () => ({
@@ -25,13 +19,7 @@ vi.mock('../../lib/database/database-helpers.js', () => ({
 vi.mock('../../lib/services/run-service.js', () => ({
     createRunWithTransaction: vi.fn(),
     endRunWithTransaction: vi.fn(),
-}));
-
-vi.mock('../../lib/services/quota-service.js', () => ({
-    QuotaService: class {
-        awardOrganizerQuota = testState.awardOrganizerQuota;
-        awardRaidersQuotaFromSnapshot = testState.awardRaidersQuotaFromSnapshot;
-    },
+    recordKeyPopWithTransaction: testState.recordKeyPopWithTransaction,
 }));
 
 import runsRoutes from './runs.js';
@@ -65,9 +53,16 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         testState.keyPopCount = 0;
-        testState.snapshotRaidersAtKeyPop.mockResolvedValue(2);
-        testState.awardOrganizerQuota.mockResolvedValue(1);
-        testState.awardRaidersQuotaFromSnapshot.mockResolvedValue(2);
+        testState.recordKeyPopWithTransaction.mockImplementation(() => {
+            testState.keyPopCount += 1;
+            return Promise.resolve({
+                keyWindowEndsAt: '2026-08-28T20:00:25.000Z',
+                keyPopCount: testState.keyPopCount,
+                organizerQuotaPoints: 1,
+                previousSnapshotRaidersAwarded: testState.keyPopCount > 1 ? 2 : 0,
+                snapshotCount: 2,
+            });
+        });
         testState.query.mockImplementation((sql: unknown) => {
             const statement = String(sql);
 
@@ -84,17 +79,6 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
                 });
             }
 
-            if (statement.includes('key_pop_count = key_pop_count + 1')) {
-                testState.keyPopCount += 1;
-                return Promise.resolve({
-                    rowCount: 1,
-                    rows: [{
-                        key_window_ends_at: '2026-08-28T20:00:25.000Z',
-                        key_pop_count: testState.keyPopCount,
-                    }],
-                });
-            }
-
             throw new Error(`Unexpected query in key-window test: ${statement}`);
         });
     });
@@ -104,18 +88,18 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
 
         expect(response.statusCode).toBe(200);
         expect(response.json()).toMatchObject({ key_pop_count: 1 });
-        expect(testState.awardOrganizerQuota).toHaveBeenCalledOnce();
-        expect(testState.awardOrganizerQuota).toHaveBeenCalledWith({
+        expect(testState.recordKeyPopWithTransaction).toHaveBeenCalledOnce();
+        expect(testState.recordKeyPopWithTransaction).toHaveBeenCalledWith({
             guildId,
             dungeonKey: 'SHATTERS',
             runId,
-            organizerDiscordId: organizerId,
+            organizerId,
             organizerRoles: [organizerRoleId],
             organizerRolePositions: { [organizerRoleId]: 10 },
-            keyPopNumber: 1,
+            keyPopCount: 0,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
         });
-        expect(testState.snapshotRaidersAtKeyPop).toHaveBeenCalledWith(runId, 1);
-        expect(testState.awardRaidersQuotaFromSnapshot).not.toHaveBeenCalled();
     });
 
     it('awards exactly two organizer completions across two key pops and finalizes the prior snapshot', async () => {
@@ -125,23 +109,12 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
         expect(firstResponse.statusCode).toBe(200);
         expect(secondResponse.statusCode).toBe(200);
         expect(secondResponse.json()).toMatchObject({ key_pop_count: 2 });
-        expect(testState.awardOrganizerQuota).toHaveBeenCalledTimes(2);
-        expect(testState.awardOrganizerQuota).toHaveBeenNthCalledWith(
-            1,
-            expect.objectContaining({ keyPopNumber: 1 })
+        expect(testState.recordKeyPopWithTransaction).toHaveBeenCalledTimes(2);
+        expect(testState.recordKeyPopWithTransaction).toHaveBeenNthCalledWith(
+            1, expect.objectContaining({ expectedKeyPopCount: 0 })
         );
-        expect(testState.awardOrganizerQuota).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ keyPopNumber: 2 })
+        expect(testState.recordKeyPopWithTransaction).toHaveBeenNthCalledWith(
+            2, expect.objectContaining({ expectedKeyPopCount: 1 })
         );
-        expect(testState.snapshotRaidersAtKeyPop).toHaveBeenNthCalledWith(1, runId, 1);
-        expect(testState.snapshotRaidersAtKeyPop).toHaveBeenNthCalledWith(2, runId, 2);
-        expect(testState.awardRaidersQuotaFromSnapshot).toHaveBeenCalledOnce();
-        expect(testState.awardRaidersQuotaFromSnapshot).toHaveBeenCalledWith({
-            guildId,
-            dungeonKey: 'SHATTERS',
-            runId,
-            keyPopNumber: 1,
-        });
     });
 });

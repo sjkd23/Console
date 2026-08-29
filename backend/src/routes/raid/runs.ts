@@ -4,16 +4,13 @@ import { query } from '../../db/pool.js';
 import { zSnowflake, zReactionState } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole, authorizeRunActor, buildRunActorContext, RunRow } from '../../lib/auth/authorization.js';
-import { snapshotRaidersAtKeyPop } from '../../lib/quota/quota.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
-import { createRunWithTransaction, endRunWithTransaction } from '../../lib/services/run-service.js';
-import { QuotaService } from '../../lib/services/quota-service.js';
+import { createRunWithTransaction, endRunWithTransaction, recordKeyPopWithTransaction } from '../../lib/services/run-service.js';
 import { RAID_BEHAVIOR } from '../../config/raid-config.js';
 import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.js';
 
 const logger = createLogger('Runs');
-const quotaService = new QuotaService();
 
 /**
  * Enforce guild scoping: if the request has a guild context, ensure the run belongs to that guild.
@@ -1174,20 +1171,25 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
-        // Increment key_pop_count and set key_window_ends_at
-        const newKeyPopCount = key_pop_count + 1;
-        const res = await query<{ key_window_ends_at: string; key_pop_count: number }>(
-            `UPDATE run
-             SET key_window_ends_at = now() + ($2 || ' seconds')::interval,
-                 key_pop_count = key_pop_count + 1
-             WHERE id = $1::bigint
-               AND status = 'live'
-               AND key_pop_count = $3
-             RETURNING key_window_ends_at, key_pop_count`,
-            [runId, seconds, key_pop_count]
-        );
+        let result;
+        try {
+            result = await recordKeyPopWithTransaction({
+                runId,
+                guildId: run.guild_id,
+                organizerId: organizer_id,
+                dungeonKey: dungeon_key,
+                keyPopCount: key_pop_count,
+                expectedKeyPopCount: key_pop_count,
+                keyWindowSeconds: seconds,
+                organizerRoles: actor_roles,
+                organizerRolePositions: actor_role_positions,
+            });
+        } catch (err) {
+            logger.error({ err, runId, keyPopNumber: key_pop_count + 1 }, 'Failed to record key pop transaction');
+            return Errors.internal(reply, 'Failed to record key pop');
+        }
 
-        if (res.rowCount === 0) {
+        if (!result) {
             return reply.code(409).send({
                 error: {
                     code: 'CONFLICT',
@@ -1196,51 +1198,17 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
-        // If this is not the first key pop, award completions to the previous snapshot
-        if (key_pop_count > 0) {
-            try {
-                await quotaService.awardRaidersQuotaFromSnapshot({
-                    guildId: run.guild_id,
-                    dungeonKey: dungeon_key,
-                    runId: runId,
-                    keyPopNumber: key_pop_count,
-                });
-                logger.info({ runId, previousKeyPop: key_pop_count, newKeyPop: newKeyPopCount }, 'Awarded completions to previous key pop snapshot');
-            } catch (err) {
-                logger.error({ err, runId, keyPopNumber: key_pop_count }, 'Failed to award completions to previous key pop snapshot');
-                // Don't fail the request - key pop should still work even if awarding fails
-            }
-        }
-
-        // Snapshot current joined raiders for this new key pop
-        try {
-            const snapshotCount = await snapshotRaidersAtKeyPop(runId, newKeyPopCount);
-            logger.info({ runId, keyPopNumber: newKeyPopCount, snapshotCount }, 'Created key pop snapshot');
-        } catch (err) {
-            logger.error({ err, runId, keyPopNumber: newKeyPopCount }, 'Failed to create key pop snapshot');
-            // Don't fail the request - key pop should still work even if snapshot fails
-        }
-
-        // Award organizer quota for this key pop
-        try {
-            const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
-                guildId: run.guild_id,
-                dungeonKey: dungeon_key,
-                runId: runId,
-                organizerDiscordId: organizer_id,
-                organizerRoles: actor_roles,
-                organizerRolePositions: actor_role_positions,
-                keyPopNumber: newKeyPopCount,
-            });
-            logger.info({ runId, keyPopNumber: newKeyPopCount, organizerQuotaPoints }, 'Awarded organizer quota for key pop');
-        } catch (err) {
-            logger.error({ err, runId, keyPopNumber: newKeyPopCount }, 'Failed to award organizer quota for key pop');
-            // Don't fail the request - key pop should still work even if quota award fails
-        }
+        logger.info({
+            runId,
+            keyPopNumber: result.keyPopCount,
+            snapshotCount: result.snapshotCount,
+            previousSnapshotRaidersAwarded: result.previousSnapshotRaidersAwarded,
+            organizerQuotaPoints: result.organizerQuotaPoints,
+        }, 'Recorded key pop transaction');
 
         return reply.send({ 
-            key_window_ends_at: res.rows[0].key_window_ends_at,
-            key_pop_count: res.rows[0].key_pop_count
+            key_window_ends_at: result.keyWindowEndsAt,
+            key_pop_count: result.keyPopCount
         });
     });
 

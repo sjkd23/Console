@@ -30,6 +30,8 @@ import {
     recalculateQuotaPoints,
 } from '../../lib/quota/quota.js';
 import { QuotaService } from '../../lib/services/quota-service.js';
+import { withTransaction } from '../../lib/database/transaction.js';
+import { recordManualRunActivity } from '../../lib/dungeon-activity/activity-service.js';
 import {
     closeAndDeleteQuotaConfig,
     finalizeDueQuotaPeriods,
@@ -119,6 +121,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
         let totalPoints = 0;
         let loggedCount = 0;
         let quotaRoleId: string | undefined;
+        const manualActionTime = Date.now();
+        const subjectId = `manual_log_run:${manualActionTime}:${targetOrganizerId}:${Math.abs(amount)}`;
 
         try {
             // Determine which quota role should award points
@@ -131,6 +135,14 @@ export default async function quotaRoutes(app: FastifyInstance) {
             );
 
             if (!quotaRole || quotaRole.points === 0) {
+                await withTransaction(client => recordManualRunActivity({
+                    guildId,
+                    userId: targetOrganizerId,
+                    dungeonStatsKey: dungeonKey,
+                    quotaSubjectId: subjectId,
+                    count: amount,
+                    occurredAt: new Date(manualActionTime),
+                }, client));
                 logger.info({ actorId, guildId, dungeonKey }, 'No quota role awards points for this dungeon');
                 return reply.code(200).send({
                     logged: 0,
@@ -172,14 +184,24 @@ export default async function quotaRoutes(app: FastifyInstance) {
 
             // Log a single run-completion event via shared QuotaService pipeline
             // (same internal function used by automated run-end awards)
-            const subjectId = `manual_log_run:${Date.now()}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`;
-            totalPoints = await quotaService.logOrganizerRunCompletionEvent({
-                guildId,
-                organizerDiscordId: targetOrganizerId,
-                dungeonKey,
-                subjectId,
-                quotaPoints: adjustedTotalPoints,
-                quotaRoleId,
+            const adjustedSubjectId = `manual_log_run:${manualActionTime}:${targetOrganizerId}:${Math.abs(adjustedAmount)}`;
+            totalPoints = await withTransaction(async client => {
+                await recordManualRunActivity({
+                    guildId,
+                    userId: targetOrganizerId,
+                    dungeonStatsKey: dungeonKey,
+                    quotaSubjectId: adjustedSubjectId,
+                    count: adjustedAmount,
+                    occurredAt: new Date(manualActionTime),
+                }, client);
+                return quotaService.logOrganizerRunCompletionEvent({
+                    guildId,
+                    organizerDiscordId: targetOrganizerId,
+                    dungeonKey,
+                    subjectId: adjustedSubjectId,
+                    quotaPoints: adjustedTotalPoints,
+                    quotaRoleId: quotaRole.roleId,
+                }, client);
             });
             loggedCount = totalPoints === 0 ? 0 : Math.abs(adjustedAmount);
 

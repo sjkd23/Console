@@ -1,5 +1,6 @@
 // backend/src/lib/quota.ts
-import { query } from '../../db/pool.js';
+import type { PoolClient } from 'pg';
+import { pool, query } from '../../db/pool.js';
 import { createLogger } from '../logging/logger.js';
 import { withTransaction } from '../database/transaction.js';
 import {
@@ -7,6 +8,11 @@ import {
     ensureActiveQuotaPeriod,
     getActiveQuotaPeriod,
 } from '../services/quota-period-service.js';
+import {
+    getCanonicalActivityLeaderboard,
+    getCanonicalActivityRows,
+    summarizeCanonicalActivity,
+} from '../dungeon-activity/stats-service.js';
 
 const logger = createLogger('Quota');
 
@@ -973,27 +979,7 @@ export async function getUserQuotaStats(
         [guildId, userId]
     );
 
-    // Get run count (organizer activities - where they have quota_points)
-    // For manual logs, parse the run count from subject_id and multiply by SIGN(quota_points)
-    // This handles negative removals correctly (e.g., -1 run when quota_points is negative)
-    const runsRes = await query<{ count: string }>(
-        `SELECT COALESCE(
-            SUM(
-                CASE 
-                    WHEN subject_id LIKE 'manual_log_run:%' 
-                    THEN (split_part(subject_id, ':', 4)::int * SIGN(quota_points))
-                    ELSE SIGN(quota_points)
-                END
-            ), 
-            0
-        )::text AS count
-         FROM quota_event
-         WHERE guild_id = $1::bigint 
-           AND actor_user_id = $2::bigint
-           AND action_type = 'run_completed'
-           AND quota_points != 0`,
-        [guildId, userId]
-    );
+    const canonicalActivity = summarizeCanonicalActivity(await getCanonicalActivityRows({ guildId, userId }));
 
     // Get verification count
     const verifRes = await query<{ count: string }>(
@@ -1013,87 +999,39 @@ export async function getUserQuotaStats(
         [guildId, userId]
     );
 
-    // Get per-dungeon breakdown showing completed, organized, and keys popped
-    // For manual logs, parse the run count from subject_id
-    const dungeonsRes = await query<{ dungeon_key: string; completed: string; organized: string; keys_popped: string }>(
-        `WITH all_dungeons AS (
-            -- Get all dungeons from key_pop
-            SELECT DISTINCT dungeon_key
-            FROM key_pop
-            WHERE guild_id = $1::bigint AND user_id = $2::bigint
-            UNION
-            -- Get all dungeons from quota_event
-            SELECT DISTINCT dungeon_key
-            FROM quota_event
-            WHERE guild_id = $1::bigint 
-              AND actor_user_id = $2::bigint 
-              AND action_type = 'run_completed'
-              AND dungeon_key IS NOT NULL
-         ),
-         key_pop_agg AS (
-            SELECT dungeon_key, SUM(count) AS count
-            FROM key_pop
-            WHERE guild_id = $1::bigint AND user_id = $2::bigint
-            GROUP BY dungeon_key
-         ),
-         quota_event_agg AS (
-            SELECT 
-                dungeon_key,
-                SUM(
-                    CASE 
-                        WHEN points != 0 AND subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(subject_id, ':', 4)::int * SIGN(points))
-                        WHEN points != 0 
-                        THEN SIGN(points)
-                        ELSE 0
-                    END
-                ) AS completed,
-                SUM(
-                    CASE 
-                        WHEN quota_points != 0 AND subject_id LIKE 'manual_log_run:%' 
-                        THEN (split_part(subject_id, ':', 4)::int * SIGN(quota_points))
-                        WHEN quota_points != 0 
-                        THEN SIGN(quota_points)
-                        ELSE 0
-                    END
-                ) AS organized
-            FROM quota_event
-            WHERE guild_id = $1::bigint 
-              AND actor_user_id = $2::bigint 
-              AND action_type = 'run_completed'
-            GROUP BY dungeon_key
-         )
-         SELECT 
-            ad.dungeon_key,
-            COALESCE(qea.completed, 0)::text AS completed,
-            COALESCE(qea.organized, 0)::text AS organized,
-            COALESCE(kpa.count, 0)::text AS keys_popped
-         FROM all_dungeons ad
-         LEFT JOIN quota_event_agg qea ON ad.dungeon_key = qea.dungeon_key
-         LEFT JOIN key_pop_agg kpa ON ad.dungeon_key = kpa.dungeon_key
-         WHERE COALESCE(qea.completed, 0) > 0 
-            OR COALESCE(qea.organized, 0) > 0
-            OR COALESCE(kpa.count, 0) > 0
-         ORDER BY (
-            COALESCE(qea.completed, 0) + 
-            COALESCE(qea.organized, 0) + 
-            COALESCE(kpa.count, 0)
-         ) DESC`,
+    const keyPopsByDungeon = await query<{ dungeon_key: string; count: string }>(
+        `SELECT dungeon_key, SUM(count)::text AS count
+         FROM key_pop
+         WHERE guild_id = $1::bigint AND user_id = $2::bigint
+         GROUP BY dungeon_key`,
         [guildId, userId]
     );
+
+    const dungeonKeys = new Set([
+        ...canonicalActivity.dungeons.keys(),
+        ...keyPopsByDungeon.rows.map(row => row.dungeon_key),
+    ]);
+    const keyPopMap = new Map(keyPopsByDungeon.rows.map(row => [row.dungeon_key, Number(row.count)]));
+    const dungeons = [...dungeonKeys].map(dungeonKey => {
+        const activity = canonicalActivity.dungeons.get(dungeonKey) ?? { completed: 0, organized: 0 };
+        return {
+            dungeon_key: dungeonKey,
+            completed: activity.completed,
+            organized: activity.organized,
+            keys_popped: keyPopMap.get(dungeonKey) ?? 0,
+        };
+    }).filter(row => row.completed > 0 || row.organized > 0 || row.keys_popped > 0)
+        .sort((left, right) =>
+            (right.completed + right.organized + right.keys_popped)
+            - (left.completed + left.organized + left.keys_popped));
 
     return {
         total_points: Number(totalPointsRes.rows[0].total),
         total_quota_points: Number(totalQuotaPointsRes.rows[0].total),
-        total_runs_organized: Number(runsRes.rows[0].count),
+        total_runs_organized: canonicalActivity.total_runs_organized,
         total_verifications: Number(verifRes.rows[0].count),
         total_keys_popped: Number(keysRes.rows[0].total),
-        dungeons: dungeonsRes.rows.map(row => ({
-            dungeon_key: row.dungeon_key,
-            completed: Number(row.completed),
-            organized: Number(row.organized),
-            keys_popped: Number(row.keys_popped),
-        })),
+        dungeons,
     };
 }
 
@@ -1234,10 +1172,12 @@ export async function getQuotaStatsForRole(
  */
 export async function snapshotRaidersAtKeyPop(
     runId: number,
-    keyPopNumber: number
+    keyPopNumber: number,
+    client?: PoolClient
 ): Promise<number> {
+    const db = client ?? pool;
     // Get all raiders currently joined (state='join')
-    const raiders = await query<{ user_id: string; class: string | null }>(
+    const raiders = await db.query<{ user_id: string; class: string | null }>(
         `SELECT user_id, class
          FROM reaction
          WHERE run_id = $1::bigint AND state = 'join'`,
@@ -1252,7 +1192,7 @@ export async function snapshotRaidersAtKeyPop(
     // Insert snapshot for each raider
     for (const raider of raiders.rows) {
         try {
-            await query(
+            await db.query(
                 `INSERT INTO key_pop_snapshot (run_id, key_pop_number, user_id, class)
                  VALUES ($1::bigint, $2, $3::bigint, $4)
                  ON CONFLICT (run_id, key_pop_number, user_id) DO NOTHING`,
@@ -1260,6 +1200,7 @@ export async function snapshotRaidersAtKeyPop(
             );
         } catch (err) {
             logger.error({ err, runId, keyPopNumber, userId: raider.user_id }, 'Failed to snapshot raider at key pop');
+            if (client) throw err;
         }
     }
 
@@ -1363,11 +1304,21 @@ export async function getLeaderboard(
     since?: Date,
     until?: Date
 ): Promise<Array<{ user_id: string; count: number }>> {
+    if (category === 'runs_organized' || category === 'dungeon_completions') {
+        return getCanonicalActivityLeaderboard({
+            guildId,
+            role: category === 'runs_organized' ? 'organizer' : 'raider',
+            dungeonStatsKey: dungeonKey && dungeonKey !== 'all' ? dungeonKey : undefined,
+            since,
+            until,
+        });
+    }
+
     let queryStr: string;
-    let params: any[];
+    let params: string[];
 
     // Helper to build dynamic WHERE clause and params
-    const buildQuery = (baseConditions: string[], baseParams: any[]): { whereClause: string; params: any[] } => {
+    const buildQuery = (baseConditions: string[], baseParams: string[]): { whereClause: string; params: string[] } => {
         const conditions = [...baseConditions];
         const allParams = [...baseParams];
         let paramIndex = baseParams.length + 1;
@@ -1393,44 +1344,7 @@ export async function getLeaderboard(
         };
     };
 
-    if (category === 'runs_organized') {
-        // Count runs where user has quota points (organizer activity)
-        // For manual logs, parse the run count from subject_id and multiply by SIGN(quota_points)
-        // This handles negative removals correctly
-        const { whereClause, params: queryParams } = buildQuery(
-            ['guild_id = $1::bigint', 'action_type = \'run_completed\'', 'quota_points != 0'],
-            [guildId]
-        );
-        
-        queryStr = `
-            SELECT actor_user_id AS user_id, 
-                   SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(quota_points))
-                           ELSE SIGN(quota_points)
-                       END
-                   )::text AS count
-            FROM quota_event
-            WHERE ${whereClause}
-            GROUP BY actor_user_id
-            HAVING SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(quota_points))
-                           ELSE SIGN(quota_points)
-                       END
-                   ) > 0
-            ORDER BY SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(quota_points))
-                           ELSE SIGN(quota_points)
-                       END
-                   ) DESC, actor_user_id ASC
-        `;
-        params = queryParams;
-    } else if (category === 'keys_popped') {
+    if (category === 'keys_popped') {
         // Count keys popped from key_pop table
         // Note: key_pop table doesn't have created_at, so date filtering not applicable
         if (dungeonKey && dungeonKey !== 'all') {
@@ -1460,42 +1374,6 @@ export async function getLeaderboard(
         if (since || until) {
             logger.warn({ guildId, category }, 'Date filtering not supported for keys_popped category - ignoring since/until parameters');
         }
-    } else if (category === 'dungeon_completions') {
-        // Count completions where user has points (raider activity)
-        // For manual logs, parse the run count from subject_id and multiply by SIGN(points)
-        const { whereClause, params: queryParams } = buildQuery(
-            ['guild_id = $1::bigint', 'action_type = \'run_completed\'', 'points != 0'],
-            [guildId]
-        );
-        
-        queryStr = `
-            SELECT actor_user_id AS user_id, 
-                   SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(points))
-                           ELSE SIGN(points)
-                       END
-                   )::text AS count
-            FROM quota_event
-            WHERE ${whereClause}
-            GROUP BY actor_user_id
-            HAVING SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(points))
-                           ELSE SIGN(points)
-                       END
-                   ) > 0
-            ORDER BY SUM(
-                       CASE 
-                           WHEN subject_id LIKE 'manual_log_run:%' 
-                           THEN (split_part(subject_id, ':', 4)::int * SIGN(points))
-                           ELSE SIGN(points)
-                       END
-                   ) DESC, actor_user_id ASC
-        `;
-        params = queryParams;
     } else if (category === 'points') {
         // Sum total points (raider activity)
         const { whereClause, params: queryParams } = buildQuery(

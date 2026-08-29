@@ -12,6 +12,12 @@
 import { PoolClient } from 'pg';
 import { pool } from '../../db/pool.js';
 import { createLogger } from '../logging/logger.js';
+import { recordDungeonActivity } from '../dungeon-activity/activity-service.js';
+import {
+    raiderKeyPopActivitySubjectId,
+    raiderParticipantActivitySubjectId,
+} from '../dungeon-activity/activity-subject.js';
+import { z } from 'zod';
 
 const logger = createLogger('QuotaService');
 
@@ -246,27 +252,10 @@ export class QuotaService {
     ): Promise<number> {
         const db = client || pool;
 
-        // Step 1: Get raider points configuration for this dungeon
-        const raiderPoints = await this.getRaiderPointsForDungeon(
-            input.guildId,
-            input.dungeonKey,
-            db
-        );
-
-        // If points are 0 (default/not configured), skip awarding
-        if (raiderPoints === 0) {
-            logger.debug({ 
-                runId: input.runId, 
-                keyPopNumber: input.keyPopNumber, 
-                dungeonKey: input.dungeonKey, 
-                guildId: input.guildId 
-            }, 'Skipping raider points - dungeon has 0 points configured');
-            return 0;
-        }
-
-        // Step 2: Get all raiders from this snapshot who haven't been awarded yet
-        const raiders = await db.query<{ user_id: string }>(
-            `SELECT user_id
+        // Snapshot time is the strongest occurrence timestamp: finalization may
+        // happen at the next key pop or much later when the run ends.
+        const raiders = await db.query<{ user_id: string; snapshot_time: Date | string }>(
+            `SELECT user_id, snapshot_time
              FROM key_pop_snapshot
              WHERE run_id = $1::bigint 
                AND key_pop_number = $2
@@ -283,36 +272,53 @@ export class QuotaService {
             return 0;
         }
 
-        // Step 3: Award points to each raider
+        const raiderPoints = await this.getRaiderPointsForDungeon(
+            input.guildId,
+            input.dungeonKey,
+            db
+        );
+
+        // Persist activity for every eligible snapshot member regardless of
+        // whether the configured currency award is zero.
         let awardedCount = 0;
         for (const raider of raiders.rows) {
             try {
-                // Use subject_id for idempotency (prevents double-awarding)
-                const event = await db.query<{ id: number }>(
-                    `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
-                     VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
-                     ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
-                     DO NOTHING
-                     RETURNING id`,
-                    [
-                        input.guildId,
-                        raider.user_id,
-                        `raider:${input.runId}:${input.keyPopNumber}:${raider.user_id}`, // Idempotency key
-                        input.dungeonKey,
-                        raiderPoints,
-                    ]
-                );
+                await recordDungeonActivity({
+                    guildId: input.guildId,
+                    userId: raider.user_id,
+                    runId: input.runId,
+                    role: 'raider',
+                    dungeonStatsKey: input.dungeonKey,
+                    subjectId: raiderKeyPopActivitySubjectId(input.runId, input.keyPopNumber, raider.user_id),
+                    source: 'key_pop',
+                    count: 1,
+                    occurredAt: z.coerce.date().parse(raider.snapshot_time),
+                }, client);
 
-                if (event.rowCount && event.rowCount > 0) {
-                    // Mark as awarded in snapshot
-                    await db.query(
-                        `UPDATE key_pop_snapshot
-                         SET awarded_completion = TRUE, awarded_at = NOW()
-                         WHERE run_id = $1::bigint AND key_pop_number = $2 AND user_id = $3::bigint`,
-                        [input.runId, input.keyPopNumber, raider.user_id]
+                if (raiderPoints !== 0) {
+                    const event = await db.query<{ id: number }>(
+                        `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
+                         VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
+                         ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
+                         DO NOTHING
+                         RETURNING id`,
+                        [
+                            input.guildId,
+                            raider.user_id,
+                            `raider:${input.runId}:${input.keyPopNumber}:${raider.user_id}`,
+                            input.dungeonKey,
+                            raiderPoints,
+                        ]
                     );
-                    awardedCount++;
+                    if (event.rowCount === 1) awardedCount++;
                 }
+
+                await db.query(
+                    `UPDATE key_pop_snapshot
+                     SET awarded_completion = TRUE, awarded_at = COALESCE(awarded_at, NOW())
+                     WHERE run_id = $1::bigint AND key_pop_number = $2 AND user_id = $3::bigint`,
+                    [input.runId, input.keyPopNumber, raider.user_id]
+                );
             } catch (err) {
                 logger.error({ 
                     err, 
@@ -354,24 +360,16 @@ export class QuotaService {
     ): Promise<number> {
         const db = client || pool;
 
-        // Step 1: Get raider points configuration for this dungeon
-        const raiderPoints = await this.getRaiderPointsForDungeon(
-            input.guildId,
-            input.dungeonKey,
-            db
+        const occurrence = await db.query<{ ended_at: Date | string | null }>(
+            `SELECT ended_at
+             FROM run
+             WHERE id = $1::bigint AND guild_id = $2::bigint`,
+            [input.runId, input.guildId]
         );
-
-        // If points are 0 (default/not configured), skip awarding
-        if (raiderPoints === 0) {
-            logger.debug({ 
-                runId: input.runId, 
-                dungeonKey: input.dungeonKey, 
-                guildId: input.guildId 
-            }, 'Skipping raider points - dungeon has 0 points configured');
-            return 0;
+        if (occurrence.rowCount !== 1 || occurrence.rows[0].ended_at === null) {
+            throw new Error(`Ended run ${input.runId} has no participant-fallback occurrence timestamp`);
         }
 
-        // Step 2: Get all raiders who joined this run
         const raiders = await db.query<{ user_id: string }>(
             `SELECT DISTINCT user_id
              FROM reaction
@@ -385,28 +383,43 @@ export class QuotaService {
             return 0;
         }
 
-        // Step 3: Award points to each raider
+        const raiderPoints = await this.getRaiderPointsForDungeon(
+            input.guildId,
+            input.dungeonKey,
+            db
+        );
+
         let awardedCount = 0;
         for (const raider of raiders.rows) {
             try {
-                // Use subject_id for idempotency (prevents double-awarding)
-                const event = await db.query<{ id: number }>(
-                    `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
-                     VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
-                     ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
-                     DO NOTHING
-                     RETURNING id`,
-                    [
-                        input.guildId,
-                        raider.user_id,
-                        `raider:${input.runId}:${raider.user_id}`, // Idempotency key
-                        input.dungeonKey,
-                        raiderPoints,
-                    ]
-                );
+                await recordDungeonActivity({
+                    guildId: input.guildId,
+                    userId: raider.user_id,
+                    runId: input.runId,
+                    role: 'raider',
+                    dungeonStatsKey: input.dungeonKey,
+                    subjectId: raiderParticipantActivitySubjectId(input.runId, raider.user_id),
+                    source: 'participant_fallback',
+                    count: 1,
+                    occurredAt: z.coerce.date().parse(occurrence.rows[0].ended_at),
+                }, client);
 
-                if (event.rowCount && event.rowCount > 0) {
-                    awardedCount++;
+                if (raiderPoints !== 0) {
+                    const event = await db.query<{ id: number }>(
+                        `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points)
+                         VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, $5, 0)
+                         ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
+                         DO NOTHING
+                         RETURNING id`,
+                        [
+                            input.guildId,
+                            raider.user_id,
+                            `raider:${input.runId}:${raider.user_id}`,
+                            input.dungeonKey,
+                            raiderPoints,
+                        ]
+                    );
+                    if (event.rowCount === 1) awardedCount++;
                 }
             } catch (err) {
                 logger.error({ 

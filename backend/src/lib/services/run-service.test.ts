@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { transactionClient, quotaServiceMock } = vi.hoisted(() => ({
+const { transactionClient, quotaServiceMock, activityMock, snapshotMock } = vi.hoisted(() => ({
     transactionClient: {
         query: vi.fn(),
     },
@@ -9,6 +9,8 @@ const { transactionClient, quotaServiceMock } = vi.hoisted(() => ({
         awardRaidersQuotaFromSnapshot: vi.fn(),
         awardRaidersQuotaFromParticipants: vi.fn(),
     },
+    activityMock: vi.fn(),
+    snapshotMock: vi.fn(),
 }));
 
 vi.mock('../database/transaction.js', () => ({
@@ -24,7 +26,15 @@ vi.mock('./quota-service.js', () => ({
     },
 }));
 
-import { endRunWithTransaction, type EndRunInput } from './run-service.js';
+vi.mock('../dungeon-activity/activity-service.js', () => ({
+    recordDungeonActivity: activityMock,
+}));
+
+vi.mock('../quota/quota.js', () => ({
+    snapshotRaidersAtKeyPop: snapshotMock,
+}));
+
+import { endRunWithTransaction, recordKeyPopWithTransaction, type EndRunInput } from './run-service.js';
 
 const baseInput: EndRunInput = {
     runId: 42,
@@ -39,7 +49,12 @@ const baseInput: EndRunInput = {
 describe('endRunWithTransaction organizer completion trigger', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        transactionClient.query.mockResolvedValue({ rowCount: 1, rows: [] });
+        transactionClient.query.mockResolvedValue({
+            rowCount: 1,
+            rows: [{ ended_at: '2026-08-28T20:48:00.000Z' }],
+        });
+        activityMock.mockResolvedValue('inserted');
+        snapshotMock.mockResolvedValue(2);
         quotaServiceMock.awardOrganizerQuota.mockResolvedValue(1);
         quotaServiceMock.awardRaidersQuotaFromSnapshot.mockResolvedValue(1);
         quotaServiceMock.awardRaidersQuotaFromParticipants.mockResolvedValue(1);
@@ -102,6 +117,16 @@ describe('endRunWithTransaction organizer completion trigger', () => {
             }),
             transactionClient
         );
+        expect(activityMock).toHaveBeenCalledTimes(2);
+        expect(activityMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                role: 'organizer',
+                dungeonStatsKey: 'ORYX_3',
+                subjectId: `run:${input.runId}:o3:organizer`,
+                source: 'o3_end',
+            }),
+            transactionClient
+        );
     });
 
     it('still finalizes the last key-pop raider snapshot for a normal dungeon', async () => {
@@ -140,8 +165,145 @@ describe('endRunWithTransaction organizer completion trigger', () => {
         });
         expect(transactionClient.query).toHaveBeenCalledWith(
             expect.stringContaining("SET status = 'ended'"),
-            [baseInput.runId]
+            [baseInput.runId, baseInput.guildId]
         );
         expect(quotaServiceMock.awardRaidersQuotaFromParticipants).toHaveBeenCalledOnce();
+    });
+
+    it('records normal organizer key-pop activity even when configured quota is zero', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                key_window_ends_at: '2026-08-28T20:15:25.000Z',
+                key_pop_count: 1,
+                occurred_at: '2026-08-28T20:15:00.000Z',
+            }],
+        });
+        quotaServiceMock.awardOrganizerQuota.mockResolvedValue(0);
+
+        const result = await recordKeyPopWithTransaction({
+            ...baseInput,
+            keyPopCount: 0,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        });
+
+        expect(result).toMatchObject({ keyPopCount: 1, organizerQuotaPoints: 0, snapshotCount: 2 });
+        expect(activityMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                subjectId: `run:${baseInput.runId}:keypop:1:organizer`,
+                dungeonStatsKey: baseInput.dungeonKey,
+                count: 1,
+            }),
+            transactionClient
+        );
+        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledAfter(activityMock);
+    });
+
+    it('records one normal organizer activity and preserves the configured nonzero quota award', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                key_window_ends_at: '2026-08-28T20:15:25.000Z',
+                key_pop_count: 1,
+                occurred_at: '2026-08-28T20:15:00.000Z',
+            }],
+        });
+        quotaServiceMock.awardOrganizerQuota.mockResolvedValue(2);
+
+        const result = await recordKeyPopWithTransaction({
+            ...baseInput,
+            keyPopCount: 0,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        });
+
+        expect(result?.organizerQuotaPoints).toBe(2);
+        expect(activityMock).toHaveBeenCalledOnce();
+        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledOnce();
+    });
+
+    it('does not duplicate organizer activity or quota on a stale key-pop retry', async () => {
+        transactionClient.query
+            .mockResolvedValueOnce({
+                rowCount: 1,
+                rows: [{
+                    key_window_ends_at: '2026-08-28T20:15:25.000Z',
+                    key_pop_count: 1,
+                    occurred_at: '2026-08-28T20:15:00.000Z',
+                }],
+            })
+            .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+
+        const input = {
+            ...baseInput,
+            keyPopCount: 0,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        };
+        expect(await recordKeyPopWithTransaction(input)).not.toBeNull();
+        expect(await recordKeyPopWithTransaction(input)).toBeNull();
+
+        expect(activityMock).toHaveBeenCalledOnce();
+        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledOnce();
+    });
+
+    it('does not attempt quota when the organizer activity write fails', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                key_window_ends_at: '2026-08-28T20:15:25.000Z',
+                key_pop_count: 1,
+                occurred_at: '2026-08-28T20:15:00.000Z',
+            }],
+        });
+        activityMock.mockRejectedValue(new Error('activity write failed'));
+
+        await expect(recordKeyPopWithTransaction({
+            ...baseInput,
+            keyPopCount: 0,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        })).rejects.toThrow('activity write failed');
+        expect(quotaServiceMock.awardOrganizerQuota).not.toHaveBeenCalled();
+    });
+
+    it('uses distinct organizer activity identities across multiple key pops', async () => {
+        transactionClient.query
+            .mockResolvedValueOnce({
+                rowCount: 1,
+                rows: [{ key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date() }],
+            })
+            .mockResolvedValueOnce({
+                rowCount: 1,
+                rows: [{ key_window_ends_at: new Date(), key_pop_count: 2, occurred_at: new Date() }],
+            });
+
+        await recordKeyPopWithTransaction({
+            ...baseInput, keyPopCount: 0, expectedKeyPopCount: 0, keyWindowSeconds: 25,
+        });
+        await recordKeyPopWithTransaction({
+            ...baseInput, keyPopCount: 1, expectedKeyPopCount: 1, keyWindowSeconds: 25,
+        });
+
+        expect(activityMock).toHaveBeenNthCalledWith(
+            1, expect.objectContaining({ subjectId: `run:${baseInput.runId}:keypop:1:organizer` }), transactionClient
+        );
+        expect(activityMock).toHaveBeenNthCalledWith(
+            2, expect.objectContaining({ subjectId: `run:${baseInput.runId}:keypop:2:organizer` }), transactionClient
+        );
+        expect(quotaServiceMock.awardRaidersQuotaFromSnapshot).toHaveBeenCalledOnce();
+    });
+
+    it('records O3 organizer activity when configured quota is zero', async () => {
+        quotaServiceMock.awardOrganizerQuota.mockResolvedValue(0);
+
+        const result = await endRunWithTransaction({ ...baseInput, dungeonKey: 'ORYX_3', keyPopCount: 0 });
+
+        expect(result.organizerQuotaPoints).toBe(0);
+        expect(activityMock).toHaveBeenCalledWith(
+            expect.objectContaining({ subjectId: `run:${baseInput.runId}:o3:organizer` }),
+            transactionClient
+        );
     });
 });
