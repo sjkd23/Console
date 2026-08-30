@@ -15,6 +15,7 @@ const activeHeadcounts = new Map<string, {
     createdAt: Date;
     autoEndAt: Date;
     dungeons: string[];
+    dungeonCodes: string[];
 }>();
 
 /**
@@ -25,7 +26,8 @@ export function registerHeadcount(
     organizerId: string,
     messageId: string,
     channelId: string,
-    dungeons: string[]
+    dungeons: string[],
+    dungeonCodes: string[]
 ): void {
     const key = `${guildId}:${organizerId}`;
     const createdAt = new Date();
@@ -36,7 +38,8 @@ export function registerHeadcount(
         channelId,
         createdAt,
         autoEndAt,
-        dungeons
+        dungeons,
+        dungeonCodes,
     });
     
     logger.info('Registered active headcount', {
@@ -114,6 +117,7 @@ export function getActiveHeadcount(
     createdAt: Date;
     autoEndAt: Date;
     dungeons: string[];
+    dungeonCodes: string[];
 } | null {
     const key = `${guildId}:${organizerId}`;
     return activeHeadcounts.get(key) || null;
@@ -131,6 +135,7 @@ export function getAllActiveHeadcounts(): Array<{
     createdAt: Date;
     autoEndAt: Date;
     dungeons: string[];
+    dungeonCodes: string[];
 }> {
     const entries: Array<{
         guildId: string;
@@ -140,6 +145,7 @@ export function getAllActiveHeadcounts(): Array<{
         createdAt: Date;
         autoEndAt: Date;
         dungeons: string[];
+        dungeonCodes: string[];
     }> = [];
 
     for (const [key, value] of activeHeadcounts.entries()) {
@@ -159,6 +165,7 @@ export function getAllActiveHeadcounts(): Array<{
             createdAt: value.createdAt,
             autoEndAt: value.autoEndAt,
             dungeons: value.dungeons,
+            dungeonCodes: value.dungeonCodes,
         });
     }
 

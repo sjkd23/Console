@@ -1,5 +1,5 @@
 import { Client, Guild, type GuildTextBasedChannel } from 'discord.js';
-import { getJSON, postJSON } from './http.js';
+import { getRunDetails, getRunDisplayLabel, postJSON } from './http.js';
 import { createLogger } from '../logging/logger.js';
 
 const logger = createLogger('O3Progression');
@@ -32,16 +32,12 @@ export async function sendO3ProgressionPing(options: O3ProgressionOptions): Prom
 
     try {
         // Fetch run details
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            dungeonLabel: string;
-            dungeonKey: string;
-            roleId: string | null;
-            pingMessageId: string | null;
-            party: string | null;
-            location: string | null;
-        }>(`/runs/${runId}`, { guildId: guild.id });
+        const run = await getRunDetails(runId, guild.id);
+
+        if (run.runKind !== 'oryx_3') {
+            logger.warn('Rejected O3 progression ping for a non-O3 run', { runId, runKind: run.runKind });
+            return null;
+        }
 
         if (!run.channelId || !run.postMessageId) {
             logger.warn('Run missing channel or message ID', { runId });
@@ -79,7 +75,7 @@ export async function sendO3ProgressionPing(options: O3ProgressionOptions): Prom
             content += ` <@&${run.roleId}>`;
         }
 
-        content += `\n\n**${run.dungeonLabel}**`;
+        content += `\n\n**${getRunDisplayLabel(run)}**`;
 
         // Add party/location info if requested and available
         if (includePartyLocation) {

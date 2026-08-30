@@ -12,6 +12,8 @@ interface LockEntry {
     userId: string;
     /** Username for logging */
     username: string;
+    /** Interactive flows release in finally rather than expiring while awaiting input. */
+    holdUntilSettled: boolean;
 }
 
 /**
@@ -67,7 +69,8 @@ class ButtonMutex {
         key: string,
         userId: string,
         username: string,
-        timeoutMs: number = this.DEFAULT_LOCK_TIMEOUT_MS
+        timeoutMs: number = this.DEFAULT_LOCK_TIMEOUT_MS,
+        holdUntilSettled: boolean = false
     ): Promise<LockResult> {
         const now = Date.now();
         const existingLock = this.locks.get(key);
@@ -77,7 +80,7 @@ class ButtonMutex {
             const lockAge = now - existingLock.acquiredAt;
 
             // If lock has expired, remove it and allow acquisition
-            if (lockAge > timeoutMs) {
+            if (!existingLock.holdUntilSettled && lockAge > timeoutMs) {
                 console.log(`[ButtonMutex] Lock expired for ${key}, removing stale lock`);
                 this.locks.delete(key);
             } else {
@@ -94,7 +97,8 @@ class ButtonMutex {
         this.locks.set(key, {
             acquiredAt: now,
             userId,
-            username
+            username,
+            holdUntilSettled,
         });
 
         console.log(`[ButtonMutex] Lock acquired: ${key} by ${username} (${userId})`);
@@ -150,7 +154,7 @@ class ButtonMutex {
         if (!lock) return false;
 
         const lockAge = Date.now() - lock.acquiredAt;
-        if (lockAge > this.DEFAULT_LOCK_TIMEOUT_MS) {
+        if (!lock.holdUntilSettled && lockAge > this.DEFAULT_LOCK_TIMEOUT_MS) {
             // Lock expired
             this.locks.delete(key);
             return false;
@@ -168,7 +172,7 @@ class ButtonMutex {
 
         for (const [key, lock] of this.locks.entries()) {
             const lockAge = now - lock.acquiredAt;
-            if (lockAge > this.DEFAULT_LOCK_TIMEOUT_MS) {
+            if (!lock.holdUntilSettled && lockAge > this.DEFAULT_LOCK_TIMEOUT_MS) {
                 this.locks.delete(key);
                 cleaned++;
             }
@@ -240,13 +244,16 @@ const buttonMutex = new ButtonMutex();
 export async function withButtonLock(
     interaction: ButtonInteraction,
     lockKey: string,
-    action: () => Promise<void>
+    action: () => Promise<void>,
+    options: { holdUntilSettled?: boolean } = {}
 ): Promise<boolean> {
     // Attempt to acquire lock
     const lockResult = await buttonMutex.acquire(
         lockKey,
         interaction.user.id,
-        interaction.user.username
+        interaction.user.username,
+        undefined,
+        options.holdUntilSettled,
     );
 
     if (!lockResult.acquired) {

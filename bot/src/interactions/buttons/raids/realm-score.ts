@@ -8,7 +8,7 @@ import {
     ActionRowBuilder,
     ModalActionRowComponentBuilder 
 } from 'discord.js';
-import { getJSON, patchJSON } from '../../../lib/utilities/http.js';
+import { getRunDetails, getRunDisplayLabel, patchJSON, type RunDetails } from '../../../lib/utilities/http.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { sendRealmScorePing } from '../../../lib/utilities/run-ping.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
@@ -70,18 +70,7 @@ export async function handleRealmScore(btn: ButtonInteraction, runId: string) {
         // Store the realm score in the run (using description field for now, or we could add a new field)
         // For now, we'll just fetch the run and update the embed without storing in DB
         // Fetch full run details to rebuild embed
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            status: string;
-            dungeonKey: string;
-            dungeonLabel: string;
-            organizerId: string;
-            startedAt: string | null;
-            party: string | null;
-            location: string | null;
-            description: string | null;
-        }>(`/runs/${runId}`, { guildId });
+        const run = await getRunDetails(runId, guildId);
 
         if (!run.channelId || !run.postMessageId) {
             await submitted.editReply({ 
@@ -161,21 +150,13 @@ export async function handleRealmScore(btn: ButtonInteraction, runId: string) {
  */
 function buildLiveEmbedWithRealmScore(
     original: any,
-    run: {
-        dungeonKey: string;
-        dungeonLabel: string;
-        organizerId: string;
-        startedAt: string | null;
-        party: string | null;
-        location: string | null;
-        description: string | null;
-    },
+    run: RunDetails,
     realmScore: number
 ): EmbedBuilder {
     const embed = EmbedBuilder.from(original);
 
     // Set title with LIVE badge (no chain tracking for O3)
-    embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}`);
+    embed.setTitle(`🟢 LIVE: ${getRunDisplayLabel(run)}`);
 
     // Build description with organizer and realm score
     let desc = `Organizer: <@${run.organizerId}>`;

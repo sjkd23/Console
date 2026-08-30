@@ -1,7 +1,9 @@
 // bot/src/lib/utilities/early-loc-notifier.ts
 import { Client, ChannelType, EmbedBuilder } from 'discord.js';
 import { createLogger } from '../logging/logger.js';
-import { getJSON, getDungeonRolePings } from './http.js';
+import { getJSON } from './http.js';
+import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
+import { buildRunMessageContent } from './run-message-helpers.js';
 
 const logger = createLogger('EarlyLocNotifier');
 
@@ -33,7 +35,8 @@ export async function sendEarlyLocNotification(
     dungeonLabel: string,
     runChannelId: string | null,
     runMessageId: string | null,
-    notificationData: EarlyLocNotificationData
+    notificationData: EarlyLocNotificationData,
+    selectedDungeons: readonly { dungeonKey: string; dungeonLabel: string }[] = [{ dungeonKey, dungeonLabel }]
 ): Promise<void> {
     if (!notificationData.shouldNotify) {
         logger.debug('No early-loc notification needed', { guildId });
@@ -91,24 +94,21 @@ export async function sendEarlyLocNotification(
             .setTimestamp();
 
         // Check if there's a configured dungeon role ping
-        let content = '';
-        try {
-            const { dungeon_role_pings } = await getDungeonRolePings(guildId);
-            const roleId = dungeon_role_pings[dungeonKey];
-            if (roleId) {
-                content = `<@&${roleId}>`;
-            }
-        } catch (e) {
-            logger.warn('Failed to fetch dungeon role pings for early-loc notification', {
-                guildId,
-                dungeonKey
-            });
-            // Continue without role ping
-        }
+        const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId).catch(() => null);
+        const roleIds = guild
+            ? await resolveDungeonRolePingIds(guild, selectedDungeons.map(dungeon => dungeon.dungeonKey))
+            : [];
+        const content = buildRunMessageContent({
+            selectedDungeons,
+            party: notificationData.party,
+            location: notificationData.location,
+            additionalPingRoleIds: roleIds,
+            includeHere: false,
+        });
 
-        // Send the embed (with optional role ping in content)
+        // Send the embed with a self-contained dungeon/ping summary in content.
         await channel.send({ 
-            content: content || undefined,
+            content,
             embeds: [embed] 
         });
 

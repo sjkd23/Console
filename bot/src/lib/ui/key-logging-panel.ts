@@ -11,17 +11,22 @@ import {
 export interface KeyLoggingState {
     runId: number;
     organizerId: string; // Organizer user ID for logging purposes
-    dungeonKey: string;
     dungeonLabel: string;
-    totalKeys: number;
+    enteredCount: number;
     remainingKeys: number;
+    runBoundAllowance: boolean;
+    loggableDungeons: Array<{ dungeonKey: string; dungeonLabel: string }>;
+    selectedDungeonKey: string | null;
     keyReactionUsers: string[]; // User IDs who pressed key buttons
+    keyReactionUsersByDungeon: Record<string, string[]>;
     userDisplayNames: Map<string, string>; // Map of userId -> display name
     logs: Array<{
         userId: string;
         username: string;
         amount: number;
         pointsAwarded: number;
+        dungeonKey: string;
+        dungeonLabel: string;
     }>;
 }
 
@@ -36,26 +41,34 @@ export function buildKeyLoggingPanel(
     components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[];
 } {
     // Build description with Oryx 3 clarification if applicable
-    let description = `The run has ended. Please log who popped the keys.\n\n`;
+    let description = `The run has ended. Log any actual keys used, or finish early for natural portals.\n\n`;
     
     // Add Oryx 3 specific note
-    if (state.dungeonKey === 'ORYX_3') {
+    if (!state.runBoundAllowance) {
         description += `*Note: For logging purposes, runes and incs are counted as keys.*\n\n`;
     }
     
-    description += `**Total Keys Popped:** ${state.totalKeys}\n` +
-        `**Remaining to Log:** ${state.remainingKeys}\n\n` +
+    description += (state.runBoundAllowance
+        ? `**Dungeon Entries:** ${state.enteredCount}\n` +
+          `**Keys Logged:** ${state.enteredCount - state.remainingKeys}\n` +
+          `**Remaining Possible Key Logs:** ${state.remainingKeys}\n\n`
+        : `**Total Runes/Incs:** ${state.enteredCount}\n**Remaining to Log:** ${state.remainingKeys}\n\n`) +
+        (state.loggableDungeons.length > 1
+            ? `**Key Dungeon:** ${state.selectedDungeonKey
+                ? state.loggableDungeons.find(dungeon => dungeon.dungeonKey === state.selectedDungeonKey)?.dungeonLabel ?? 'Unknown'
+                : 'Select a dungeon below'}\n\n`
+            : '') +
         (state.logs.length > 0
-            ? `**Keys Logged:**\n${state.logs
+            ? `**Log Details:**\n${state.logs
                   .map(
                       (log) =>
-                          `• <@${log.userId}> — ${log.amount} key${log.amount > 1 ? 's' : ''} (+${Number(log.pointsAwarded).toFixed(2)} pts)`
+                          `• <@${log.userId}> - ${log.amount} ${log.dungeonLabel} key${log.amount > 1 ? 's' : ''} (+${Number(log.pointsAwarded).toFixed(2)} pts)`
                   )
                   .join('\n')}`
             : '⏳ No keys logged yet.');
 
     const embed = new EmbedBuilder()
-        .setTitle(`🔑 Log Keys — ${state.dungeonLabel}`)
+        .setTitle(`🔑 Log Keys - ${state.dungeonLabel}`)
         .setDescription(description)
         .setColor(0xfee75c) // Gold color for keys
         .setTimestamp(new Date());
@@ -64,9 +77,26 @@ export function buildKeyLoggingPanel(
 
     // If there are remaining keys, show controls
     if (state.remainingKeys > 0) {
+        if (state.loggableDungeons.length > 1) {
+            const dungeonMenu = new StringSelectMenuBuilder()
+                .setCustomId(`keylog:selectdungeon:${state.runId}`)
+                .setPlaceholder('Select the physical key used')
+                .addOptions(state.loggableDungeons.map(dungeon =>
+                    new StringSelectMenuOptionBuilder()
+                        .setLabel(dungeon.dungeonLabel)
+                        .setValue(dungeon.dungeonKey)
+                        .setDefault(dungeon.dungeonKey === state.selectedDungeonKey)
+                ));
+            components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(dungeonMenu));
+        }
+
+        const hasSelectedDungeon = state.selectedDungeonKey !== null;
+        const selectedKeyReactionUsers = state.selectedDungeonKey
+            ? (state.keyReactionUsersByDungeon[state.selectedDungeonKey] ?? state.keyReactionUsers)
+            : [];
         // Row 1: User selection dropdown (only users who pressed key buttons)
-        if (state.keyReactionUsers.length > 0) {
-            const userOptions = state.keyReactionUsers.slice(0, 25).map((userId) => {
+        if (hasSelectedDungeon && selectedKeyReactionUsers.length > 0) {
+            const userOptions = selectedKeyReactionUsers.slice(0, 25).map((userId) => {
                 const displayName = state.userDisplayNames.get(userId) || userId;
                 return new StringSelectMenuOptionBuilder()
                     .setLabel(displayName)
@@ -90,10 +120,11 @@ export function buildKeyLoggingPanel(
                 .setCustomId(`keylog:custom:${state.runId}`)
                 .setLabel('Custom Name')
                 .setStyle(ButtonStyle.Secondary)
-                .setEmoji('✏️'),
+                .setEmoji('✏️')
+                .setDisabled(!hasSelectedDungeon),
             new ButtonBuilder()
                 .setCustomId(`keylog:cancel:${state.runId}`)
-                .setLabel('Cancel Remaining Keys')
+                .setLabel('Finish Key Logging')
                 .setStyle(ButtonStyle.Danger)
         );
 
@@ -103,15 +134,15 @@ export function buildKeyLoggingPanel(
         let completionDescription = `✅ All keys have been logged!\n\n`;
         
         // Add Oryx 3 specific note
-        if (state.dungeonKey === 'ORYX_3') {
+        if (!state.runBoundAllowance) {
             completionDescription += `*Note: For logging purposes, runes and incs are counted as keys.*\n\n`;
         }
         
-        completionDescription += `**Total Keys Popped:** ${state.totalKeys}\n\n` +
+        completionDescription += `${state.runBoundAllowance ? '**Dungeon Entries:**' : '**Total Runes/Incs:**'} ${state.enteredCount}\n\n` +
             `**Keys Logged:**\n${state.logs
                 .map(
                     (log) =>
-                        `• <@${log.userId}> — ${log.amount} key${log.amount > 1 ? 's' : ''} (+${log.pointsAwarded.toFixed(2)} pts)`
+                        `• <@${log.userId}> - ${log.amount} ${log.dungeonLabel} key${log.amount > 1 ? 's' : ''} (+${log.pointsAwarded.toFixed(2)} pts)`
                 )
                 .join('\n')}`;
         
@@ -145,7 +176,7 @@ export function buildKeyCountMenu(
     components: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[];
 } {
     const embed = new EmbedBuilder()
-        .setTitle(`🔑 Log Keys — ${dungeonLabel}`)
+        .setTitle(`🔑 Log Keys - ${dungeonLabel}`)
         .setDescription(
             `How many keys did <@${userId}> pop?\n\n` +
             `Select the number of keys below (1-${maxKeys}).`
@@ -198,7 +229,7 @@ export function buildCustomNameFeedback(
     components: ActionRowBuilder<ButtonBuilder>[];
 } {
     const embed = new EmbedBuilder()
-        .setTitle(`🔑 Log Keys — ${dungeonLabel}`)
+        .setTitle(`🔑 Log Keys - ${dungeonLabel}`)
         .setColor(0xfee75c)
         .setTimestamp(new Date());
 

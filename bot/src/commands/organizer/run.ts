@@ -1,25 +1,22 @@
 import {
     SlashCommandBuilder,
-    ChatInputCommandInteraction,
-    AutocompleteInteraction,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    MessageFlags
+    type ChatInputCommandInteraction,
+    type AutocompleteInteraction,
+    MessageFlags,
+    type Guild,
+    type GuildMember,
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
-import { postJSON, getDungeonRolePings } from '../../lib/utilities/http.js';
+import { createRun, deleteJSON, postJSON } from '../../lib/utilities/http.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
+import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import { addRecentDungeon } from '../../lib/utilities/dungeon-cache.js';
-import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
 import { ensureGuildContext, fetchGuildMember } from '../../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import { handleDungeonAutocomplete } from '../../lib/utilities/dungeon-autocomplete.js';
-import { formatKeyLabel } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
-import { createRunRole } from '../../lib/utilities/run-role-manager.js';
+import { createRunRole, deleteRunRole } from '../../lib/utilities/run-role-manager.js';
 import { createLogger } from '../../lib/logging/logger.js';
 import { getDefaultAutoEndMinutes } from '../../config/raid-config.js';
 import { addRunReactions } from '../../lib/utilities/run-reactions.js';
@@ -29,6 +26,13 @@ import { sendRunOrganizerPanelAsFollowUp } from '../../interactions/buttons/raid
 import { buildRunEmbed, buildRunButtons } from '../../lib/utilities/run-panel-builder.js';
 import { autoJoinOrganizerToRun } from '../../lib/utilities/auto-join-helpers.js';
 import { sendEarlyLocNotification } from '../../lib/utilities/early-loc-notifier.js';
+import {
+    buildDungeonSelectionSuccessState,
+    collectDungeonSelection,
+} from '../../lib/ui/dungeon-selection-panel.js';
+import { classifyRunDungeons, type RunKind } from '../../constants/dungeons/dungeon-taxonomy.js';
+import { resolveDungeonRolePingIds } from '../../lib/utilities/dungeon-role-pings.js';
+import { buildRunLifecycleMessageContent } from '../../lib/utilities/run-message-helpers.js';
 
 const logger = createLogger('RunCreate');
 
@@ -36,260 +40,211 @@ export const runCreate: SlashCommand = {
     requiredRole: 'organizer',
     data: new SlashCommandBuilder()
         .setName('run')
-        .setDescription('Create a new run (posts to this channel).')
-        .addStringOption(o =>
-            o.setName('dungeon')
-                .setDescription('Choose a dungeon')
-                .setRequired(true)
-                .setAutocomplete(true)
-        )
-        .addStringOption(o =>
-            o.setName('party').setDescription('Party name (optional)')
-        )
-        .addStringOption(o =>
-            o.setName('location').setDescription('Location/server (optional)')
-        )
-        .addStringOption(o =>
-            o.setName('description').setDescription('Run description (optional)')
-        ),
+        .setDescription('Create a new run (posts to the configured raid channel).')
+        .addStringOption(option => option
+            .setName('dungeon')
+            .setDescription('Choose a dungeon, or omit to select up to five')
+            .setRequired(false)
+            .setAutocomplete(true))
+        .addStringOption(option => option.setName('party').setDescription('Party name (optional)'))
+        .addStringOption(option => option.setName('location').setDescription('Location/server (optional)'))
+        .addStringOption(option => option.setName('description').setDescription('Run description (optional)')),
 
-    // Slash action
     async run(interaction: ChatInputCommandInteraction): Promise<void> {
-        // CRITICAL: Defer immediately to prevent timeout under load
-        // All validation and async work happens after deferring
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
         const guild = await ensureGuildContext(interaction);
         if (!guild) return;
-
-        // Fetch member for role IDs (permission check done by middleware)
         const member = await fetchGuildMember(guild, interaction.user.id);
         if (!member) {
             await interaction.editReply('Could not fetch your member information.');
             return;
         }
 
-        const codeName = interaction.options.getString('dungeon', true);
-        const d = dungeonByCode[codeName];
-
-        if (!d) {
-            await interaction.editReply('Unknown dungeon name. Try again.');
-            return;
-        }
-
-        const desc = interaction.options.getString('description') || undefined;
-        const party = interaction.options.getString('party') || undefined;
-        const location = interaction.options.getString('location') || undefined;
-
-        // Check if organizer has any active runs or headcounts
         const activityCheck = await checkOrganizerActiveActivities(interaction, guild.id, interaction.user.id);
         if (activityCheck.errorMessage) {
             await interaction.editReply(activityCheck.errorMessage);
             return;
         }
 
-        // Track this dungeon as recently used for this guild
-        addRecentDungeon(guild.id, codeName);
-
-        // Create the temporary role for this run
-        const role = await createRunRole(guild, interaction.user.username, d.dungeonName);
-        if (!role) {
-            await interaction.editReply(
-                '**Warning:** Failed to create the run role. The run will still be created, but members won\'t be automatically assigned a role.'
-            );
-            // Continue anyway - role creation failure shouldn't block run creation
-        }
-
-        // Must be in a guild context
-        if (!interaction.inGuild()) {
-            await interaction.editReply(
-                'This command can only be used in a server.'
-            );
-            return;
-        }
-
-        // Get the configured raid channel using helper
-        const raidChannel = await fetchConfiguredRaidChannel(guild, interaction);
-        if (!raidChannel) {
-            // Error already sent by helper
-            return;
-        }
-
-        // Create DB run with the correct raid channel ID
-        try {
-            const createResponse = await postJSON<{ runId: number; earlyLocNotification?: any }>('/runs', {
-                guildId: guild.id,
-                guildName: guild.name,
-                organizerId: interaction.user.id,
-                organizerUsername: interaction.user.username,
-                organizerRoles: getMemberRoleIds(member),
-                channelId: raidChannel.id, // Use the configured raid channel ID
-                dungeonKey: d.codeName,      // stable key in DB
-                dungeonLabel: d.dungeonName, // human label in DB
-                description: desc,
-                party,
-                location,
-                autoEndMinutes: getDefaultAutoEndMinutes(),
-                roleId: role?.id // Store the created role ID
-            }, { guildId: guild.id });
-
-            const runId = createResponse.runId;
-            const earlyLocNotification = createResponse.earlyLocNotification;
-
-            // Build the public embed and buttons using universal helpers
-            const embed = buildRunEmbed({
-                dungeonData: d,
-                organizerId: interaction.user.id,
-                status: 'starting',
-                description: desc
-            });
-
-            const components = buildRunButtons({
-                runId: runId,
-                dungeonData: d,
-                joinLocked: false // New runs start with join unlocked
-            });
-
-            // Build message content with @here and dungeon role pings
-            let content = '@here';
-            
-            // Check if there's a configured role ping for this dungeon
-            try {
-                const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
-                const roleId = dungeon_role_pings[codeName];
-                if (roleId) {
-                    content += ` <@&${roleId}>`;
-                }
-            } catch (e) {
-                logger.warn('Failed to fetch dungeon role pings', { 
-                    guildId: guild.id, 
-                    dungeonCode: codeName,
-                    error: e instanceof Error ? e.message : String(e)
-                });
-                // Continue without custom role ping
+        const codeName = interaction.options.getString('dungeon');
+        const usedSelector = !codeName;
+        let selectedDungeons: DungeonInfo[];
+        if (codeName) {
+            const dungeon = dungeonByCode[codeName];
+            if (!dungeon) {
+                await interaction.editReply('Unknown dungeon name. Try again.');
+                return;
             }
-
-            const sent = await raidChannel.send({
-                content,
-                embeds: [embed],
-                components: components
-            });
-
-            // NEW: tell backend the message id we just posted
-            try {
-                await postJSON(`/runs/${runId}/message`, { postMessageId: sent.id }, { guildId: guild.id });
-            } catch (e) {
-                logger.error('Failed to store post_message_id', { 
-                    guildId: guild.id,
-                    runId: runId,
-                    messageId: sent.id,
-                    error: e instanceof Error ? e.message : String(e)
-                });
-            }
-
-            // Reply immediately with the run link
-            await interaction.editReply(
-                `Run created${sent ? ` and posted: ${sent.url}` : ''}`
-            );
-
-            // Show the organizer panel IMMEDIATELY as a followUp
-            // This uses the shared helper which registers the panel for live updates
-            // The panel will auto-refresh when auto-join completes
-            await sendRunOrganizerPanelAsFollowUp(interaction, runId, guild.id);
-
-            // Run all background tasks in parallel (don't block the user experience)
-            // These will complete after the panel is already visible to the user
-            Promise.all([
-                // Auto-join organizer (updates DB, assigns role, updates embed)
-                autoJoinOrganizerToRun(
-                    interaction.client,
-                    guild,
-                    sent,
-                    runId,
-                    interaction.user.id,
-                    interaction.user.username,
-                    d.codeName,
-                    d.dungeonName,
-                    role?.id || null
-                ).catch(err => {
-                    logger.error('Failed to auto-join organizer to run', { 
-                        err, guildId: guild.id, runId 
-                    });
-                }),
-                
-                // Add reactions to the run message
-                addRunReactions(sent, d.codeName).catch(err => {
-                    logger.error('Failed to add reactions to run message', {
-                        guildId: guild.id,
-                        runId: runId,
-                        messageId: sent.id,
-                        dungeonKey: d.codeName,
-                        error: err instanceof Error ? err.message : String(err)
-                    });
-                }),
-                
-                // Send early-loc notification if party/location were set
-                earlyLocNotification ? sendEarlyLocNotification(
-                    interaction.client,
-                    guild.id,
-                    interaction.user.id,
-                    d.codeName,
-                    d.dungeonName,
-                    raidChannel.id,
-                    sent.id,
-                    earlyLocNotification
-                ).catch(err => {
-                    logger.error('Failed to send early-loc notification', { 
-                        err, guildId: guild.id, runId 
-                    });
-                }) : Promise.resolve()
-            ]).catch(err => {
-                // Catch any unhandled errors in the parallel batch
-                logger.error('Error in background tasks after run creation', { 
-                    err, guildId: guild.id, runId 
-                });
-            });
-
-            // Log the run creation to raid-log channel
-            try {
-                await logRaidCreation(
-                    interaction.client,
-                    {
-                        guildId: guild.id,
-                        organizerId: interaction.user.id,
-                        organizerUsername: interaction.user.username,
-                        dungeonName: d.dungeonName,
-                        type: 'run',
-                        runId: runId
-                    },
-                    {
-                        party,
-                        location,
-                        description: desc
+            selectedDungeons = [dungeon];
+        } else {
+            const selected = await collectDungeonSelection(interaction, {
+                namespace: 'run-select',
+                title: 'Select dungeons for the run',
+                instructions: 'Choose one dungeon, 2–5 exalts, or 2–5 non-exalts. Realm Clearing may accompany non-exalts; Oryx 3 must be alone.',
+                confirmLabel: 'Create Run',
+                validate: dungeons => {
+                    try {
+                        classifyRunDungeons(dungeons);
+                        return null;
+                    } catch (error) {
+                        return error instanceof Error ? error.message : 'Invalid dungeon selection.';
                     }
-                );
-            } catch (e) {
-                logger.error('Failed to log run creation to raid-log', { 
-                    guildId: guild.id,
-                    runId: runId,
-                    dungeonName: d.dungeonName,
-                    error: e instanceof Error ? e.message : String(e)
-                });
-            }
-        } catch (err) {
-            const errorMessage = formatErrorMessage({
-                error: err,
-                baseMessage: 'Failed to create run',
-                errorHandlers: {
-                    'NOT_ORGANIZER': '**Issue:** You don\'t have the Organizer role configured for this server.\n\n**What to do:**\n• Ask a server admin to use `/setroles` to set up the Organizer role\n• Make sure you have the Discord role that\'s mapped to Organizer\n• Once roles are configured, try creating your run again',
                 },
             });
-            await interaction.editReply(errorMessage);
+            if (!selected) return;
+            selectedDungeons = selected;
+
+            const confirmCheck = await checkOrganizerActiveActivities(interaction, guild.id, interaction.user.id);
+            if (confirmCheck.errorMessage) {
+                await interaction.editReply({ content: confirmCheck.errorMessage, components: [] });
+                return;
+            }
         }
+
+        await createRunFromSelection(interaction, guild, member, selectedDungeons, usedSelector);
     },
 
-    // Autocomplete handler
     async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
         await handleDungeonAutocomplete(interaction);
-    }
+    },
 };
+
+function getRoleLabel(runKind: RunKind, selectedDungeons: readonly DungeonInfo[]): string {
+    if (runKind === 'multi_exalt') return 'Multi Exalt';
+    if (runKind === 'multi_non_exalt') return 'Multi Dungeon';
+    if (runKind === 'realm_clearing') return 'Realm Clearing';
+    return selectedDungeons[0].dungeonName;
+}
+
+async function createRunFromSelection(
+    interaction: ChatInputCommandInteraction,
+    guild: Guild,
+    member: GuildMember,
+    selectedDungeons: DungeonInfo[],
+    usedSelector: boolean
+): Promise<void> {
+    const classification = classifyRunDungeons(selectedDungeons);
+    const description = interaction.options.getString('description') || undefined;
+    const party = interaction.options.getString('party') || undefined;
+    const location = interaction.options.getString('location') || undefined;
+
+    const raidChannel = await fetchConfiguredRaidChannel(guild, interaction);
+    if (!raidChannel) return;
+
+    for (const dungeon of selectedDungeons) addRecentDungeon(guild.id, dungeon.codeName);
+
+    const role = await createRunRole(guild, interaction.user.username, getRoleLabel(classification.runKind, selectedDungeons));
+    if (!role) {
+        await interaction.editReply('**Warning:** Failed to create the run role. The run will still be created, but members will not be automatically assigned a role.');
+    }
+
+    let backendRunId: number | null = null;
+    let published = false;
+    try {
+        const created = await createRun({
+            guildId: guild.id,
+            guildName: guild.name,
+            organizerId: interaction.user.id,
+            organizerUsername: interaction.user.username,
+            organizerRoles: getMemberRoleIds(member),
+            channelId: raidChannel.id,
+            selectedDungeonKeys: selectedDungeons.map(dungeon => dungeon.codeName),
+            description,
+            party,
+            location,
+            autoEndMinutes: getDefaultAutoEndMinutes(),
+            roleId: role?.id,
+        });
+        backendRunId = created.runId;
+
+        const normalizedDungeons = created.selectedDungeons.map(selection => {
+            const dungeon = dungeonByCode[selection.dungeonKey];
+            return dungeon ? { ...dungeon, dungeonName: selection.dungeonLabel } : undefined;
+        });
+        if (normalizedDungeons.some(dungeon => dungeon === undefined)) {
+            throw new Error('Backend returned a dungeon that is missing from bot metadata.');
+        }
+        const presentationDungeons = normalizedDungeons as DungeonInfo[];
+        const embed = buildRunEmbed({
+            dungeonData: presentationDungeons,
+            runKind: created.runKind,
+            organizerId: interaction.user.id,
+            status: 'starting',
+            description,
+        });
+        const components = buildRunButtons({
+            runId: created.runId,
+            dungeonData: presentationDungeons,
+            runKind: created.runKind,
+            joinLocked: false,
+        });
+        const rolePingIds = await resolveDungeonRolePingIds(guild, created.selectedDungeons.map(dungeon => dungeon.dungeonKey));
+        const sent = await raidChannel.send({
+            content: buildRunLifecycleMessageContent({
+                selectedDungeons: created.selectedDungeons,
+                party,
+                location,
+            }, {
+                additionalPingRoleIds: rolePingIds,
+            }),
+            embeds: [embed],
+            components,
+        });
+        try {
+            await postJSON(`/runs/${created.runId}/message`, { postMessageId: sent.id }, { guildId: guild.id });
+        } catch (error) {
+            await sent.delete().catch(() => undefined);
+            throw error;
+        }
+        published = true;
+        await interaction.editReply(usedSelector
+            ? buildDungeonSelectionSuccessState(sent.url)
+            : `Run created and posted: ${sent.url}`);
+        await sendRunOrganizerPanelAsFollowUp(interaction, created.runId, guild.id);
+
+        const displayLabel = created.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
+        Promise.all([
+            autoJoinOrganizerToRun(
+                interaction.client, guild, sent, created.runId, interaction.user.id, interaction.user.username,
+                created.dungeonKey, displayLabel, role?.id || null
+            ),
+            addRunReactions(sent, created.dungeonKey),
+            created.earlyLocNotification
+                ? sendEarlyLocNotification(
+                    interaction.client, guild.id, interaction.user.id, created.dungeonKey, displayLabel,
+                    raidChannel.id, sent.id, created.earlyLocNotification,
+                    created.selectedDungeons
+                )
+                : Promise.resolve(),
+        ]).catch(error => logger.error('Error in background tasks after run creation', { error, runId: created.runId }));
+
+        await logRaidCreation(interaction.client, {
+            guildId: guild.id,
+            organizerId: interaction.user.id,
+            organizerUsername: interaction.user.username,
+            dungeonName: displayLabel,
+            type: 'run',
+            runId: created.runId,
+        }, { party, location, description }).catch(error => {
+            logger.error('Failed to log run creation', { error, runId: created.runId });
+        });
+    } catch (error) {
+        if (backendRunId !== null && !published) {
+            await deleteJSON(`/runs/${backendRunId}`, {
+                actorId: interaction.user.id,
+                actorRoles: getMemberRoleIds(member),
+            }, { guildId: guild.id }).catch(rollbackError => {
+                logger.error('Failed to cancel an unpublished run during rollback', { runId: backendRunId, rollbackError });
+            });
+        }
+        if (role && !published) await deleteRunRole(guild, role.id);
+        const errorMessage = formatErrorMessage({
+            error,
+            baseMessage: 'Failed to create run',
+            errorHandlers: {
+                NOT_ORGANIZER: 'You must have the configured Organizer role to create runs.',
+            },
+        });
+        await interaction.editReply(errorMessage);
+    }
+}

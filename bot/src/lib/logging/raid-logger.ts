@@ -337,7 +337,7 @@ export async function logRunInfoUpdate(
 }
 
 /**
- * Log key window activation
+ * Log a run's dungeon-entered join-window activation.
  */
 export async function logKeyWindow(
     client: Client,
@@ -346,7 +346,7 @@ export async function logKeyWindow(
     duration: number
 ): Promise<void> {
     const embed = new EmbedBuilder()
-        .setTitle('🔑 Key Popped')
+        .setTitle('🚪 Dungeon Entered')
         .setDescription(
             `<@${userId}> activated the key window (${duration} seconds)\n` +
             `Party join window is now open!`

@@ -781,6 +781,31 @@ export async function getQuotaRoleForDungeon(
 }
 
 /**
+ * Resolve organizer quota from the configured base category only.
+ * This deliberately bypasses all physical dungeon overrides.
+ */
+export async function getQuotaRoleForBaseCategory(
+    guildId: string,
+    category: 'exalt' | 'non_exalt',
+    userRoleIds: string[],
+    userRolePositions?: Record<string, number>
+): Promise<{ roleId: string; points: number } | null> {
+    if (userRoleIds.length === 0) return null;
+
+    const field = category === 'exalt' ? 'base_exalt_points' : 'base_non_exalt_points';
+    const candidates = (await getAllQuotaRoleConfigs(guildId))
+        .filter(config => userRoleIds.includes(config.discord_role_id))
+        .map(config => ({ roleId: config.discord_role_id, points: config[field] }))
+        .filter(candidate => candidate.points > 0)
+        .sort((a, b) => {
+            if (b.points !== a.points) return b.points - a.points;
+            return (userRolePositions?.[b.roleId] ?? 0) - (userRolePositions?.[a.roleId] ?? 0);
+        });
+
+    return candidates[0] ?? null;
+}
+
+/**
  * Log a quota event for a guild member.
  * This is an append-only operation that tracks points earned for actions.
  * 
@@ -1211,7 +1236,7 @@ export async function snapshotRaidersAtKeyPop(
 
 /**
  * Award completion points to raiders from a specific key pop snapshot.
- * This should be called when the next key pops OR when the run ends (for the last snapshot).
+ * This should be called on the next Dungeon Entered event or when the run ends (for the last snapshot).
  * 
  * @deprecated Use QuotaService.awardRaidersQuotaFromSnapshot instead for run lifecycle operations.
  * This function is kept for backward compatibility and manual operations only.

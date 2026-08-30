@@ -11,13 +11,21 @@ import {
     ChatInputCommandInteraction,
     ModalSubmitInteraction
 } from 'discord.js';
-import { getParticipants, getOrganizerId } from '../../../lib/state/headcount-state.js';
+import {
+    getParticipants,
+    getOrganizerId,
+    resolveHeadcountDungeonCodes,
+} from '../../../lib/state/headcount-state.js';
 import { getKeyOffers } from './headcount-key.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
-import { registerHeadcountPanel, HeadcountOrganizerPanelHandle } from '../../../lib/state/headcount-panel-tracker.js';
+import {
+    registerHeadcountPanel,
+    refreshRegisteredHeadcountPanel,
+    type HeadcountOrganizerPanelHandle,
+} from '../../../lib/state/headcount-panel-tracker.js';
 
 /**
  * Format key type for user-friendly display
@@ -47,6 +55,23 @@ function getEmojiDisplayForKeyType(keyType: string): string {
     }
 
     return idOrChar;
+}
+
+function extractLegacyDungeonCodes(publicMsg: Message): string[] {
+    const codes: string[] = [];
+    for (const row of publicMsg.components) {
+        if (!('components' in row)) continue;
+        for (const component of row.components) {
+            if (!('customId' in component) || !component.customId?.startsWith('headcount:key:')) continue;
+            const dungeonCode = component.customId.split(':')[3];
+            if (dungeonCode && !codes.includes(dungeonCode)) codes.push(dungeonCode);
+        }
+    }
+    return codes;
+}
+
+function getOrganizerPanelDungeonCodes(publicMsg: Message): string[] {
+    return resolveHeadcountDungeonCodes(publicMsg.id, extractLegacyDungeonCodes(publicMsg));
 }
 
 /**
@@ -160,17 +185,19 @@ export async function updateHeadcountOrganizerPanel(
             components: content.components
         };
 
-        switch (handle.type) {
-            case 'interactionReply':
-                await handle.interaction.editReply(updateContent);
-                break;
-            case 'followup':
-                await handle.webhook.editMessage(handle.messageId, updateContent);
-                break;
-            case 'publicMessage':
-                await handle.message.edit(updateContent);
-                break;
-        }
+        await refreshRegisteredHeadcountPanel(publicMsg.id, handle, async () => {
+            switch (handle.type) {
+                case 'interactionReply':
+                    await handle.interaction.editReply(updateContent);
+                    break;
+                case 'followup':
+                    await handle.webhook.editMessage(handle.messageId, updateContent);
+                    break;
+                case 'publicMessage':
+                    await handle.message.edit(updateContent);
+                    break;
+            }
+        });
     } catch (err) {
         // Panel might be deleted or ephemeral expired
         console.error('Failed to update headcount organizer panel:', err);
@@ -193,24 +220,28 @@ export async function showHeadcountPanel(
     const content = buildHeadcountOrganizerPanelContent(publicMsg, embed, dungeonCodes);
 
     // Send or update the panel
+    let panelMessage: Message;
     if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({
+        panelMessage = await interaction.editReply({
             embeds: content.embeds,
             components: content.components
         });
     } else {
-        await interaction.reply({
+        const response = await interaction.reply({
             embeds: content.embeds,
             components: content.components,
-            flags: MessageFlags.Ephemeral
+            flags: MessageFlags.Ephemeral,
+            withResponse: true,
         });
+        panelMessage = response.resource?.message ?? await interaction.fetchReply();
     }
     
     // Register this panel for auto-refresh when keys are reacted
     // Store as an interactionReply handle since this was created via interaction.reply()
     registerHeadcountPanel(publicMsg.id, {
         type: 'interactionReply',
-        interaction
+        interaction,
+        messageId: panelMessage.id,
     });
 }
 
@@ -279,21 +310,7 @@ export async function handleHeadcountOrganizerPanel(btn: ButtonInteraction, pane
         return;
     }
 
-    // Extract dungeon codes from the button components
-    const dungeonCodes: string[] = [];
-    for (const row of publicMsg.components) {
-        if ('components' in row) {
-            for (const component of row.components) {
-                if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
-                    const parts = component.customId.split(':');
-                    const dungeonCode = parts[3];
-                    if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
-                        dungeonCodes.push(dungeonCode);
-                    }
-                }
-            }
-        }
-    }
+    const dungeonCodes = getOrganizerPanelDungeonCodes(publicMsg);
 
     // Original organizer - show panel directly
     await showHeadcountPanel(btn, publicMsg, embed, organizerId, dungeonCodes);
@@ -349,21 +366,7 @@ export async function handleHeadcountOrganizerPanelConfirm(btn: ButtonInteractio
         return;
     }
 
-    // Extract dungeon codes from the button components
-    const dungeonCodes: string[] = [];
-    for (const row of publicMsg.components) {
-        if ('components' in row) {
-            for (const component of row.components) {
-                if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
-                    const parts = component.customId.split(':');
-                    const dungeonCode = parts[3];
-                    if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
-                        dungeonCodes.push(dungeonCode);
-                    }
-                }
-            }
-        }
-    }
+    const dungeonCodes = getOrganizerPanelDungeonCodes(publicMsg);
 
     // Show the full headcount panel
     await showHeadcountPanel(btn, publicMsg, embed, organizerId, dungeonCodes);

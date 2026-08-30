@@ -43,6 +43,10 @@ import {
     manuallyResetQuotaPeriod,
     markQuotaLogAttempt,
 } from '../../lib/services/quota-period-service.js';
+import {
+    logRunPhysicalKeys,
+    RunPhysicalKeyLogError,
+} from '../../lib/runs/run-physical-key-logging.js';
 
 const logger = createLogger('Quota');
 const quotaService = new QuotaService();
@@ -72,6 +76,15 @@ const LogKeyBody = z.object({
     userRoles: z.array(zSnowflake).optional(), // Optional roles for the user (to check verification status)
     dungeonKey: z.string(), // The dungeon the key is for
     amount: z.number().int().default(1), // Can be negative to remove key pops
+    runId: z.string().regex(/^\d+$/).optional(),
+    interactionId: zSnowflake.optional(),
+}).superRefine((value, context) => {
+    if ((value.runId === undefined) !== (value.interactionId === undefined)) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'runId and interactionId must be provided together',
+        });
+    }
 });
 
 export default async function quotaRoutes(app: FastifyInstance) {
@@ -243,7 +256,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             return Errors.validation(reply, msg);
         }
 
-        const { actorId, actorRoles, guildId, userId, username, userRoles, dungeonKey, amount } = parsed.data;
+        const { actorId, actorRoles, guildId, userId, username, userRoles, dungeonKey, amount, runId, interactionId } = parsed.data;
 
         // Authorization: actor must have organizer role or higher
         const hasOrganizerRole = await hasInternalRole(guildId, actorId, 'organizer', actorRoles);
@@ -288,6 +301,28 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         try {
+            if (runId && interactionId) {
+                if (amount < 1) return Errors.validation(reply, 'Run key log amount must be positive.');
+                const pointsPerKey = await getKeyPopPointsForDungeon(guildId, dungeonKey);
+                const result = await withTransaction(client => logRunPhysicalKeys({
+                    runId,
+                    guildId,
+                    userId,
+                    dungeonKey,
+                    amount,
+                    interactionId,
+                    pointsPerKey,
+                }, client));
+                return reply.code(200).send({
+                    logged: result.logged,
+                    new_total: result.newTotal,
+                    points_awarded: result.pointsAwarded,
+                    user_id: userId,
+                    remaining_allowance: result.remainingAllowance,
+                    duplicate: result.duplicate,
+                });
+            }
+
             // For now, we'll use a generic 'key' as the key_type
             // In the future, this could be enhanced to track specific key types (Shield Rune, etc.)
             const keyType = 'key';
@@ -372,6 +407,9 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 user_id: userId,
             });
         } catch (err) {
+            if (err instanceof RunPhysicalKeyLogError) {
+                return Errors.validation(reply, err.message);
+            }
             logger.error({ err, guildId, userId, dungeonKey }, 'Failed to manually log key pops');
             return Errors.internal(reply, 'Failed to log key pops');
         }

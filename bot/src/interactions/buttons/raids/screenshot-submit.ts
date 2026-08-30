@@ -1,6 +1,6 @@
 import { ButtonInteraction, MessageFlags } from 'discord.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { getJSON } from '../../../lib/utilities/http.js';
+import { getRunDetails } from '../../../lib/utilities/http.js';
 
 /**
  * Handle the "Submit Screenshot" button click.
@@ -17,13 +17,7 @@ export async function handleScreenshotButton(btn: ButtonInteraction, runId: stri
     }
 
     // Fetch run details
-    const run = await getJSON<{
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.reply({

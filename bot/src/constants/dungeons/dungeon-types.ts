@@ -1,6 +1,8 @@
 // Discord Snowflake helper (typed string)
 export type Snowflake = `${bigint}` | string;
 
+export type DungeonSelectionClass = 'exalt' | 'non_exalt' | 'realm_clearing' | 'oryx_3';
+
 /** Shared reaction entry (used by keyReactions & otherReactions) */
 export interface ReactionRequirement {
     mapKey: string;

@@ -142,7 +142,7 @@ export async function recoverHistoricalZeroPointActivity(
         `WITH organizer_key_pop AS (
              SELECT 'organizer_key_pop'::text AS candidate_class,
                     run.guild_id, run.organizer_id AS user_id, run.id AS run_id,
-                    run.dungeon_key AS dungeon_stats_key, pop.number AS key_pop_number,
+                    run.activity_key AS dungeon_stats_key, pop.number AS key_pop_number,
                     COALESCE(MIN(snapshot.snapshot_time), run.ended_at) AS occurred_at,
                     CASE
                         WHEN run.organizer_id IS NOT NULL AND run.status = 'ended' AND run.ended_at IS NOT NULL
@@ -153,7 +153,7 @@ export async function recoverHistoricalZeroPointActivity(
              CROSS JOIN LATERAL generate_series(1, run.key_pop_count) AS pop(number)
              LEFT JOIN key_pop_snapshot AS snapshot
                ON snapshot.run_id = run.id AND snapshot.key_pop_number = pop.number
-             WHERE run.dungeon_key <> 'ORYX_3'
+             WHERE run.run_kind <> 'oryx_3'
                AND run.status = 'ended'
                AND ($1::bigint IS NULL OR run.guild_id = $1::bigint)
                AND NOT EXISTS (
@@ -165,13 +165,13 @@ export async function recoverHistoricalZeroPointActivity(
          ), o3_organizer AS (
              SELECT 'o3_organizer'::text AS candidate_class,
                     run.guild_id, run.organizer_id AS user_id, run.id AS run_id,
-                    run.dungeon_key AS dungeon_stats_key, NULL::integer AS key_pop_number,
+                    run.activity_key AS dungeon_stats_key, NULL::integer AS key_pop_number,
                     run.ended_at AS occurred_at,
                     CASE WHEN run.organizer_id IS NOT NULL AND run.ended_at IS NOT NULL
                          THEN 'proven' ELSE 'ambiguous' END AS decision,
                     'ended ORYX_3 state is the persisted state that triggers the current organizer award'::text AS proof
              FROM run
-             WHERE run.dungeon_key = 'ORYX_3'
+             WHERE run.run_kind = 'oryx_3'
                AND run.status = 'ended'
                AND ($1::bigint IS NULL OR run.guild_id = $1::bigint)
                AND NOT EXISTS (
@@ -181,7 +181,7 @@ export async function recoverHistoricalZeroPointActivity(
          ), snapshot_raider AS (
              SELECT 'snapshot_raider'::text AS candidate_class,
                     run.guild_id, snapshot.user_id, run.id AS run_id,
-                    run.dungeon_key AS dungeon_stats_key,
+                    run.activity_key AS dungeon_stats_key,
                     snapshot.key_pop_number, snapshot.snapshot_time AS occurred_at,
                     CASE
                         WHEN snapshot.key_pop_number <= run.key_pop_count
@@ -203,13 +203,14 @@ export async function recoverHistoricalZeroPointActivity(
          ), participant_raider AS (
              SELECT DISTINCT 'participant_raider'::text AS candidate_class,
                     run.guild_id, reaction.user_id, run.id AS run_id,
-                    run.dungeon_key AS dungeon_stats_key, NULL::integer AS key_pop_number,
+                    run.activity_key AS dungeon_stats_key, NULL::integer AS key_pop_number,
                     run.ended_at AS occurred_at, 'unrecoverable'::text AS decision,
                     'a final join reaction proves presence, not completion eligibility'::text AS proof
              FROM reaction
              JOIN run ON run.id = reaction.run_id
              WHERE run.status = 'ended'
                AND run.key_pop_count = 0
+               AND run.run_kind IN ('single', 'oryx_3')
                AND reaction.state = 'join'
                AND ($1::bigint IS NULL OR run.guild_id = $1::bigint)
                AND NOT EXISTS (

@@ -12,6 +12,7 @@ import { DUNGEON_DATA } from '../constants/dungeons/DungeonData.js';
 import { ensureGuildContext } from '../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../lib/errors/error-handler.js';
 import { formatPoints } from '../lib/utilities/format-helpers.js';
+import { AGGREGATE_ACTIVITY_LABELS } from '../constants/dungeons/dungeon-taxonomy.js';
 
 /**
  * /stats - View quota statistics for yourself or another member.
@@ -91,6 +92,15 @@ export const stats: SlashCommand = {
                 if (statsForDungeon && (statsForDungeon.completed > 0 || statsForDungeon.organized > 0 || statsForDungeon.keys_popped > 0)) {
                     dungeonLines.push(
                         `**${dungeonInfo.dungeonName}**: ${statsForDungeon.completed} | ${statsForDungeon.keys_popped} | ${statsForDungeon.organized}`
+                    );
+                }
+            }
+
+            for (const [dungeonKey, dungeonLabel] of Object.entries(AGGREGATE_ACTIVITY_LABELS)) {
+                const statsForDungeon = dungeonStatsMap.get(dungeonKey);
+                if (statsForDungeon && (statsForDungeon.completed > 0 || statsForDungeon.organized > 0 || statsForDungeon.keys_popped > 0)) {
+                    dungeonLines.push(
+                        `**${dungeonLabel}**: ${statsForDungeon.completed} | ${statsForDungeon.keys_popped} | ${statsForDungeon.organized}`
                     );
                 }
             }

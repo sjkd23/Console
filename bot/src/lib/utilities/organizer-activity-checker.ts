@@ -3,7 +3,7 @@
  * Consolidates duplicate logic from run.ts and headcount.ts
  */
 
-import { ChatInputCommandInteraction } from 'discord.js';
+import type { ButtonInteraction, ChatInputCommandInteraction } from 'discord.js';
 import { getActiveRunsByOrganizer, patchJSON, deleteJSON } from './http.js';
 import { hasActiveHeadcount, getActiveHeadcount, unregisterHeadcount } from '../state/active-headcount-tracker.js';
 import { buildDiscordMessageLink } from './discord-link-helpers.js';
@@ -35,9 +35,14 @@ export interface ActivityCheckResult {
  * @returns Result indicating if organizer has active activities and error message if applicable
  */
 export async function checkOrganizerActiveActivities(
-    interaction: ChatInputCommandInteraction,
+    interaction: ChatInputCommandInteraction | ButtonInteraction,
     guildId: string,
-    organizerId: string
+    organizerId: string,
+    options: {
+        allowedHeadcountMessageId?: string;
+        failClosedOnRunCheckError?: boolean;
+        blockOnAnyActiveRunRecord?: boolean;
+    } = {}
 ): Promise<ActivityCheckResult> {
     logger.debug('Checking for active activities', { guildId, organizerId });
     
@@ -54,6 +59,16 @@ export async function checkOrganizerActiveActivities(
         
         if (activeRuns.length > 0) {
             const activeRun = activeRuns[0] as ActiveRunInfo;
+
+            // Conversion must not delete or ignore a run that was persisted but has
+            // not yet finished publishing its Discord message.
+            if (options.blockOnAnyActiveRunRecord) {
+                return {
+                    hasActiveRun: true,
+                    hasActiveHeadcount: false,
+                    errorMessage: buildActiveRunErrorMessage(guildId, activeRun),
+                };
+            }
             
             logger.debug('Verifying run message exists', {
                 guildId,
@@ -113,7 +128,14 @@ export async function checkOrganizerActiveActivities(
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined
         });
-        // Don't block on API failure - allow the operation to continue
+        if (options.failClosedOnRunCheckError) {
+            return {
+                hasActiveRun: true,
+                hasActiveHeadcount: false,
+                errorMessage: 'Could not verify the organizer activity state. Please reopen the panel and try again.',
+            };
+        }
+        // Existing command behavior remains fail-open for transient API failures.
     }
 
     // Check for active headcount
@@ -139,7 +161,7 @@ export async function checkOrganizerActiveActivities(
                 unregisterHeadcount(guildId, organizerId);
                 
                 // Continue - no active activities blocking
-            } else {
+            } else if (activeHeadcount.messageId !== options.allowedHeadcountMessageId) {
                 // Message exists - return error to block creation
                 const errorMessage = buildActiveHeadcountErrorMessage(guildId, activeHeadcount);
                 return {
@@ -166,7 +188,7 @@ export async function checkOrganizerActiveActivities(
  * @returns true if message exists and is accessible, false otherwise
  */
 async function verifyMessageExists(
-    interaction: ChatInputCommandInteraction,
+    interaction: ChatInputCommandInteraction | ButtonInteraction,
     channelId: string | null,
     messageId: string | null
 ): Promise<boolean> {

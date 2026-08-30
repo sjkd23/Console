@@ -44,6 +44,21 @@ integration('dungeon_activity_event PostgreSQL integration', () => {
                 guild_id BIGINT NOT NULL,
                 organizer_id BIGINT,
                 dungeon_key TEXT NOT NULL,
+                run_kind TEXT GENERATED ALWAYS AS (
+                    CASE
+                        WHEN dungeon_key = 'ORYX_3' THEN 'oryx_3'
+                        WHEN dungeon_key = 'REALM_DUNGEON' THEN 'realm_clearing'
+                        WHEN dungeon_key = 'MISC_DUNGEONS' THEN 'multi_non_exalt'
+                        WHEN dungeon_key = 'EXALTATION_DUNGEONS' THEN 'multi_exalt'
+                        ELSE 'single'
+                    END
+                ) STORED,
+                activity_key TEXT GENERATED ALWAYS AS (
+                    CASE
+                        WHEN dungeon_key IN ('REALM_DUNGEON', 'MISC_DUNGEONS') THEN 'MISC_DUNGEONS'
+                        ELSE dungeon_key
+                    END
+                ) STORED,
                 status TEXT NOT NULL,
                 key_pop_count INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

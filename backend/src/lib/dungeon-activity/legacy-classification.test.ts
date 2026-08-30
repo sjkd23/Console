@@ -92,6 +92,14 @@ describe('legacy dungeon activity classification', () => {
             kind: 'excluded',
             reason: 'manual_key_points_not_completion',
         });
+        expect(classifyLegacyQuotaEvent(legacy({
+            subject_id: 'key_pop:run:42:123456789012345678:1',
+            dungeon_key: 'NEST',
+            points: 5,
+        }))).toEqual({
+            kind: 'excluded',
+            reason: 'manual_key_points_not_completion',
+        });
     });
 });
 

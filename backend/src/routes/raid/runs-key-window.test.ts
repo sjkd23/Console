@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const testState = vi.hoisted(() => ({
     keyPopCount: 0,
+    runKind: 'single',
     query: vi.fn(),
     recordKeyPopWithTransaction: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock('../../lib/services/run-service.js', () => ({
     createRunWithTransaction: vi.fn(),
     endRunWithTransaction: vi.fn(),
     recordKeyPopWithTransaction: testState.recordKeyPopWithTransaction,
+    Oryx3KeyPopError: class extends Error {},
 }));
 
 import runsRoutes from './runs.js';
@@ -53,6 +55,7 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         testState.keyPopCount = 0;
+        testState.runKind = 'single';
         testState.recordKeyPopWithTransaction.mockImplementation(() => {
             testState.keyPopCount += 1;
             return Promise.resolve({
@@ -66,14 +69,14 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
         testState.query.mockImplementation((sql: unknown) => {
             const statement = String(sql);
 
-            if (statement.includes('SELECT status, organizer_id, guild_id, dungeon_key, key_pop_count')) {
+            if (statement.includes('SELECT status, organizer_id, guild_id, run_kind, key_pop_count')) {
                 return Promise.resolve({
                     rowCount: 1,
                     rows: [{
                         status: 'live',
                         organizer_id: organizerId,
                         guild_id: guildId,
-                        dungeon_key: 'SHATTERS',
+                        run_kind: testState.runKind,
                         key_pop_count: testState.keyPopCount,
                     }],
                 });
@@ -91,12 +94,9 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
         expect(testState.recordKeyPopWithTransaction).toHaveBeenCalledOnce();
         expect(testState.recordKeyPopWithTransaction).toHaveBeenCalledWith({
             guildId,
-            dungeonKey: 'SHATTERS',
             runId,
-            organizerId,
             organizerRoles: [organizerRoleId],
             organizerRolePositions: { [organizerRoleId]: 10 },
-            keyPopCount: 0,
             expectedKeyPopCount: 0,
             keyWindowSeconds: 25,
         });
@@ -116,5 +116,17 @@ describe('PATCH /runs/:id/key-window organizer completion trigger', () => {
         expect(testState.recordKeyPopWithTransaction).toHaveBeenNthCalledWith(
             2, expect.objectContaining({ expectedKeyPopCount: 1 })
         );
+    });
+
+    it('rejects a direct backend Dungeon Entered request for O3', async () => {
+        testState.runKind = 'oryx_3';
+
+        const response = await popKey();
+
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({
+            error: { message: expect.stringMatching(/does not use normal Dungeon Entered/i) },
+        });
+        expect(testState.recordKeyPopWithTransaction).not.toHaveBeenCalled();
     });
 });

@@ -4,11 +4,11 @@
  * 
  * IMPORTANT: Setting state='leave' also removes the raider from earning run completion.
  * Raiders who leave will not be included in future key pop snapshots and will not receive
- * completion points even if they were present during earlier key pops.
+ * completion points even if they were present during earlier Dungeon Entered events.
  */
 
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { postJSON, getJSON } from '../../../lib/utilities/http.js';
+import { postJSON, getJSON, getRunDetails, getRunDisplayLabel } from '../../../lib/utilities/http.js';
 import { logRaidJoin } from '../../../lib/logging/raid-logger.js';
 import { removeRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { updateRunParticipation } from '../../../lib/utilities/run-embed-helpers.js';
@@ -26,13 +26,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
     }
 
     // Fetch run details for logging and role removal
-    const run = await getJSON<{ 
-        dungeonKey: string; 
-        dungeonLabel: string; 
-        organizerId: string;
-        roleId: string | null;
-        status: string;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.editReply({ content: '❌ Run not found.' });
@@ -40,7 +34,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
     }
 
     // Check if run is still active
-    if (run.status === 'ended' || run.status === 'cancelled') {
+    if (run.status === 'ended') {
         await btn.editReply({ content: '❌ This run has ended.' });
         return;
     }
@@ -96,7 +90,7 @@ export async function handleLeave(btn: ButtonInteraction, runId: string) {
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '', // Not needed for log lookup
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },

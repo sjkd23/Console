@@ -1,472 +1,317 @@
-/**
- * Handles converting a headcount panel to a run panel.
- * Allows the organizer to select which dungeon to convert, preserving key reactions.
- */
-
 import {
-    ButtonInteraction,
-    EmbedBuilder,
-    StringSelectMenuBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ComponentType,
-    MessageFlags,
+    type ButtonInteraction,
     ChannelType,
+    EmbedBuilder,
+    MessageFlags,
     type Message,
-    type StringSelectMenuInteraction
 } from 'discord.js';
-import { getOrganizerId, getParticipants, clearParticipants } from '../../../lib/state/headcount-state.js';
-import { getKeyOffers, clearKeyOffers } from './headcount-key.js';
+import { clearParticipants, getDungeonCodes, getOrganizerId } from '../../../lib/state/headcount-state.js';
+import { clearKeyOffers, getKeyOffers } from './headcount-key.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
-import { postJSON, getDungeonRolePings } from '../../../lib/utilities/http.js';
-import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
-import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
-import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
+import type { DungeonInfo } from '../../../constants/dungeons/dungeon-types.js';
+import { classifyRunDungeons, type RunKind } from '../../../constants/dungeons/dungeon-taxonomy.js';
+import { createRun, deleteJSON, postJSON } from '../../../lib/utilities/http.js';
+import { getMemberRoleIds, hasRequiredRoleOrHigher } from '../../../lib/permissions/permissions.js';
 import { fetchGuildMember } from '../../../lib/utilities/interaction-helpers.js';
 import { logRaidCreation } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { withButtonLock, getHeadcountLockKey } from '../../../lib/utilities/button-mutex.js';
+import { getHeadcountLockKey, withButtonLock } from '../../../lib/utilities/button-mutex.js';
 import { getDefaultAutoEndMinutes } from '../../../config/raid-config.js';
-import { unregisterHeadcount, unregisterHeadcountByMessageId } from '../../../lib/state/active-headcount-tracker.js';
+import {
+    getActiveHeadcount,
+    unregisterHeadcount,
+    unregisterHeadcountByMessageId,
+} from '../../../lib/state/active-headcount-tracker.js';
 import { clearHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
 import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-tracker.js';
-import { createRunRole } from '../../../lib/utilities/run-role-manager.js';
+import { createRunRole, deleteRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { buildRunOrganizerPanelContent } from './organizer-panel.js';
-import { buildRunEmbed, buildRunButtons } from '../../../lib/utilities/run-panel-builder.js';
+import { buildRunButtons, buildRunEmbed } from '../../../lib/utilities/run-panel-builder.js';
 import { autoJoinOrganizerToRun } from '../../../lib/utilities/auto-join-helpers.js';
+import { resolveDungeonRolePingIds } from '../../../lib/utilities/dungeon-role-pings.js';
+import { buildRunMessageContent } from '../../../lib/utilities/run-message-helpers.js';
+import { checkOrganizerActiveActivities } from '../../../lib/utilities/organizer-activity-checker.js';
+import { collectHeadcountRunSubset } from '../../../lib/ui/headcount-conversion-selector.js';
+import {
+    collectSelectedDungeonKeyOffers,
+    getHeadcountConversionMode,
+    getConversionOrganizerUsername,
+    retireConvertedHeadcountMessage,
+    validateHeadcountConversionFreshness,
+} from '../../../lib/utilities/headcount-conversion.js';
 
 const logger = createLogger('HeadcountConvert');
 
-export async function handleHeadcountConvert(btn: ButtonInteraction, publicMessageId: string) {
-    // CRITICAL: Wrap in mutex to prevent concurrent conversion
-    const executed = await withButtonLock(btn, getHeadcountLockKey('convert', publicMessageId), async () => {
+export async function handleHeadcountConvert(btn: ButtonInteraction, publicMessageId: string): Promise<void> {
+    await withButtonLock(btn, getHeadcountLockKey('convert', publicMessageId), async () => {
         await handleHeadcountConvertInternal(btn, publicMessageId);
-    });
-
-    if (!executed) {
-        // Lock was not acquired, user was already notified
-        return;
-    }
+    }, { holdUntilSettled: true });
 }
 
-/**
- * Internal handler for headcount conversion (protected by mutex).
- */
-async function handleHeadcountConvertInternal(btn: ButtonInteraction, publicMessageId: string) {
-    // Fetch the public headcount message
-    if (!btn.channel || btn.channel.type !== ChannelType.GuildText) {
-        await btn.reply({
-            content: 'Could not locate headcount channel.',
-            flags: MessageFlags.Ephemeral
-        });
+async function handleHeadcountConvertInternal(btn: ButtonInteraction, publicMessageId: string): Promise<void> {
+    if (!btn.channel || btn.channel.type !== ChannelType.GuildText || !btn.guild) {
+        await btn.reply({ content: 'Could not locate headcount channel.', flags: MessageFlags.Ephemeral });
         return;
     }
 
     const publicMsg = await btn.channel.messages.fetch(publicMessageId).catch(() => null);
     if (!publicMsg) {
-        if (btn.guild) {
-            const result = unregisterHeadcountByMessageId(btn.guild.id, publicMessageId);
-            clearKeyOffers(publicMessageId);
-            clearParticipants(publicMessageId);
-            clearHeadcountPanels(publicMessageId);
-            logger.warn('Headcount public message missing during convert; cleaned local state', {
-                guildId: btn.guild.id,
-                channelId: btn.channel.id,
-                messageId: publicMessageId,
-                organizerId: result.organizerId,
-                removed: result.removed,
+        const result = unregisterHeadcountByMessageId(btn.guild.id, publicMessageId);
+        clearKeyOffers(publicMessageId);
+        clearParticipants(publicMessageId);
+        clearHeadcountPanels(publicMessageId);
+        logger.warn('Headcount public message missing during convert; cleaned local state', { result, publicMessageId });
+        await btn.reply({ content: 'Could not find headcount panel message.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    if (publicMsg.embeds.length === 0) {
+        await btn.reply({ content: 'Could not find headcount panel.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const embed = EmbedBuilder.from(publicMsg.embeds[0]);
+    const organizerId = getOrganizerId(embed);
+    if (!organizerId) {
+        await btn.reply({ content: 'Could not determine the headcount organizer.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    const access = await checkOrganizerAccess(btn, organizerId);
+    if (!access.allowed) {
+        await btn.reply({ content: access.errorMessage, flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    const storedCodes = getDungeonCodes(embed, publicMsg.id);
+    const dungeonCodes = storedCodes.length > 0 ? storedCodes : extractLegacyDungeonCodes(publicMsg);
+    const availableDungeons = dungeonCodes
+        .map(code => dungeonByCode[code])
+        .filter((dungeon): dungeon is DungeonInfo => dungeon !== undefined);
+    if (availableDungeons.length === 0) {
+        await btn.reply({ content: 'No stored dungeon selections were found for this headcount.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+
+    let selectedDungeons: DungeonInfo[];
+    if (getHeadcountConversionMode(availableDungeons) === 'direct') {
+        selectedDungeons = availableDungeons;
+        classifyRunDungeons(selectedDungeons);
+        await btn.deferUpdate();
+    } else {
+        const subset = await collectHeadcountRunSubset(btn, publicMsg.id, availableDungeons);
+        if (!subset) return;
+        selectedDungeons = subset.dungeons;
+        btn = subset.interaction;
+    }
+
+    await convertHeadcountToRun(btn, publicMsg, availableDungeons, selectedDungeons, organizerId);
+}
+
+function extractLegacyDungeonCodes(publicMsg: Message<true>): string[] {
+    const codes: string[] = [];
+    for (const row of publicMsg.components) {
+        if (!('components' in row)) continue;
+        for (const component of row.components) {
+            if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
+                const code = component.customId.split(':')[3];
+                if (code && !codes.includes(code)) codes.push(code);
+            }
+        }
+    }
+    return codes;
+}
+
+function getRoleLabel(runKind: RunKind, dungeons: readonly DungeonInfo[]): string {
+    if (runKind === 'multi_exalt') return 'Multi Exalt';
+    if (runKind === 'multi_non_exalt') return 'Multi Dungeon';
+    if (runKind === 'realm_clearing') return 'Realm Clearing';
+    return dungeons[0].dungeonName;
+}
+
+async function convertHeadcountToRun(
+    interaction: ButtonInteraction,
+    publicMsg: Message<true>,
+    availableDungeons: DungeonInfo[],
+    selectedDungeons: DungeonInfo[],
+    organizerId: string
+): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) return;
+
+    const currentPublicMsg = await publicMsg.channel.messages.fetch({
+        message: publicMsg.id,
+        force: true,
+    }).catch(() => null);
+    const currentEmbed = currentPublicMsg?.embeds[0]
+        ? EmbedBuilder.from(currentPublicMsg.embeds[0])
+        : null;
+    if (!currentPublicMsg || !currentEmbed || getOrganizerId(currentEmbed) !== organizerId) {
+        await interaction.editReply({
+            content: 'This headcount is no longer current. Reopen the organizer panel before converting.',
+            embeds: [],
+            components: [],
+        });
+        return;
+    }
+
+    const access = await checkOrganizerAccess(interaction, organizerId);
+    if (!access.allowed) {
+        await interaction.editReply({ content: access.errorMessage, embeds: [], components: [] });
+        return;
+    }
+
+    const member = await fetchGuildMember(guild, organizerId);
+    const organizerRole = await hasRequiredRoleOrHigher(member, 'organizer');
+    if (!member || !organizerRole.hasRole) {
+        await interaction.editReply({
+            content: 'The original organizer is no longer eligible to create a run.',
+            embeds: [],
+            components: [],
+        });
+        return;
+    }
+
+    const organizerUsername = getConversionOrganizerUsername(organizerId, member);
+    const classification = classifyRunDungeons(selectedDungeons);
+    const role = await createRunRole(guild, organizerUsername, getRoleLabel(classification.runKind, selectedDungeons));
+    const guildId = guild.id;
+
+    // This is deliberately the last asynchronous validation before POST /runs.
+    const activityCheck = await checkOrganizerActiveActivities(interaction, guildId, organizerId, {
+        allowedHeadcountMessageId: publicMsg.id,
+        failClosedOnRunCheckError: true,
+        blockOnAnyActiveRunRecord: true,
+    });
+    const originalDungeonCodes = availableDungeons.map(dungeon => dungeon.codeName);
+    const selectedDungeonCodes = selectedDungeons.map(dungeon => dungeon.codeName);
+    const freshnessError = validateHeadcountConversionFreshness({
+        expectedMessageId: publicMsg.id,
+        expectedChannelId: publicMsg.channelId,
+        activeHeadcount: getActiveHeadcount(guild.id, organizerId),
+        originalDungeonCodes,
+        selectedDungeonCodes,
+        hasActiveRun: activityCheck.hasActiveRun,
+    }, availableDungeons);
+    if (freshnessError || activityCheck.hasActiveHeadcount) {
+        if (role) await deleteRunRole(guild, role.id);
+        await interaction.editReply({
+            content: activityCheck.errorMessage ?? freshnessError ?? 'This conversion is no longer valid.',
+            embeds: [],
+            components: [],
+        });
+        return;
+    }
+
+    let backendRunId: number | null = null;
+    let published = false;
+    try {
+        const created = await createRun({
+            guildId,
+            guildName: guild.name,
+            organizerId,
+            organizerUsername,
+            organizerRoles: getMemberRoleIds(member),
+            channelId: publicMsg.channelId,
+            selectedDungeonKeys: selectedDungeons.map(dungeon => dungeon.codeName),
+            autoEndMinutes: getDefaultAutoEndMinutes(),
+            roleId: role?.id,
+        });
+        backendRunId = created.runId;
+
+        const keyOffers = getKeyOffers(publicMsg.id);
+        const transferredOffers = collectSelectedDungeonKeyOffers(
+            keyOffers,
+            selectedDungeons.map(dungeon => dungeon.codeName)
+        );
+        if (transferredOffers.length > 0) {
+            await postJSON(`/runs/${created.runId}/keys/bulk`, {
+                keys: transferredOffers,
+                source: 'headcount',
+            }, { guildId });
+        }
+
+        const presentationDungeons = created.selectedDungeons.map(selection => {
+            const dungeon = dungeonByCode[selection.dungeonKey];
+            return dungeon ? { ...dungeon, dungeonName: selection.dungeonLabel } : undefined;
+        });
+        if (presentationDungeons.some(dungeon => dungeon === undefined)) throw new Error('Missing bot dungeon metadata.');
+        const dungeons = presentationDungeons as DungeonInfo[];
+        const rolePingIds = await resolveDungeonRolePingIds(guild, created.selectedDungeons.map(dungeon => dungeon.dungeonKey));
+        if (role) rolePingIds.push(role.id);
+        const channel = guild.channels.cache.get(publicMsg.channelId);
+        if (!channel?.isTextBased()) throw new Error('Could not find channel to post run panel.');
+        const newRunMessage = await channel.send({
+            content: buildRunMessageContent({
+                selectedDungeons: created.selectedDungeons,
+                additionalPingRoleIds: rolePingIds,
+            }),
+            embeds: [buildRunEmbed({ dungeonData: dungeons, runKind: created.runKind, organizerId, status: 'starting' })],
+            components: buildRunButtons({ runId: created.runId, dungeonData: dungeons, runKind: created.runKind }),
+        });
+        try {
+            await postJSON(`/runs/${created.runId}/message`, { postMessageId: newRunMessage.id }, { guildId });
+        } catch (error) {
+            await newRunMessage.delete().catch(() => undefined);
+            throw error;
+        }
+        published = true;
+
+        const retirement = await retireConvertedHeadcountMessage(currentPublicMsg);
+        if (retirement === 'still_active') {
+            logger.error('Replacement run posted but old headcount could not be deleted or disabled', {
+                publicMessageId: publicMsg.id,
+                runId: created.runId,
+            });
+        } else {
+            clearKeyOffers(publicMsg.id);
+            clearParticipants(publicMsg.id);
+            clearHeadcountPanels(publicMsg.id);
+            unregisterHeadcount(guildId, organizerId);
+        }
+
+        const displayLabel = created.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
+        await logRaidCreation(interaction.client, {
+            guildId, organizerId, organizerUsername,
+            dungeonName: displayLabel, type: 'run', runId: created.runId,
+        }, { description: 'Converted from headcount panel' }).catch(error => logger.warn('Failed to log conversion', { error }));
+
+        const successEmbed = new EmbedBuilder()
+            .setTitle('✅ Headcount Converted!')
+            .setDescription(`[Jump to Raid Panel](${newRunMessage.url})`)
+            .setColor(0x00FF00)
+            .setTimestamp();
+        await interaction.editReply({ content: '', embeds: [successEmbed], components: [] });
+
+        const panelContent = await buildRunOrganizerPanelContent(created.runId, guildId);
+        if (panelContent) {
+            const panelMessage = await interaction.followUp({
+                embeds: panelContent.embeds,
+                components: panelContent.components,
+                flags: MessageFlags.Ephemeral,
+                fetchReply: true,
+            });
+            registerOrganizerPanel(created.runId.toString(), interaction.user.id, {
+                type: 'followup', webhook: interaction.webhook, messageId: panelMessage.id,
             });
         }
-        await btn.reply({
-            content: 'Could not find headcount panel message.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
 
-    const embeds = publicMsg.embeds ?? [];
-    if (!embeds.length) {
-        await btn.reply({
-            content: 'Could not find headcount panel.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    const embed = EmbedBuilder.from(embeds[0]);
-    const organizerId = getOrganizerId(embed);
-
-    if (!organizerId) {
-        await btn.reply({
-            content: 'Could not determine the headcount organizer.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    // Authorization check using centralized helper
-    const accessCheck = await checkOrganizerAccess(btn, organizerId);
-    if (!accessCheck.allowed) {
-        await btn.reply({
-            content: accessCheck.errorMessage,
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    // Extract dungeon codes from the button components
-    const dungeonCodes: string[] = [];
-    for (const row of publicMsg.components) {
-        if ('components' in row) {
-            for (const component of row.components) {
-                if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
-                    const parts = component.customId.split(':');
-                    const dungeonCode = parts[3];
-                    if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
-                        dungeonCodes.push(dungeonCode);
-                    }
-                }
-            }
+        autoJoinOrganizerToRun(
+            interaction.client, guild, newRunMessage, created.runId, organizerId,
+            organizerUsername, created.dungeonKey, displayLabel, role?.id || null
+        ).catch(error => logger.error('Failed to auto-join organizer to converted run', { error, runId: created.runId }));
+    } catch (error) {
+        if (backendRunId !== null && !published) {
+            await deleteJSON(`/runs/${backendRunId}`, {
+                actorId: organizerId,
+                actorRoles: getMemberRoleIds(member),
+            }, { guildId }).catch(rollbackError => {
+                logger.error('Failed to cancel an unpublished converted run during rollback', {
+                    runId: backendRunId,
+                    rollbackError,
+                });
+            });
         }
+        if (role && !published) await deleteRunRole(guild, role.id);
+        throw error;
     }
-
-    if (dungeonCodes.length === 0) {
-        await btn.reply({
-            content: '❌ No dungeons found on this headcount panel.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    // If only one dungeon, no need for dropdown - just convert it
-    if (dungeonCodes.length === 1) {
-        await btn.deferUpdate(); // Update the organizer panel message
-        await convertHeadcountToRun(btn, publicMsg, dungeonCodes[0], btn.user.id);
-        return;
-    }
-
-    // Multiple dungeons - show dropdown to select which one to convert
-    // Replace the organizer panel with the dropdown (don't create new message)
-    await btn.update({
-        content: '**Select a dungeon to convert to a run**\n\nKey reactions for the selected dungeon will be preserved.',
-        components: [createDungeonSelectMenu(dungeonCodes)],
-        embeds: [] // Remove the organizer panel embed
-    });
-
-    // Wait for selection
-    try {
-        const selectInteraction = await btn.channel!.awaitMessageComponent({
-            filter: (i) => i.user.id === btn.user.id && i.customId === 'headcount:select_convert_dungeon',
-            componentType: ComponentType.StringSelect,
-            time: 60_000 // 60 second timeout
-        });
-
-        await selectInteraction.deferUpdate();
-
-        const selectedCode = selectInteraction.values[0];
-        
-        // Convert the headcount to a run
-        // The conversion function will update the same message with the organizer panel
-        await convertHeadcountToRun(selectInteraction, publicMsg, selectedCode, btn.user.id);
-
-    } catch (err) {
-        // Timeout or other error
-        const errorMessage = err instanceof Error 
-            ? `Failed to convert headcount: ${err.message}`
-            : 'Selection timed out. Please try again.';
-        
-        await btn.editReply({
-            content: errorMessage,
-            components: [],
-            embeds: []
-        });
-    }
-}
-
-/**
- * Helper to create the dungeon selection dropdown
- */
-function createDungeonSelectMenu(dungeonCodes: string[]): ActionRowBuilder<StringSelectMenuBuilder> {
-    const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId('headcount:select_convert_dungeon')
-        .setPlaceholder('Select a dungeon to convert to a run')
-        .setMinValues(1)
-        .setMaxValues(1)
-        .addOptions(
-            dungeonCodes.map(code => {
-                const dungeon = dungeonByCode[code];
-                return {
-                    label: dungeon?.dungeonName || code,
-                    value: code,
-                    description: dungeon?.dungeonCategory || undefined
-                };
-            })
-        );
-
-    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-}
-
-/**
- * Converts a headcount to a run with the selected dungeon
- */
-async function convertHeadcountToRun(
-    interaction: ButtonInteraction | StringSelectMenuInteraction,
-    publicMsg: Message<true>,
-    dungeonCode: string,
-    organizerId: string
-) {
-    const dungeon = dungeonByCode[dungeonCode];
-
-    if (!dungeon) {
-        await interaction.followUp({
-            content: 'Unknown dungeon selected. Please try again.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    // Get guild and member for role IDs
-    if (!interaction.guild) {
-        await interaction.followUp({
-            content: 'This command can only be used in a server.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    const member = await fetchGuildMember(interaction.guild, organizerId);
-    if (!member) {
-        await interaction.followUp({
-            content: 'Could not fetch your member information.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    // Get key offers for the selected dungeon
-    const keyOffers = getKeyOffers(publicMsg.id);
-    const dungeonKeyMap = keyOffers.get(dungeonCode);
-    
-    // Collect all unique users who offered any key type for this dungeon
-    const keyUserIds: string[] = [];
-    if (dungeonKeyMap) {
-        const uniqueUsers = new Set<string>();
-        for (const userIds of dungeonKeyMap.values()) {
-            userIds.forEach(id => uniqueUsers.add(id));
-        }
-        keyUserIds.push(...Array.from(uniqueUsers));
-    }
-    
-    const guildId = interaction.guildId!;
-
-    // Create the temporary role for this run
-    const role = await createRunRole(interaction.guild, interaction.user.username, dungeon.dungeonName);
-    if (!role) {
-        await interaction.followUp({
-            content: '**Warning:** Failed to create the run role. The run will still be created, but members won\'t be automatically assigned a role.',
-            flags: MessageFlags.Ephemeral
-        });
-        // Continue anyway - role creation failure shouldn't block run creation
-    }
-
-    // Create the run in the backend (use the channel where the headcount was posted)
-    const { runId } = await postJSON<{ runId: number }>('/runs', {
-        guildId: interaction.guild.id,
-        guildName: interaction.guild.name,
-        organizerId: organizerId,
-        organizerUsername: interaction.user.username,
-        organizerRoles: getMemberRoleIds(member),
-        channelId: publicMsg.channelId, // Use the channel where headcount was posted (should be raid channel)
-        dungeonKey: dungeon.codeName,
-        dungeonLabel: dungeon.dungeonName,
-        autoEndMinutes: getDefaultAutoEndMinutes(),
-        roleId: role?.id // Store the created role ID
-    }, { guildId });
-
-    // Transfer headcount key reactions to the run database
-    // These will be stored as key_reactions in the database and shown in organizer panel
-    if (dungeonKeyMap && dungeonKeyMap.size > 0) {
-        try {
-            // Flatten the key offers for this dungeon into user-key pairs
-            const keyReactions: Array<{ userId: string; keyType: string }> = [];
-            for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
-                for (const userId of userIds) {
-                    keyReactions.push({ userId, keyType: mapKey });
-                }
-            }
-
-            // Send to backend to store in key_reaction table with 'headcount' source
-            if (keyReactions.length > 0) {
-                await postJSON(`/runs/${runId}/keys/bulk`, {
-                    keys: keyReactions,
-                    source: 'headcount'
-                }, { guildId });
-            }
-        } catch (err) {
-            console.error('Failed to transfer headcount keys to run:', err);
-            // Don't fail the conversion if key transfer fails
-        }
-    }
-
-    // Build the run embed and buttons using universal helpers
-    const runEmbed = buildRunEmbed({
-        dungeonData: dungeon,
-        organizerId: organizerId,
-        status: 'starting'
-    });
-
-    const components = buildRunButtons({
-        runId: runId,
-        dungeonData: dungeon,
-        joinLocked: false
-    });
-
-    // Save the headcount message ID before deletion (needed for clearing state)
-    const headcountMessageId = publicMsg.id;
-    
-    // Delete the headcount panel message
-    try {
-        await publicMsg.delete();
-    } catch (e) {
-        console.error('Failed to delete headcount panel:', e);
-        // Continue with conversion even if deletion fails
-    }
-
-    // Build content with @here and role pings for the new run panel
-    let runPanelContent = '@here';
-    
-    // Add dungeon-specific role ping if configured
-    try {
-        const { dungeon_role_pings } = await getDungeonRolePings(interaction.guild.id);
-        const dungeonRoleId = dungeon_role_pings[dungeon.codeName];
-        if (dungeonRoleId) {
-            runPanelContent += ` <@&${dungeonRoleId}>`;
-        }
-    } catch (e) {
-        console.error('Failed to fetch dungeon role pings for conversion:', e);
-        // Continue without custom role ping
-    }
-    
-    // Add raid role if it was created
-    if (role) {
-        runPanelContent += ` <@&${role.id}>`;
-    }
-
-    // Send NEW run panel message (this allows pings to work properly)
-    const channel = interaction.guild.channels.cache.get(publicMsg.channelId);
-    if (!channel || !channel.isTextBased()) {
-        await interaction.followUp({
-            content: '❌ Could not find channel to post run panel.',
-            flags: MessageFlags.Ephemeral
-        });
-        return;
-    }
-
-    const newRunMessage = await channel.send({
-        content: runPanelContent,
-        embeds: [runEmbed],
-        components: components
-    });
-
-    // Store the NEW message ID in the backend
-    try {
-        await postJSON(`/runs/${runId}/message`, { postMessageId: newRunMessage.id }, { guildId });
-    } catch (e) {
-        console.error('Failed to store post_message_id:', e);
-    }
-
-    // Log the run creation to raid-log channel (converted from headcount)
-    try {
-        await logRaidCreation(
-            interaction.client,
-            {
-                guildId: interaction.guild.id,
-                organizerId: organizerId,
-                organizerUsername: interaction.user.username,
-                dungeonName: dungeon.dungeonName,
-                type: 'run',
-                runId: runId
-            },
-            {
-                description: 'Converted from headcount panel'
-            }
-        );
-    } catch (e) {
-        console.error('Failed to log converted run creation to raid-log:', e);
-    }
-
-    // Clear headcount state from memory (using the saved message ID from before deletion)
-    clearKeyOffers(headcountMessageId);
-    clearParticipants(headcountMessageId);
-    clearHeadcountPanels(headcountMessageId); // Clear tracked organizer panels
-    
-    // CRITICAL: Unregister the headcount from active tracking
-    // This prevents the "multiple runs" error when using /taken after converting a headcount
-    unregisterHeadcount(interaction.guild.id, organizerId);
-
-    // Show success message first
-    const raidPanelUrl = `https://discord.com/channels/${interaction.guild.id}/${newRunMessage.channelId}/${newRunMessage.id}`;
-    const successEmbed = new EmbedBuilder()
-        .setTitle('✅ Headcount Converted!')
-        .setDescription(`Headcount converted to run. See your organizer panel below.\n\n[Jump to Raid Panel](${raidPanelUrl})`)
-        .setColor(0x00FF00)
-        .setTimestamp(new Date());
-
-    if (interaction.deferred || interaction.replied) {
-        await interaction.editReply({
-            content: '',
-            embeds: [successEmbed],
-            components: []
-        });
-    } else {
-        await interaction.reply({
-            embeds: [successEmbed],
-            components: [],
-            flags: MessageFlags.Ephemeral
-        });
-    }
-
-    // Build and show the run organizer panel IMMEDIATELY
-    // This ensures consistency with /run command and feels responsive
-    const panelContent = await buildRunOrganizerPanelContent(runId, interaction.guild.id);
-    
-    if (panelContent) {
-        // Send the run organizer panel as a follow-up
-        const panelMessage = await interaction.followUp({
-            embeds: panelContent.embeds,
-            components: panelContent.components,
-            flags: MessageFlags.Ephemeral,
-            fetchReply: true
-        });
-
-        // Register this panel for auto-refresh using a followup handle
-        // This is the correct way to track ephemeral follow-ups for live updates
-        registerOrganizerPanel(runId.toString(), interaction.user.id, {
-            type: 'followup',
-            webhook: interaction.webhook,
-            messageId: panelMessage.id
-        });
-    }
-
-    // Run auto-join in the background (don't block the user experience)
-    // This will complete after the panel is already visible
-    autoJoinOrganizerToRun(
-        interaction.client,
-        interaction.guild,
-        newRunMessage,
-        runId,
-        organizerId,
-        interaction.user.username,
-        dungeon.codeName,
-        dungeon.dungeonName,
-        role?.id || null
-    ).catch(err => {
-        logger.error('Failed to auto-join organizer to converted run', {
-            guildId,
-            runId,
-            error: err instanceof Error ? err.message : String(err)
-        });
-    });
 }

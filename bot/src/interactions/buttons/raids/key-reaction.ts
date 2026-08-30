@@ -1,5 +1,5 @@
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { postJSON, getJSON } from '../../../lib/utilities/http.js';
+import { postJSON, getRunDetails, getRunDisplayLabel } from '../../../lib/utilities/http.js';
 import { formatKeyLabel, getKeyTypeSuffix, getDungeonKeyEmoji, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyReaction } from '../../../lib/logging/raid-logger.js';
 import { getAllOrganizerPanelsForRun } from '../../../lib/state/organizer-panel-tracker.js';
@@ -52,13 +52,7 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
     }
 
     // Fetch run details to get dungeonKey and organizerId
-    const run = await getJSON<{ 
-        dungeonKey: string; 
-        dungeonLabel: string;
-        organizerId: string;
-        party: string | null;
-        location: string | null;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
     if (!run) {
         await btn.editReply({ content: 'Could not fetch run details.' });
         return;
@@ -104,7 +98,7 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -144,7 +138,7 @@ export async function handleKeyReaction(btn: ButtonInteraction, runId: string, k
                     btn.user.id,
                     guildId,
                     runId,
-                    run.dungeonLabel,
+                    getRunDisplayLabel(run),
                     run.organizerId,
                     [keyType],
                     run.party!,

@@ -3,7 +3,13 @@ import {
     ChannelType,
     EmbedBuilder
 } from 'discord.js';
-import { getJSON, patchJSON, BackendError } from '../../../lib/utilities/http.js';
+import {
+    getRunDetails,
+    getRunDisplayLabel,
+    patchJSON,
+    BackendError,
+    type RunDetails
+} from '../../../lib/utilities/http.js';
 import { logRunInfoUpdate } from '../../../lib/logging/raid-logger.js';
 import {
     createSimpleModal,
@@ -16,20 +22,7 @@ import { updateRunPublicPanelContent } from '../../../lib/utilities/run-public-p
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { notifyKeyReactors } from '../../../lib/utilities/key-reactor-notifications.js';
 import { sendEarlyLocNotification } from '../../../lib/utilities/early-loc-notifier.js';
-
-interface RunDetails {
-    channelId: string | null;
-    postMessageId: string | null;
-    status: string;
-    dungeonKey: string;
-    dungeonLabel: string;
-    organizerId: string;
-    startedAt: string | null;
-    keyWindowEndsAt: string | null;
-    party: string | null;
-    location: string | null;
-    description: string | null;
-}
+import { buildRunTitle } from '../../../lib/utilities/run-panel-builder.js';
 
 /**
  * Notifies key reactors if both party and location are now set
@@ -54,7 +47,7 @@ async function notifyKeyReactorsIfReady(
         btn.client,
         runId,
         btn.guildId!,
-        run.dungeonLabel,
+        getRunDisplayLabel(run),
         run.organizerId,
         run.party,
         run.location,
@@ -163,7 +156,7 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
     }
 
     // Fetch updated run details
-    const run = await getJSON<RunDetails>(`/runs/${runId}`);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined);
 
     if (!run.channelId || !run.postMessageId) {
         await submitted.followUp({ content: 'Run record missing channel/message id.', ephemeral: true });
@@ -182,7 +175,7 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -196,7 +189,7 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -219,10 +212,11 @@ export async function handleSetPartyLocation(btn: ButtonInteraction, runId: stri
             btn.guild.id,
             run.organizerId,
             run.dungeonKey,
-            run.dungeonLabel,
+            getRunDisplayLabel(run),
             run.channelId,
             run.postMessageId,
-            earlyLocNotificationData
+            earlyLocNotificationData,
+            run.selectedDungeons
         ).catch(err => {
             console.error('Failed to send early-loc notification:', err);
         });
@@ -305,7 +299,7 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
     }
 
     // Fetch updated run details
-    const run = await getJSON<RunDetails>(`/runs/${runId}`);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined);
 
     if (!run.channelId || !run.postMessageId) {
         await submitted.followUp({ content: 'Run record missing channel/message id.', ephemeral: true });
@@ -324,7 +318,7 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -347,10 +341,11 @@ export async function handleSetParty(btn: ButtonInteraction, runId: string) {
             btn.guild.id,
             run.organizerId,
             run.dungeonKey,
-            run.dungeonLabel,
+            getRunDisplayLabel(run),
             run.channelId,
             run.postMessageId,
-            earlyLocNotificationData
+            earlyLocNotificationData,
+            run.selectedDungeons
         ).catch(err => {
             console.error('Failed to send early-loc notification:', err);
         });
@@ -434,7 +429,7 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
     }
 
     // Fetch updated run details
-    const run = await getJSON<RunDetails>(`/runs/${runId}`);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined);
 
     if (!run.channelId || !run.postMessageId) {
         await submitted.followUp({ content: 'Run record missing channel/message id.', ephemeral: true });
@@ -453,7 +448,7 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -476,10 +471,11 @@ export async function handleSetLocation(btn: ButtonInteraction, runId: string) {
             btn.guild.id,
             run.organizerId,
             run.dungeonKey,
-            run.dungeonLabel,
+            getRunDisplayLabel(run),
             run.channelId,
             run.postMessageId,
-            earlyLocNotificationData
+            earlyLocNotificationData,
+            run.selectedDungeons
         ).catch(err => {
             console.error('Failed to send early-loc notification:', err);
         });
@@ -581,17 +577,7 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
     }
 
     // Fetch updated run details
-    const run = await getJSON<{
-        channelId: string | null;
-        postMessageId: string | null;
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        keyPopCount: number;
-        chainAmount: number | null;
-        keyWindowEndsAt: string | null;
-    }>(`/runs/${runId}`);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined);
 
     if (!run.channelId || !run.postMessageId) {
         const msg = 'Run record missing channel/message id.';
@@ -612,18 +598,17 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
             if (embeds.length > 0) {
                 const embed = EmbedBuilder.from(embeds[0]);
                 
-                // Build title with chain tracking (preserving current key_pop_count)
-                const statusEmoji = run.status === 'live' ? '🟢' : '📋';
-                const statusText = run.status === 'live' ? 'LIVE' : 'Starting';
-                let chainText = '';
-                if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
-                    if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
-                        chainText = ` | Chain ${run.keyPopCount}/${run.chainAmount}`;
-                    } else {
-                        chainText = ` | Chain ${run.keyPopCount}`;
-                    }
-                }
-                embed.setTitle(`${statusEmoji} ${statusText}: ${run.dungeonLabel}${chainText}`);
+                const titleDungeons = run.selectedDungeons.map(selection => ({
+                    codeName: selection.dungeonKey,
+                    dungeonName: selection.dungeonLabel,
+                }));
+                embed.setTitle(buildRunTitle(
+                    run.status === 'live' ? 'live' : 'starting',
+                    titleDungeons,
+                    run.runKind,
+                    run.keyPopCount,
+                    run.chainAmount
+                ));
                 
                 await pubMsg.edit({ embeds: [embed, ...embeds.slice(1)] });
             }
@@ -631,7 +616,7 @@ export async function handleSetChainAmount(btn: ButtonInteraction, runId: string
     }
 
     // Refresh organizer panel with confirmation message
-    const successMsg = `✅ **Chain amount set:** ${chainAmount}\n\nThe raid title will now show "Chain ${run.keyPopCount}/${chainAmount}" (updates as you press Key popped)`;
+    const successMsg = `✅ **Chain amount set:** ${chainAmount}\n\nThe raid title will now show "Chain ${run.keyPopCount}/${chainAmount}" (updates as you press Dungeon Entered)`;
     if (deferred) {
         await refreshOrganizerPanel(submitted, runId, successMsg);
     } else {

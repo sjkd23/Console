@@ -1,6 +1,6 @@
 import { ButtonInteraction, MessageFlags } from 'discord.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { getJSON } from '../../../lib/utilities/http.js';
+import { getRunDetails } from '../../../lib/utilities/http.js';
 import { sendRunPing } from '../../../lib/utilities/run-ping.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 
@@ -13,11 +13,7 @@ export async function handlePingRaiders(btn: ButtonInteraction, runId: string) {
     await btn.deferUpdate();
 
     // Fetch run details for authorization
-    const run = await getJSON<{
-        organizerId: string;
-        status: string;
-        dungeonLabel: string;
-    }>(`/runs/${runId}`).catch(() => null);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined).catch(() => null);
 
     if (!run) {
         await btn.editReply({

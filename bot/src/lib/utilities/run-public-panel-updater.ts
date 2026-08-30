@@ -1,24 +1,20 @@
 import { Client, ChannelType, EmbedBuilder, type MessageEditOptions } from 'discord.js';
-import { z } from 'zod';
-import { getJSON } from './http.js';
+import { getRunDetails } from './http.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import { createLogger } from '../logging/logger.js';
 import { buildRunButtons } from './run-panel-builder.js';
-import { buildRunMessageContent, isO3RealmClosedStage } from './run-message-helpers.js';
+import {
+    buildRunLifecycleMessageContent,
+    buildRunMessageContentEdit,
+    isO3RealmClosedStage,
+} from './run-message-helpers.js';
+import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
 
 const logger = createLogger('RunPublicPanelUpdater');
 
-const runPublicPanelContentStateSchema = z.object({
-    status: z.string(),
-    dungeonKey: z.string(),
-    dungeonLabel: z.string(),
-    joinLocked: z.boolean(),
-    party: z.string().nullable(),
-    location: z.string().nullable(),
-    o3Stage: z.enum(['closed', 'miniboss', 'third_room']).nullable(),
-    channelId: z.string().nullable(),
-    postMessageId: z.string().nullable()
-});
+export function shouldRefreshRunPublicMessage(status: 'open' | 'live' | 'ended'): boolean {
+    return status !== 'ended';
+}
 
 /**
  * Updates the public run panel buttons to reflect the current join_locked state.
@@ -33,15 +29,10 @@ export async function updateRunPublicPanel(
 ): Promise<void> {
     try {
         // Fetch the latest run state
-        const run = await getJSON<{
-            status: string;
-            dungeonKey: string;
-            joinLocked: boolean;
-            o3Stage: 'closed' | 'miniboss' | 'third_room' | null;
-        }>(`/runs/${runId}`, { guildId });
+        const run = await getRunDetails(runId, guildId);
 
         // Only update if the run is still active
-        if (run.status === 'ended' || run.status === 'cancelled') {
+        if (!shouldRefreshRunPublicMessage(run.status)) {
             return;
         }
 
@@ -59,16 +50,17 @@ export async function updateRunPublicPanel(
         }
 
         // Get dungeon info for key buttons
-        const dungeon = dungeonByCode[run.dungeonKey];
-        if (!dungeon) {
-            logger.warn('Unknown dungeon key for public panel update', { guildId, runId, dungeonKey: run.dungeonKey });
+        const dungeons = run.selectedDungeons.map(selection => dungeonByCode[selection.dungeonKey]);
+        if (dungeons.some(dungeon => dungeon === undefined)) {
+            logger.warn('Unknown selected dungeon for public panel update', { guildId, runId, selectedDungeons: run.selectedDungeons });
             return;
         }
 
         // Rebuild the button components with the updated join button state
         const components = buildRunButtons({
             runId: runId,
-            dungeonData: dungeon,
+            dungeonData: dungeons,
+            runKind: run.runKind,
             joinLocked: run.joinLocked,
             o3Stage: run.o3Stage
         });
@@ -104,10 +96,9 @@ export async function updateRunPublicPanelContent(
     runId: string | number
 ): Promise<void> {
     try {
-        const response = await getJSON<unknown>(`/runs/${runId}`, { guildId });
-        const run = runPublicPanelContentStateSchema.parse(response);
+        const run = await getRunDetails(runId, guildId);
 
-        if (run.status !== 'live') {
+        if (run.status === 'ended') {
             return;
         }
 
@@ -142,40 +133,44 @@ export async function updateRunPublicPanelContent(
             return;
         }
 
-        const additionalPings = Array.from(
-            message.content.matchAll(/<@&(\d+)>/g),
-            match => match[1]
-        );
-        const content = buildRunMessageContent(
-            run.party,
-            run.location,
-            additionalPings,
-            run.o3Stage
-        );
+        const guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId).catch(() => null);
+        const additionalPings = guild
+            ? await resolveDungeonRolePingIds(guild, run.selectedDungeons.map(dungeon => dungeon.dungeonKey))
+            : [];
+        if (guild && run.roleId && (guild.roles.cache.has(run.roleId) || await guild.roles.fetch(run.roleId).catch(() => null))) {
+            additionalPings.push(run.roleId);
+        }
+        const content = buildRunLifecycleMessageContent(run, {
+            additionalPingRoleIds: additionalPings,
+        });
 
-        const dungeon = dungeonByCode[run.dungeonKey];
-        if (!dungeon) {
-            logger.warn('Unknown dungeon key for public panel content update', {
+        const dungeons = run.selectedDungeons.map(selection => dungeonByCode[selection.dungeonKey]);
+        if (dungeons.some(dungeon => dungeon === undefined)) {
+            logger.warn('Unknown selected dungeon for public panel content update', {
                 guildId,
                 runId,
-                dungeonKey: run.dungeonKey
+                selectedDungeons: run.selectedDungeons
             });
             return;
         }
 
         const components = buildRunButtons({
             runId,
-            dungeonData: dungeon,
+            dungeonData: dungeons,
+            runKind: run.runKind,
             joinLocked: run.joinLocked,
             o3Stage: run.o3Stage
         });
-        const editOptions: MessageEditOptions = { content, components };
-        const realmIsClosed = run.dungeonKey === 'ORYX_3' && isO3RealmClosedStage(run.o3Stage);
+        const editOptions: MessageEditOptions = {
+            ...buildRunMessageContentEdit(content),
+            components,
+        };
+        const realmIsClosed = run.runKind === 'oryx_3' && isO3RealmClosedStage(run.o3Stage);
 
         if (realmIsClosed && message.embeds[0]) {
             const originalEmbed = message.embeds[0];
             const updatedEmbed = EmbedBuilder.from(originalEmbed)
-                .setTitle(`🔴 Closed: ${run.dungeonLabel}`);
+                .setTitle(`🔴 Closed: ${run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ')}`);
             const realmScoreText = '**Realm Score:** 100%';
             const originalDescription = originalEmbed.description ?? '';
             const description = originalDescription.includes('**Realm Score:**')

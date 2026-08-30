@@ -30,7 +30,12 @@ const logger = createLogger('QuotaService');
  */
 export interface QuotaContext {
     guildId: string;
+    /** Accounting key stored in quota_event. */
     dungeonKey: string;
+    /** Canonical activity key; defaults to dungeonKey for legacy/single callers. */
+    activityKey?: string;
+    /** Use configured base organizer points and default raider points, bypassing physical overrides. */
+    baseCategory?: 'exalt' | 'non_exalt';
     runId: number;
 }
 
@@ -152,14 +157,26 @@ export class QuotaService {
         const db = client || pool;
 
         // Step 1: Determine which quota role should award points
-        const { getQuotaRoleForDungeon, getAllQuotaRoleConfigs, getPointsForDungeon } = await import('../quota/quota.js');
+        const {
+            getQuotaRoleForDungeon,
+            getQuotaRoleForBaseCategory,
+            getAllQuotaRoleConfigs,
+            getPointsForDungeon,
+        } = await import('../quota/quota.js');
 
-        let quotaRole = await getQuotaRoleForDungeon(
-            input.guildId,
-            input.dungeonKey,
-            input.organizerRoles || [],
-            input.organizerRolePositions
-        );
+        let quotaRole = input.baseCategory
+            ? await getQuotaRoleForBaseCategory(
+                input.guildId,
+                input.baseCategory,
+                input.organizerRoles || [],
+                input.organizerRolePositions
+            )
+            : await getQuotaRoleForDungeon(
+                input.guildId,
+                input.dungeonKey,
+                input.organizerRoles || [],
+                input.organizerRolePositions
+            );
 
         // Fallback: if roles are missing (auto-end / privileged actor ending another organizer's run),
         // resolve from all quota configs so organizer events still attach to a panel role.
@@ -168,7 +185,9 @@ export class QuotaService {
             const candidates: Array<{ roleId: string; points: number }> = [];
 
             for (const config of allConfigs) {
-                const points = await getPointsForDungeon(input.guildId, input.dungeonKey, [config.discord_role_id]);
+                const points = input.baseCategory
+                    ? (input.baseCategory === 'exalt' ? config.base_exalt_points : config.base_non_exalt_points)
+                    : await getPointsForDungeon(input.guildId, input.dungeonKey, [config.discord_role_id]);
                 if (points > 0) {
                     candidates.push({ roleId: config.discord_role_id, points });
                 }
@@ -272,11 +291,9 @@ export class QuotaService {
             return 0;
         }
 
-        const raiderPoints = await this.getRaiderPointsForDungeon(
-            input.guildId,
-            input.dungeonKey,
-            db
-        );
+        const raiderPoints = input.baseCategory
+            ? 1
+            : await this.getRaiderPointsForDungeon(input.guildId, input.dungeonKey, db);
 
         // Persist activity for every eligible snapshot member regardless of
         // whether the configured currency award is zero.
@@ -288,7 +305,7 @@ export class QuotaService {
                     userId: raider.user_id,
                     runId: input.runId,
                     role: 'raider',
-                    dungeonStatsKey: input.dungeonKey,
+                    dungeonStatsKey: input.activityKey ?? input.dungeonKey,
                     subjectId: raiderKeyPopActivitySubjectId(input.runId, input.keyPopNumber, raider.user_id),
                     source: 'key_pop',
                     count: 1,
@@ -347,7 +364,7 @@ export class QuotaService {
     /**
      * Award raider points to all joined participants.
      * 
-     * This is the fallback behavior when no key pops occurred.
+     * This is the legacy fallback behavior when no Dungeon Entered events occurred.
      * Awards points to all users who joined the run (state='join').
      * 
      * @param input - Raider quota parameters
@@ -383,11 +400,9 @@ export class QuotaService {
             return 0;
         }
 
-        const raiderPoints = await this.getRaiderPointsForDungeon(
-            input.guildId,
-            input.dungeonKey,
-            db
-        );
+        const raiderPoints = input.baseCategory
+            ? 1
+            : await this.getRaiderPointsForDungeon(input.guildId, input.dungeonKey, db);
 
         let awardedCount = 0;
         for (const raider of raiders.rows) {
@@ -397,7 +412,7 @@ export class QuotaService {
                     userId: raider.user_id,
                     runId: input.runId,
                     role: 'raider',
-                    dungeonStatsKey: input.dungeonKey,
+                    dungeonStatsKey: input.activityKey ?? input.dungeonKey,
                     subjectId: raiderParticipantActivitySubjectId(input.runId, raider.user_id),
                     source: 'participant_fallback',
                     count: 1,

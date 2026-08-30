@@ -118,7 +118,7 @@ export const RateLimitPresets = {
         errorMessage: '⏱️ **Modmail rate limit.** Please wait before performing more modmail actions.'
     } as RateLimitConfig,
 
-    /** Key popped button - very strict to prevent accidental multiple pops (1 per 20s) */
+    /** Dungeon Entered button - very strict to prevent accidental duplicate entries (1 per 20s). */
     BUTTON_KEY_POPPED: {
         maxRequests: 1,
         windowMs: 20_000,

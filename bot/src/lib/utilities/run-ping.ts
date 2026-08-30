@@ -1,6 +1,9 @@
 import { Client, Guild, type GuildTextBasedChannel } from 'discord.js';
-import { getJSON, postJSON, getDungeonRolePings } from './http.js';
+import { getRunDetails, postJSON } from './http.js';
 import { createLogger } from '../logging/logger.js';
+import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
+import { buildRunMessageContent } from './run-message-helpers.js';
+import { getDungeonEnteredEmoji } from './key-emoji-helpers.js';
 
 const logger = createLogger('RunPing');
 
@@ -22,19 +25,8 @@ export async function sendRunPing(
 ): Promise<string | null> {
     try {
         // Fetch run details
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            dungeonLabel: string;
-            dungeonKey: string;
-            roleId: string | null;
-            pingMessageId: string | null;
-            status: string;
-            party: string | null;
-            location: string | null;
-            chainAmount: number | null;
-            keyPopCount: number;
-        }>(`/runs/${runId}`, { guildId: guild.id });
+        const run = await getRunDetails(runId, guild.id);
+        const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
         if (!run.channelId || !run.postMessageId) {
             logger.warn('Run missing channel or message ID', { runId });
@@ -64,67 +56,38 @@ export async function sendRunPing(
             }
         }
 
-        // Build the ping message based on run status
-        let content = '';
-        
+        const pingRoleIds: string[] = [];
         if (messageType === 'starting') {
-            // Automatic ping when run goes live - include @here, dungeon role, and raid role
-            content = '**Raid Starting!**';
+            const dungeonRoleIds = await resolveDungeonRolePingIds(guild, run.selectedDungeons.map(dungeon => dungeon.dungeonKey));
+            pingRoleIds.push(...dungeonRoleIds);
+        }
+        if (run.roleId) pingRoleIds.push(run.roleId);
+
+        let content = buildRunMessageContent({
+            selectedDungeons: run.selectedDungeons,
+            party: run.party,
+            location: run.location,
+            additionalPingRoleIds: pingRoleIds,
+            includeHere: messageType === 'starting',
+        });
+
+        let statusLine: string;
+        if (messageType === 'starting') {
+            statusLine = '**Raid Starting!**';
+        } else if (run.status === 'open') {
+            statusLine = '🔔 **Raid Starting Soon!**';
+        } else if (run.status === 'live') {
+            statusLine = '🔔 **Raid is Live!**';
         } else {
-            // Manual ping by organizer - only ping raid role (not @here or dungeon role)
-            if (run.status === 'open') {
-                content = '🔔 **Raid Starting Soon!**';
-            } else if (run.status === 'live') {
-                content = '🔔 **Raid is Live!**';
-            } else {
-                content = '🔔 **Raid Update!**';
-            }
-        }
-        
-        // For automatic "starting" ping: add @here, dungeon role ping, and raid role
-        // For manual ping: only add raid role (not @here or dungeon role)
-        if (messageType === 'starting') {
-            // Add @here for starting message
-            content += ' @here';
-            
-            // Add dungeon-specific role ping if configured
-            try {
-                const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
-                const dungeonRoleId = dungeon_role_pings[run.dungeonKey];
-                if (dungeonRoleId) {
-                    content += ` <@&${dungeonRoleId}>`;
-                }
-            } catch (e) {
-                logger.warn('Failed to fetch dungeon role pings', { 
-                    guildId: guild.id, 
-                    dungeonKey: run.dungeonKey,
-                    error: e instanceof Error ? e.message : String(e)
-                });
-                // Continue without custom role ping
-            }
-        }
-        
-        // Always add run role mention if available
-        if (run.roleId) {
-            content += ` <@&${run.roleId}>`;
+            statusLine = '🔔 **Raid Update!**';
         }
 
-        // Add link to the raid panel
+        if (run.runKind !== 'oryx_3' && run.chainAmount) {
+            statusLine += ` • Chain: **${run.keyPopCount}**/**${run.chainAmount}**`;
+        }
+
         const raidPanelUrl = `https://discord.com/channels/${guild.id}/${run.channelId}/${run.postMessageId}`;
-        content += `\n\n**${run.dungeonLabel}**`;
-        
-        // Add party/location info if available
-        const info: string[] = [];
-        if (run.party) info.push(`Party: **${run.party}**`);
-        if (run.location) info.push(`Location: **${run.location}**`);
-        if (run.dungeonKey !== 'ORYX_3' && run.chainAmount) {
-            info.push(`Chain: **${run.keyPopCount}**/**${run.chainAmount}**`);
-        }
-        if (info.length > 0) {
-            content += ` • ${info.join(' • ')}`;
-        }
-        
-        content += `\n[Jump to Raid Panel](${raidPanelUrl})`;
+        content += `\n${statusLine}\n[Jump to Raid Panel](${raidPanelUrl})`;
 
         // Send the new ping message
         const pingMessage = await textChannel.send({ content });
@@ -137,7 +100,7 @@ export async function sendRunPing(
         logger.info('Sent run ping message', { 
             runId, 
             pingMessageId: pingMessage.id,
-            dungeonLabel: run.dungeonLabel 
+            dungeonLabel: displayLabel
         });
 
         return pingMessage.id;
@@ -165,18 +128,8 @@ export async function sendKeyPoppedPing(
 ): Promise<string | null> {
     try {
         // Fetch run details
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            dungeonLabel: string;
-            dungeonKey: string;
-            roleId: string | null;
-            pingMessageId: string | null;
-            party: string | null;
-            location: string | null;
-            chainAmount: number | null;
-            keyPopCount: number;
-        }>(`/runs/${runId}`, { guildId: guild.id });
+        const run = await getRunDetails(runId, guild.id);
+        const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
         if (!run.channelId || !run.postMessageId) {
             logger.warn('Run missing channel or message ID', { runId });
@@ -210,20 +163,20 @@ export async function sendKeyPoppedPing(
         const endsUnix = Math.floor(new Date(keyWindowEndsAt).getTime() / 1000);
 
         // Build the ping message
-        let content = '🔑 **Key Popped!**';
+        let content = `${getDungeonEnteredEmoji(run.runKind, run.dungeonKey)} **Dungeon Entered!**`;
         
         // Only ping raid role (not @here or dungeon role ping)
         if (run.roleId) {
             content += ` <@&${run.roleId}>`;
         }
 
-        content += `\n\nPortal expires <t:${endsUnix}:R> • **${run.dungeonLabel}**`;
+        content += `\n\nPortal expires <t:${endsUnix}:R> • **${displayLabel}**`;
         
         // Add party/location info if available
         const info: string[] = [];
         if (run.party) info.push(`Party: **${run.party}**`);
         if (run.location) info.push(`Location: **${run.location}**`);
-        if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
+        if (run.runKind !== 'oryx_3' && run.keyPopCount > 0) {
             if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
                 info.push(`Chain: **${run.keyPopCount}**/**${run.chainAmount}**`);
             } else {
@@ -246,16 +199,16 @@ export async function sendKeyPoppedPing(
             pingMessageId: pingMessage.id 
         }, { guildId: guild.id });
 
-        logger.info('Sent key popped ping message', { 
+        logger.info('Sent dungeon entered ping message', {
             runId, 
             pingMessageId: pingMessage.id,
-            dungeonLabel: run.dungeonLabel,
+            dungeonLabel: displayLabel,
             expiresAt: keyWindowEndsAt
         });
 
         return pingMessage.id;
     } catch (error) {
-        logger.error('Failed to send key popped ping', { runId, error });
+        logger.error('Failed to send dungeon entered ping', { runId, error });
         return null;
     }
 }
@@ -279,16 +232,8 @@ export async function sendRealmScorePing(
 ): Promise<string | null> {
     try {
         // Fetch run details
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            dungeonLabel: string;
-            dungeonKey: string;
-            roleId: string | null;
-            pingMessageId: string | null;
-            party: string | null;
-            location: string | null;
-        }>(`/runs/${runId}`, { guildId: guild.id });
+        const run = await getRunDetails(runId, guild.id);
+        const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
         if (!run.channelId || !run.postMessageId) {
             logger.warn('Run missing channel or message ID', { runId });
@@ -326,7 +271,7 @@ export async function sendRealmScorePing(
             content += ` <@&${run.roleId}>`;
         }
 
-        content += `\n\n**${run.dungeonLabel}**`;
+        content += `\n\n**${displayLabel}**`;
         
         // Add party/location info if available
         const info: string[] = [];
@@ -351,7 +296,7 @@ export async function sendRealmScorePing(
         logger.info('Sent realm score ping message', { 
             runId, 
             pingMessageId: pingMessage.id,
-            dungeonLabel: run.dungeonLabel,
+            dungeonLabel: displayLabel,
             realmScore
         });
 

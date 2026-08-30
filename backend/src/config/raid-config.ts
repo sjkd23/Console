@@ -23,13 +23,47 @@ export interface DungeonConfig {
     name: string;
     /** Category for grouping/filtering (e.g., 'Exaltation Dungeons', 'Event Dungeons') */
     category: string;
+    /** Explicit behavior classification. Display categories are not authoritative. */
+    selectionClass: DungeonSelectionClass;
+    /** Explicit accounting base category; O3 intentionally retains exalt accounting. */
+    quotaCategory: 'exalt' | 'non_exalt';
+}
+
+export type DungeonSelectionClass = 'exalt' | 'non_exalt' | 'realm_clearing' | 'oryx_3';
+
+export const AGGREGATE_ACTIVITY_KEYS = {
+    MISC_DUNGEONS: 'Misc Dungeons',
+    EXALTATION_DUNGEONS: 'Exaltation Dungeons',
+} as const;
+
+export type AggregateActivityKey = keyof typeof AGGREGATE_ACTIVITY_KEYS;
+
+const EXALT_DUNGEON_CODES = new Set([
+    'SHATTERS',
+    'NEST',
+    'ADVANCED_NEST',
+    'FUNGAL_CAVERN',
+    'CULTIST_HIDEOUT',
+    'THE_VOID',
+    'LOST_HALLS',
+    'MOONLIGHT VILLAGE',
+    'STEAMWORKS',
+    'ADVANCED STEAMWORKS',
+    'ICE_CITADEL',
+    'SPECTRAL_PENITENTIARY',
+]);
+
+function getSelectionClass(code: string): DungeonSelectionClass {
+    if (code === 'ORYX_3') return 'oryx_3';
+    if (code === 'REALM_DUNGEON') return 'realm_clearing';
+    return EXALT_DUNGEON_CODES.has(code) ? 'exalt' : 'non_exalt';
 }
 
 /**
  * List of all supported dungeons.
  * This is the single source of truth for dungeon codes on the backend.
  */
-export const DUNGEONS: readonly DungeonConfig[] = [
+const DUNGEON_DEFINITIONS: ReadonlyArray<Omit<DungeonConfig, 'selectionClass' | 'quotaCategory'>> = [
     // Exaltation Dungeons
     { code: 'SHATTERS', name: 'Shatters', category: 'Exaltation Dungeons' },
     { code: 'NEST', name: 'Nest', category: 'Exaltation Dungeons' },
@@ -96,8 +130,16 @@ export const DUNGEONS: readonly DungeonConfig[] = [
     { code: 'CANDYLAND_HUNTING_GROUNDS', name: 'Candyland Hunting Grounds', category: 'Basic Dungeons' },
 
     // Meta Dungeons (catch-all options)
-    { code: 'REALM_DUNGEON', name: 'Realm Dungeon', category: 'Basic Dungeons' },
+    { code: 'REALM_DUNGEON', name: 'Realm Clearing', category: 'Basic Dungeons' },
 ];
+
+export const DUNGEONS: readonly DungeonConfig[] = DUNGEON_DEFINITIONS.map(dungeon => ({
+    ...dungeon,
+    selectionClass: getSelectionClass(dungeon.code),
+    quotaCategory: dungeon.code === 'ORYX_3' || EXALT_DUNGEON_CODES.has(dungeon.code)
+        ? 'exalt'
+        : 'non_exalt',
+}));
 
 /**
  * Map of dungeon codes to their config for O(1) lookup.
@@ -172,5 +214,17 @@ export function getDungeonName(code: string): string {
  * Check if a dungeon is an Exaltation dungeon.
  */
 export function isExaltDungeon(code: string): boolean {
-    return DUNGEON_BY_CODE.get(code)?.category === 'Exaltation Dungeons';
+    return DUNGEON_BY_CODE.get(code)?.quotaCategory === 'exalt';
+}
+
+export function isOryx3Dungeon(code: string): boolean {
+    return DUNGEON_BY_CODE.get(code)?.selectionClass === 'oryx_3';
+}
+
+export function isRealmClearingDungeon(code: string): boolean {
+    return DUNGEON_BY_CODE.get(code)?.selectionClass === 'realm_clearing';
+}
+
+export function isAggregateActivityKey(code: string): code is AggregateActivityKey {
+    return Object.hasOwn(AGGREGATE_ACTIVITY_KEYS, code);
 }

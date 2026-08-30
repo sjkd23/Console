@@ -21,6 +21,7 @@ export interface HeadcountState {
  * This prevents participant names from appearing on the public panel.
  */
 const participantsStore = new Map<string, Set<string>>();
+const dungeonCodesStore = new Map<string, string[]>();
 
 /**
  * Get participants for a specific headcount panel.
@@ -55,6 +56,7 @@ export function getParticipants(embed: EmbedBuilder, messageId?: string): Set<st
  */
 export function clearParticipants(messageId: string): void {
     participantsStore.delete(messageId);
+    dungeonCodesStore.delete(messageId);
 }
 
 /**
@@ -72,14 +74,25 @@ export function getOrganizerId(embed: EmbedBuilder): string | null {
  * Extract dungeon codes from the embed description.
  * Dungeons are listed in a "**Dungeons:**" section.
  */
-export function getDungeonCodes(embed: EmbedBuilder): string[] {
-    const data = embed.toJSON();
-    const description = data.description || '';
-    
-    // Extract the button custom IDs from the message components to get dungeon codes
-    // This is more reliable than parsing the description
-    // For now, we'll return empty and populate from button customIds in the handler
-    return [];
+export function getDungeonCodes(_embed: EmbedBuilder, messageId?: string): string[] {
+    return messageId ? [...(dungeonCodesStore.get(messageId) ?? [])] : [];
+}
+
+export function setDungeonCodes(messageId: string, dungeonCodes: readonly string[]): void {
+    dungeonCodesStore.set(messageId, [...dungeonCodes]);
+}
+
+/**
+ * Resolve the authoritative ordered selection for a headcount. Component-derived
+ * codes are accepted only for panels created before explicit state was stored.
+ */
+export function resolveHeadcountDungeonCodes(
+    messageId: string,
+    legacyComponentCodes: readonly string[]
+): string[] {
+    return dungeonCodesStore.has(messageId)
+        ? [...(dungeonCodesStore.get(messageId) ?? [])]
+        : [...legacyComponentCodes];
 }
 
 /**

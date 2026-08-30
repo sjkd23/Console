@@ -4,6 +4,7 @@ import {
     deleteQuotaRoleConfig,
     finalizeDueQuotaPeriods,
     getJSON,
+    getRunDetails,
     getQuotaPeriodScan,
     getUnpostedQuotaPeriods,
     patchJSON,
@@ -21,6 +22,11 @@ import { clearKeyOffers } from '../../interactions/buttons/raids/headcount-key.j
 import { clearHeadcountPanels } from '../state/headcount-panel-tracker.js';
 import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
 import { deliverQuotaPeriodLog } from '../ui/quota-log.js';
+import { transitionRunEmbed } from '../utilities/run-panel-builder.js';
+import {
+    buildRunLifecycleMessageContent,
+    buildRunMessageContentEdit,
+} from '../utilities/run-message-helpers.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -110,6 +116,7 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                 organizerRoles: organizerMember ? getMemberRoleIds(organizerMember) : undefined,
                 organizerRolePositions: organizerMember ? getRolePositions(organizerMember) : undefined,
             }, { guildId: run.guild_id });
+            const normalizedRun = await getRunDetails(run.id, run.guild_id).catch(() => null);
 
             // Get the guild for Discord-side cleanup tasks (optional)
             if (!guild) {
@@ -189,14 +196,24 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                     if (channel && channel.isTextBased()) {
                         const message = await channel.messages.fetch(run.post_message_id).catch(() => null);
                         if (message && message.editable) {
-                            // Update the embed to show it's ended
-                            const embed = new EmbedBuilder()
-                                .setTitle(`✅ Run Ended: ${run.dungeon_label}`)
-                                .setDescription(`Organizer: <@${run.organizer_id}>\n\n**Status:** Ended`)
-                                .setColor(0x808080) // Gray color
-                                .setTimestamp();
+                            const embed = normalizedRun && message.embeds[0]
+                                ? transitionRunEmbed(message.embeds[0], 'ended', normalizedRun)
+                                : new EmbedBuilder()
+                                    .setTitle(`✅ Run Ended: ${run.dungeon_label}`)
+                                    .setDescription(`Organizer: <@${run.organizer_id}>\n\n**Status:** Ended`)
+                                    .setColor(0x808080)
+                                    .setTimestamp();
+                            const contentEdit = normalizedRun
+                                ? buildRunMessageContentEdit(buildRunLifecycleMessageContent(normalizedRun, {
+                                    includeHere: false,
+                                }))
+                                : {};
 
-                            await message.edit({ embeds: [embed], components: [] });
+                            await message.edit({
+                                ...contentEdit,
+                                embeds: [embed],
+                                components: [],
+                            });
                             logger.debug(`Updated Discord message`, { runId: run.id });
                         }
                     }

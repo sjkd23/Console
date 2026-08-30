@@ -19,6 +19,14 @@ import {
     organizerRunActivitySubjectId,
 } from '../dungeon-activity/activity-subject.js';
 import { z } from 'zod';
+import {
+    classifyRunSelection,
+    quotaBaseCategoryForRun,
+    usesAggregateActivity,
+    type ClassifiedRunSelection,
+    type RunKind,
+} from '../runs/run-taxonomy.js';
+import { normalizeRunId } from '../runs/run-id.js';
 
 const logger = createLogger('RunService');
 
@@ -36,8 +44,7 @@ export interface CreateRunInput {
     organizerUsername: string;
     organizerRoles?: string[];
     channelId: string;
-    dungeonKey: string;
-    dungeonLabel: string;
+    selectedDungeonKeys: string[];
     description?: string;
     party?: string;
     location?: string;
@@ -45,16 +52,17 @@ export interface CreateRunInput {
     roleId?: string;
 }
 
-export interface CreateRunResult {
+export interface CreateRunResult extends ClassifiedRunSelection {
     runId: number;
 }
 
 export interface EndRunInput {
     runId: number;
     guildId: string;
-    organizerId: string;
-    dungeonKey: string;
-    keyPopCount: number;
+    /** Legacy caller fields retained for source compatibility; persisted run values are authoritative. */
+    organizerId?: string;
+    dungeonKey?: string;
+    keyPopCount?: number;
     organizerRoles?: string[];
     organizerRolePositions?: Record<string, number>;
 }
@@ -67,6 +75,13 @@ export interface EndRunResult {
 export interface RecordKeyPopInput extends EndRunInput {
     expectedKeyPopCount: number;
     keyWindowSeconds: number;
+}
+
+export class Oryx3KeyPopError extends Error {
+    constructor() {
+        super('Oryx 3 does not use normal Dungeon Entered completion handling.');
+        this.name = 'Oryx3KeyPopError';
+    }
 }
 
 export interface RecordKeyPopResult {
@@ -91,7 +106,8 @@ export interface RecordKeyPopResult {
  * @returns The created run ID
  */
 export async function createRunWithTransaction(input: CreateRunInput): Promise<CreateRunResult> {
-    logger.debug({ guildId: input.guildId, organizerId: input.organizerId, dungeonKey: input.dungeonKey }, 
+    const classification = classifyRunSelection(input.selectedDungeonKeys);
+    logger.debug({ guildId: input.guildId, organizerId: input.organizerId, runKind: classification.runKind },
         'Creating run with transaction');
 
     const runId = await withTransaction(async (client) => {
@@ -110,34 +126,46 @@ export async function createRunWithTransaction(input: CreateRunInput): Promise<C
         );
 
         // Step 3: Insert run row
-        const res = await client.query<{ id: number }>(
+        const res = await client.query<{ id: string | number }>(
             `INSERT INTO run (
                 guild_id, organizer_id, dungeon_key, dungeon_label, channel_id, 
-                status, description, party, location, auto_end_minutes, role_id
+                status, description, party, location, auto_end_minutes, role_id,
+                run_kind, activity_key
             )
-            VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9, $10::bigint)
+            VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9, $10::bigint, $11, $12)
             RETURNING id`,
             [
                 input.guildId,
                 input.organizerId,
-                input.dungeonKey,
-                input.dungeonLabel,
+                classification.dungeonKey,
+                classification.dungeonLabel,
                 input.channelId,
                 input.description || null,
                 input.party || null,
                 input.location || null,
                 input.autoEndMinutes,
                 input.roleId || null,
+                classification.runKind,
+                classification.activityKey,
             ]
         );
 
-        return res.rows[0].id;
+        const createdRunId = normalizeRunId(res.rows[0].id);
+        for (const selection of classification.selectedDungeons) {
+            await client.query(
+                `INSERT INTO run_dungeon_selection (run_id, dungeon_key, dungeon_label, selection_order)
+                 VALUES ($1::bigint, $2, $3, $4)`,
+                [createdRunId, selection.dungeonKey, selection.dungeonLabel, selection.selectionOrder]
+            );
+        }
+
+        return createdRunId;
     });
 
-    logger.info({ runId, guildId: input.guildId, organizerId: input.organizerId, dungeonKey: input.dungeonKey }, 
+    logger.info({ runId, guildId: input.guildId, organizerId: input.organizerId, runKind: classification.runKind },
         'Run created successfully');
 
-    return { runId };
+    return { runId, ...classification };
 }
 
 // ============================================================================
@@ -151,6 +179,10 @@ export async function recordKeyPopWithTransaction(input: RecordKeyPopInput): Pro
             key_window_ends_at: string | Date;
             key_pop_count: number;
             occurred_at: string | Date;
+            organizer_id: string;
+            dungeon_key: string;
+            activity_key: string;
+            run_kind: RunKind;
         }>(
             `UPDATE run
              SET key_window_ends_at = now() + ($2 || ' seconds')::interval,
@@ -159,17 +191,24 @@ export async function recordKeyPopWithTransaction(input: RecordKeyPopInput): Pro
                AND guild_id = $4::bigint
                AND status = 'live'
                AND key_pop_count = $3
-             RETURNING key_window_ends_at, key_pop_count, now() AS occurred_at`,
+             RETURNING key_window_ends_at, key_pop_count, now() AS occurred_at,
+                       organizer_id, dungeon_key, activity_key, run_kind`,
             [input.runId, input.keyWindowSeconds, input.expectedKeyPopCount, input.guildId]
         );
         if (updated.rowCount !== 1) return null;
 
-        const keyPopCount = updated.rows[0].key_pop_count;
+        const run = updated.rows[0];
+        if (run.run_kind === 'oryx_3') throw new Oryx3KeyPopError();
+        const baseCategory = quotaBaseCategoryForRun(run.run_kind) ?? undefined;
+
+        const keyPopCount = run.key_pop_count;
         let previousSnapshotRaidersAwarded = 0;
         if (input.expectedKeyPopCount > 0) {
             previousSnapshotRaidersAwarded = await quotaService.awardRaidersQuotaFromSnapshot({
                 guildId: input.guildId,
-                dungeonKey: input.dungeonKey,
+                dungeonKey: run.dungeon_key,
+                activityKey: run.activity_key,
+                baseCategory,
                 runId: input.runId,
                 keyPopNumber: input.expectedKeyPopCount,
             }, client);
@@ -178,27 +217,29 @@ export async function recordKeyPopWithTransaction(input: RecordKeyPopInput): Pro
         const snapshotCount = await snapshotRaidersAtKeyPop(input.runId, keyPopCount, client);
         await recordDungeonActivity({
             guildId: input.guildId,
-            userId: input.organizerId,
+            userId: run.organizer_id,
             runId: input.runId,
             role: 'organizer',
-            dungeonStatsKey: input.dungeonKey,
+            dungeonStatsKey: run.activity_key,
             subjectId: organizerKeyPopActivitySubjectId(input.runId, keyPopCount),
             source: 'key_pop',
             count: 1,
-            occurredAt: z.coerce.date().parse(updated.rows[0].occurred_at),
+            occurredAt: z.coerce.date().parse(run.occurred_at),
         }, client);
         const organizerQuotaPoints = await quotaService.awardOrganizerQuota({
             guildId: input.guildId,
-            dungeonKey: input.dungeonKey,
+            dungeonKey: run.dungeon_key,
+            activityKey: run.activity_key,
+            baseCategory,
             runId: input.runId,
-            organizerDiscordId: input.organizerId,
+            organizerDiscordId: run.organizer_id,
             organizerRoles: input.organizerRoles,
             organizerRolePositions: input.organizerRolePositions,
             keyPopNumber: keyPopCount,
         }, client);
 
         return {
-            keyWindowEndsAt: updated.rows[0].key_window_ends_at,
+            keyWindowEndsAt: run.key_window_ends_at,
             keyPopCount,
             organizerQuotaPoints,
             previousSnapshotRaidersAwarded,
@@ -226,71 +267,84 @@ export async function recordKeyPopWithTransaction(input: RecordKeyPopInput): Pro
  * @returns Statistics about points awarded
  */
 export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunResult> {
-    logger.debug({ runId: input.runId, guildId: input.guildId, keyPopCount: input.keyPopCount }, 
+    logger.debug({ runId: input.runId, guildId: input.guildId },
         'Ending run with transaction');
 
     const result = await withTransaction(async (client) => {
         // Step 1: Update run status to 'ended'
-        const ended = await client.query<{ ended_at: string | Date }>(
+        const ended = await client.query<{
+            ended_at: string | Date;
+            organizer_id: string;
+            dungeon_key: string;
+            activity_key: string;
+            run_kind: RunKind;
+            key_pop_count: number;
+        }>(
             `UPDATE run
              SET status = 'ended',
                  ended_at = COALESCE(ended_at, now())
              WHERE id = $1::bigint AND guild_id = $2::bigint
-             RETURNING ended_at`,
+             RETURNING ended_at, organizer_id, dungeon_key, activity_key, run_kind, key_pop_count`,
             [input.runId, input.guildId]
         );
         if (ended.rowCount !== 1) throw new Error(`Run ${input.runId} was not found while ending`);
+        const run = ended.rows[0];
+        const baseCategory = quotaBaseCategoryForRun(run.run_kind) ?? undefined;
 
         // Step 2: Oryx 3 is the only dungeon whose organizer completion is
         // awarded at run end. Normal dungeons are awarded per key pop.
         let organizerQuotaPoints = 0;
-        if (input.dungeonKey === 'ORYX_3') {
+        if (run.run_kind === 'oryx_3') {
             await recordDungeonActivity({
                 guildId: input.guildId,
-                userId: input.organizerId,
+                userId: run.organizer_id,
                 runId: input.runId,
                 role: 'organizer',
-                dungeonStatsKey: input.dungeonKey,
-                subjectId: organizerRunActivitySubjectId(input.runId, input.dungeonKey),
+                dungeonStatsKey: run.activity_key,
+                subjectId: organizerRunActivitySubjectId(input.runId, run.activity_key),
                 source: 'o3_end',
                 count: 1,
                 occurredAt: z.coerce.date().parse(ended.rows[0].ended_at),
             }, client);
             organizerQuotaPoints = await quotaService.awardOrganizerQuota({
                 guildId: input.guildId,
-                dungeonKey: input.dungeonKey,
+                dungeonKey: run.dungeon_key,
+                activityKey: run.activity_key,
                 runId: input.runId,
-                organizerDiscordId: input.organizerId,
+                organizerDiscordId: run.organizer_id,
                 organizerRoles: input.organizerRoles,
                 organizerRolePositions: input.organizerRolePositions,
             }, client);
         }
 
-        logger.debug({ runId: input.runId, organizerQuotaPoints, keyPopCount: input.keyPopCount },
+        logger.debug({ runId: input.runId, organizerQuotaPoints, keyPopCount: run.key_pop_count },
             'Processed organizer quota award at run end');
 
         // Step 3: Award raider points using QuotaService
         let raiderPointsAwarded = 0;
 
-        if (input.keyPopCount > 0) {
+        if (run.key_pop_count > 0) {
             // Award completions from the last key pop snapshot
             raiderPointsAwarded = await quotaService.awardRaidersQuotaFromSnapshot({
                 guildId: input.guildId,
-                dungeonKey: input.dungeonKey,
+                dungeonKey: run.dungeon_key,
+                activityKey: run.activity_key,
+                baseCategory,
                 runId: input.runId,
-                keyPopNumber: input.keyPopCount,
+                keyPopNumber: run.key_pop_count,
             }, client);
-            logger.debug({ runId: input.runId, keyPopCount: input.keyPopCount, raiderPointsAwarded }, 
+            logger.debug({ runId: input.runId, keyPopCount: run.key_pop_count, raiderPointsAwarded },
                 'Awarded completions from final key pop snapshot');
-        } else {
-            // No key pops - fall back to awarding all joined raiders
+        } else if (!usesAggregateActivity(run.run_kind)) {
+            // No Dungeon Entered events - preserve the legacy single-run participant fallback.
             raiderPointsAwarded = await quotaService.awardRaidersQuotaFromParticipants({
                 guildId: input.guildId,
-                dungeonKey: input.dungeonKey,
+                dungeonKey: run.dungeon_key,
+                activityKey: run.activity_key,
                 runId: input.runId,
             }, client);
             logger.debug({ runId: input.runId, raiderPointsAwarded }, 
-                'Awarded points to all joined raiders (no key pops)');
+                'Awarded points to all joined raiders (no dungeon entries)');
         }
 
         return {
@@ -304,7 +358,7 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         guildId: input.guildId, 
         organizerQuotaPoints: result.organizerQuotaPoints,
         raiderPointsAwarded: result.raiderPointsAwarded,
-        keyPopCount: input.keyPopCount,
+        keyPopCount: 'persisted',
         note: 'Organizer quota processed at run end'
     }, 'Run ended successfully');
 

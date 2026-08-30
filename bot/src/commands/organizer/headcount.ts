@@ -2,23 +2,18 @@
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
-    StringSelectMenuBuilder,
-    StringSelectMenuInteraction,
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
     EmbedBuilder,
-    MessageFlags,
-    ComponentType
+    MessageFlags
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { ensureGuildContext } from '../../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/errors/error-handler.js';
-import { dungeonByCode, getCategorizedDungeons } from '../../constants/dungeons/dungeon-helpers.js';
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import { getDungeonKeyEmojiIdentifier, getDungeonKeyEmoji } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
-import { getDungeonRolePings } from '../../lib/utilities/http.js';
 import { registerHeadcount } from '../../lib/state/active-headcount-tracker.js';
 import { createLogger } from '../../lib/logging/logger.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
@@ -29,8 +24,14 @@ import {
 } from '../../lib/utilities/organizer-activity-checker.js';
 import { fetchConfiguredRaidChannel } from '../../lib/utilities/channel-helpers.js';
 import { buildRunMessageContent } from '../../lib/utilities/run-message-helpers.js';
+import { MULTI_DUNGEON_HEADCOUNT_TITLE } from '../../lib/utilities/headcount-conversion.js';
 import { sendHeadcountOrganizerPanelAsFollowUp } from '../../interactions/buttons/raids/headcount-organizer-panel.js';
 import { autoJoinOrganizerToHeadcount } from '../../lib/utilities/auto-join-helpers.js';
+import { collectDungeonSelection } from '../../lib/ui/dungeon-selection-panel.js';
+import { resolveDungeonRolePingIds } from '../../lib/utilities/dungeon-role-pings.js';
+import { setDungeonCodes } from '../../lib/state/headcount-state.js';
+import { validateHeadcountDungeons } from '../../constants/dungeons/dungeon-taxonomy.js';
+import { getPhysicalDungeonKeyOffers } from '../../lib/utilities/dungeon-key-offers.js';
 
 const logger = createLogger('Headcount');
 
@@ -87,171 +88,22 @@ export const headcount: SlashCommand = {
             return;
         }
 
-        // Get categorized dungeons
-        const { exalt, misc1, misc2 } = getCategorizedDungeons();
-
-        // Limit each dropdown to 25 options (Discord limit)
-        const exaltOptions = exalt.slice(0, 25);
-        const misc1Options = misc1.slice(0, 25);
-        const misc2Options = misc2.slice(0, 25);
-
-        // Create three select menus
-        const selectMenu1 = new StringSelectMenuBuilder()
-            .setCustomId('headcount:select_exalt')
-            .setPlaceholder('Select Exaltation dungeons')
-            .setMinValues(0)
-            .setMaxValues(Math.min(5, exaltOptions.length))
-            .addOptions(
-                exaltOptions.map(d => ({
-                    label: d.dungeonName,
-                    value: d.codeName,
-                    description: d.dungeonCategory || undefined
-                }))
-            );
-
-        const selectMenu2 = new StringSelectMenuBuilder()
-            .setCustomId('headcount:select_misc1')
-            .setPlaceholder('Select other dungeons (part 1)')
-            .setMinValues(0)
-            .setMaxValues(Math.min(5, misc1Options.length))
-            .addOptions(
-                misc1Options.map(d => ({
-                    label: d.dungeonName,
-                    value: d.codeName,
-                    description: d.dungeonCategory || undefined
-                }))
-            );
-
-        const selectMenu3 = new StringSelectMenuBuilder()
-            .setCustomId('headcount:select_misc2')
-            .setPlaceholder('Select other dungeons (part 2)')
-            .setMinValues(0)
-            .setMaxValues(Math.min(5, misc2Options.length))
-            .addOptions(
-                misc2Options.map(d => ({
-                    label: d.dungeonName,
-                    value: d.codeName,
-                    description: d.dungeonCategory || undefined
-                }))
-            );
-
-        const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu1);
-        const row2 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu2);
-        const row3 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu3);
-
-        // Add a confirm button
-        const confirmButton = new ButtonBuilder()
-            .setCustomId('headcount:confirm')
-            .setLabel('Create Headcount')
-            .setStyle(ButtonStyle.Primary);
-
-        const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton);
-
-        await interaction.editReply({
-            content: '**Select dungeons for the headcount**\n\nChoose up to 5 dungeons total from any category, then click "Create Headcount":',
-            components: [row1, row2, row3, buttonRow]
+        const selectedDungeons = await collectDungeonSelection(interaction, {
+            namespace: 'headcount-select',
+            title: 'Select dungeons for the headcount',
+            instructions: 'Choose up to 5 dungeons. Any mixture of selectable dungeons is allowed for headcounts.',
+            confirmLabel: 'Create Headcount',
+            validate: validateHeadcountDungeons,
         });
+        if (!selectedDungeons) return;
 
-        // Track selected dungeons across all dropdowns
-        const selectedDungeonCodes = new Set<string>();
+        const confirmActivityCheck = await checkOrganizerActiveActivities(interaction, guild.id, interaction.user.id);
+        if (confirmActivityCheck.errorMessage) {
+            await interaction.editReply({ content: confirmActivityCheck.errorMessage, components: [] });
+            return;
+        }
 
-        // Create a collector for both select menus and the confirm button
-        const collector = interaction.channel!.createMessageComponentCollector({
-            filter: (i) => i.user.id === interaction.user.id && i.customId.startsWith('headcount:'),
-            time: 120_000 // 2 minute timeout
-        });
-
-        collector.on('collect', async (i) => {
-            // Guard: Only respond to interactions that haven't been handled yet
-            if (i.deferred || i.replied) {
-                return;
-            }
-
-            try {
-                if (i.isStringSelectMenu()) {
-                    await i.deferUpdate();
-
-                    // Update the selected dungeons set
-                    if (i.customId === 'headcount:select_exalt') {
-                        // Remove any previous exalt selections
-                        exaltOptions.forEach(d => selectedDungeonCodes.delete(d.codeName));
-                        // Add new selections
-                        i.values.forEach(v => selectedDungeonCodes.add(v));
-                    } else if (i.customId === 'headcount:select_misc1') {
-                        // Remove any previous misc1 selections
-                        misc1Options.forEach(d => selectedDungeonCodes.delete(d.codeName));
-                        // Add new selections
-                        i.values.forEach(v => selectedDungeonCodes.add(v));
-                    } else if (i.customId === 'headcount:select_misc2') {
-                        // Remove any previous misc2 selections
-                        misc2Options.forEach(d => selectedDungeonCodes.delete(d.codeName));
-                        // Add new selections
-                        i.values.forEach(v => selectedDungeonCodes.add(v));
-                    }
-
-                    // Update the message to show current selection count
-                    const count = selectedDungeonCodes.size;
-                    const selectedList = Array.from(selectedDungeonCodes)
-                        .map(code => dungeonByCode[code]?.dungeonName || code)
-                        .join(', ');
-
-                    await interaction.editReply({
-                        content: 
-                            `**Select dungeons for the headcount**\n\n` +
-                            `Choose up to 5 dungeons total from any category, then click "Create Headcount":\n\n` +
-                            `**Selected (${count}/5):** ${selectedList || 'None'}`,
-                        components: [row1, row2, row3, buttonRow]
-                    });
-
-                } else if (i.isButton() && i.customId === 'headcount:confirm') {
-                    await i.deferUpdate();
-                    collector.stop('confirmed');
-                }
-            } catch (err) {
-                // Catch interaction already acknowledged errors (40060)
-                if (err && typeof err === 'object' && 'code' in err && err.code === 40060) {
-                    logger.debug('Interaction already acknowledged', { customId: i.customId });
-                } else {
-                    logger.error('Error handling headcount interaction', {
-                        error: err instanceof Error ? err.message : String(err),
-                        customId: i.customId
-                    });
-                }
-            }
-        });
-
-        collector.on('end', async (collected, reason) => {
-            if (reason === 'confirmed') {
-                // Validate selection
-                if (selectedDungeonCodes.size === 0) {
-                    await interaction.editReply({
-                        content: '❌ No dungeons selected. Please try again.',
-                        components: []
-                    });
-                    return;
-                }
-
-                if (selectedDungeonCodes.size > 5) {
-                    await interaction.editReply({
-                        content: '❌ Too many dungeons selected (maximum 5). Please try again.',
-                        components: []
-                    });
-                    return;
-                }
-
-                const selectedDungeons = Array.from(selectedDungeonCodes)
-                    .map(code => dungeonByCode[code])
-                    .filter(d => d) as DungeonInfo[];
-
-                await createHeadcountPanel(interaction, guild, selectedDungeons);
-            } else {
-                // Timeout or other reason
-                await interaction.editReply({
-                    content: '⏱️ Selection timed out. Please run `/headcount` again.',
-                    components: []
-                });
-            }
-        });
+        await createHeadcountPanel(interaction, guild, selectedDungeons);
     }
 };
 
@@ -298,7 +150,7 @@ async function createHeadcountPanel(
                 .join('\n');
             
             embed = new EmbedBuilder()
-                .setTitle('🎯 Headcount — Multiple Dungeons')
+                .setTitle(MULTI_DUNGEON_HEADCOUNT_TITLE)
                 .setColor(0x5865F2)
                 .setDescription(
                     `Organizer: <@${interaction.user.id}>\n\n` +
@@ -331,23 +183,21 @@ async function createHeadcountPanel(
             const timestamp = Date.now();
             const keyButtons: ButtonBuilder[] = [];
             
-            // Create key buttons for all key reactions (supports Oryx 3's multiple keys)
-            if (dungeon.keyReactions && dungeon.keyReactions.length > 0) {
-                for (const keyReaction of dungeon.keyReactions) {
-                    const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
-                    const keyLabel = formatKeyButtonLabel(keyReaction.mapKey);
-                    
-                    const keyButton = new ButtonBuilder()
-                        .setCustomId(`headcount:key:${timestamp}:${dungeon.codeName}:${keyReaction.mapKey}`)
-                        .setLabel(keyLabel)
-                        .setStyle(ButtonStyle.Secondary);
-                    
-                    if (keyEmojiId) {
-                        keyButton.setEmoji(keyEmojiId);
-                    }
-                    
-                    keyButtons.push(keyButton);
+            // Create buttons only for real physical key offers (supports Oryx 3's multiple keys).
+            for (const { reaction: keyReaction } of getPhysicalDungeonKeyOffers([dungeon])) {
+                const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
+                const keyLabel = formatKeyButtonLabel(keyReaction.mapKey);
+
+                const keyButton = new ButtonBuilder()
+                    .setCustomId(`headcount:key:${timestamp}:${dungeon.codeName}:${keyReaction.mapKey}`)
+                    .setLabel(keyLabel)
+                    .setStyle(ButtonStyle.Secondary);
+
+                if (keyEmojiId) {
+                    keyButton.setEmoji(keyEmojiId);
                 }
+
+                keyButtons.push(keyButton);
             }
             
             // Layout logic: Max 5 buttons per row
@@ -389,44 +239,39 @@ async function createHeadcountPanel(
             const keyButtons: ButtonBuilder[] = [];
             const timestamp = Date.now();
             
-            for (const selectedDungeon of selectedDungeons) {
-                // For each dungeon, add buttons for all its key reactions
-                if (selectedDungeon.keyReactions && selectedDungeon.keyReactions.length > 0) {
-                    for (const keyReaction of selectedDungeon.keyReactions) {
-                        const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
-                        
-                        // Format label based on whether dungeon has multiple key types
-                        let label: string;
-                        if (selectedDungeon.keyReactions.length === 1) {
-                            // Single key: show dungeon name
-                            label = selectedDungeon.dungeonName.length > 15 
-                                ? selectedDungeon.dungeonName.substring(0, 13) + '...' 
-                                : selectedDungeon.dungeonName;
-                        } else {
-                            // Multiple keys: show just the key type name
-                            label = formatKeyButtonLabel(keyReaction.mapKey);
-                        }
-                        
-                        const keyButton = new ButtonBuilder()
-                            .setCustomId(`headcount:key:${timestamp}:${selectedDungeon.codeName}:${keyReaction.mapKey}`)
-                            .setLabel(label)
-                            .setStyle(ButtonStyle.Secondary);
+            for (const { dungeon: selectedDungeon, reaction: keyReaction } of getPhysicalDungeonKeyOffers(selectedDungeons)) {
+                const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
 
-                        // Add emoji if available
-                        if (keyEmojiId) {
-                            keyButton.setEmoji(keyEmojiId);
-                        }
-
-                        keyButtons.push(keyButton);
-                    }
+                // Format label based on whether dungeon has multiple key types
+                let label: string;
+                if (selectedDungeon.keyReactions.length === 1) {
+                    // Single key: show dungeon name
+                    label = selectedDungeon.dungeonName.length > 15
+                        ? selectedDungeon.dungeonName.substring(0, 13) + '...'
+                        : selectedDungeon.dungeonName;
+                } else {
+                    // Multiple keys: show just the key type name
+                    label = formatKeyButtonLabel(keyReaction.mapKey);
                 }
+
+                const keyButton = new ButtonBuilder()
+                    .setCustomId(`headcount:key:${timestamp}:${selectedDungeon.codeName}:${keyReaction.mapKey}`)
+                    .setLabel(label)
+                    .setStyle(ButtonStyle.Secondary);
+
+                // Add emoji if available
+                if (keyEmojiId) {
+                    keyButton.setEmoji(keyEmojiId);
+                }
+
+                keyButtons.push(keyButton);
             }
 
             // Smart button layout: max 5 buttons per row, up to 4 additional rows
             // Total max: 5 buttons (main row) + 20 buttons (4 additional rows) = 25 total
             let currentRow: ButtonBuilder[] = [];
             
-            for (let i = 0; i < keyButtons.length && buttonRows.length < 5; i++) {
+            for (let i = 0; i < keyButtons.length; i++) {
                 currentRow.push(keyButtons[i]);
                 
                 // Create new row when we have 5 buttons or at the end
@@ -446,39 +291,12 @@ async function createHeadcountPanel(
 
         // Post headcount panel to raid channel
         // Build content with @here and any configured dungeon role pings
-        const rolePings: string[] = [];
+        const rolePings = await resolveDungeonRolePingIds(guild, selectedDungeons.map(dungeon => dungeon.codeName));
         
-        // Check if there are configured role pings for any of the selected dungeons
-        try {
-            const { dungeon_role_pings } = await getDungeonRolePings(guild.id);
-            const rolePingSet = new Set<string>();
-            
-            for (const dungeon of selectedDungeons) {
-                const roleId = dungeon_role_pings[dungeon.codeName];
-                if (roleId) {
-                    rolePingSet.add(roleId);
-                }
-            }
-            
-            rolePings.push(...Array.from(rolePingSet));
-            
-            // Log for debugging
-            if (rolePings.length > 0) {
-                logger.info('Adding role pings to headcount', {
-                    guildId: guild.id,
-                    dungeons: selectedDungeons.map(d => d.codeName),
-                    rolePings
-                });
-            }
-        } catch (e) {
-            logger.error('Failed to fetch dungeon role pings for headcount', {
-                guildId: guild.id,
-                error: e instanceof Error ? e.message : String(e)
-            });
-            // Continue without custom role pings
-        }
-        
-        const content = buildRunMessageContent(undefined, undefined, rolePings);
+        const content = buildRunMessageContent({
+            selectedDungeons: selectedDungeons.map(dungeon => ({ dungeonLabel: dungeon.dungeonName })),
+            additionalPingRoleIds: rolePings,
+        });
         
         const sent = await raidChannel.send({
                 content,
@@ -492,8 +310,10 @@ async function createHeadcountPanel(
                 interaction.user.id,
                 sent.id,
                 sent.channelId,
-                selectedDungeons.map(d => d.dungeonName)
+                selectedDungeons.map(d => d.dungeonName),
+                selectedDungeons.map(d => d.codeName)
             );
+            setDungeonCodes(sent.id, selectedDungeons.map(dungeon => dungeon.codeName));
 
         // Confirm to organizer
         await interaction.editReply({
@@ -501,21 +321,7 @@ async function createHeadcountPanel(
             components: []
         });
 
-        // Extract dungeon codes for the organizer panel (needed now)
-        const dungeonCodes: string[] = [];
-        for (const row of sent.components) {
-            if ('components' in row) {
-                for (const component of row.components) {
-                    if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
-                        const parts = component.customId.split(':');
-                        const dungeonCode = parts[3];
-                        if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
-                            dungeonCodes.push(dungeonCode);
-                        }
-                    }
-                }
-            }
-        }
+        const dungeonCodes = selectedDungeons.map(dungeon => dungeon.codeName);
         
         // Show the organizer panel IMMEDIATELY as a followUp
         // This allows the organizer to see the panel right away

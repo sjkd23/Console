@@ -15,6 +15,7 @@ import { DUNGEON_DATA } from '../constants/dungeons/DungeonData.js';
 import { dungeonByCode } from '../constants/dungeons/dungeon-helpers.js';
 import { ensureGuildContext } from '../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../lib/errors/error-handler.js';
+import { AGGREGATE_ACTIVITY_LABELS } from '../constants/dungeons/dungeon-taxonomy.js';
 
 const ENTRIES_PER_PAGE = 25;
 
@@ -242,6 +243,12 @@ export const leaderboard: SlashCommand = {
         
         // Always include "all" option at the top
         const choices = [{ name: 'All Dungeons', value: 'all' }];
+        const category = interaction.options.getString('category');
+        if (category === 'runs_organized' || category === 'dungeon_completions') {
+            choices.push(...Object.entries(AGGREGATE_ACTIVITY_LABELS)
+                .filter(([key, label]) => key.toLowerCase().includes(focusedValue) || label.toLowerCase().includes(focusedValue))
+                .map(([value, name]) => ({ name, value })));
+        }
         
         // Add matching dungeons
         const filtered = DUNGEON_DATA
@@ -249,7 +256,7 @@ export const leaderboard: SlashCommand = {
                 dungeon.dungeonName.toLowerCase().includes(focusedValue) ||
                 dungeon.codeName.toLowerCase().includes(focusedValue)
             )
-            .slice(0, 24) // Leave room for "all" option
+            .slice(0, 25 - choices.length)
             .map(dungeon => ({
                 name: dungeon.dungeonName,
                 value: dungeon.codeName,
@@ -343,7 +350,11 @@ export const leaderboard: SlashCommand = {
             // 'desc' is the default from backend, so no need to sort
 
             if (sortedLeaderboard.length === 0) {
-                const dungeonName = dungeonKey === 'all' ? 'any dungeon' : (dungeonByCode[dungeonKey]?.dungeonName || dungeonKey);
+                const dungeonName = dungeonKey === 'all'
+                    ? 'any dungeon'
+                    : (dungeonByCode[dungeonKey]?.dungeonName
+                        || AGGREGATE_ACTIVITY_LABELS[dungeonKey as keyof typeof AGGREGATE_ACTIVITY_LABELS]
+                        || dungeonKey);
                 const categoryName = category === 'runs_organized' ? 'runs organized' 
                     : category === 'keys_popped' ? 'keys popped' 
                     : category === 'dungeon_completions' ? 'dungeon completions'
@@ -375,7 +386,11 @@ export const leaderboard: SlashCommand = {
             const totalEntries = sortedLeaderboard.length;
             const totalPages = Math.ceil(totalEntries / ENTRIES_PER_PAGE);
 
-            const dungeonName = dungeonKey === 'all' ? 'All Dungeons' : (dungeonByCode[dungeonKey]?.dungeonName || dungeonKey);
+            const dungeonName = dungeonKey === 'all'
+                ? 'All Dungeons'
+                : (dungeonByCode[dungeonKey]?.dungeonName
+                    || AGGREGATE_ACTIVITY_LABELS[dungeonKey as keyof typeof AGGREGATE_ACTIVITY_LABELS]
+                    || dungeonKey);
             const categoryName = category === 'runs_organized' ? 'Runs Organized' 
                 : category === 'keys_popped' ? 'Keys Popped' 
                 : category === 'dungeon_completions' ? 'Dungeon Completions'

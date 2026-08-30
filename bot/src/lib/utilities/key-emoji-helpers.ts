@@ -1,6 +1,7 @@
 import { ButtonInteraction } from 'discord.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
+import type { RunKind } from '../../constants/dungeons/dungeon-taxonomy.js';
 
 /**
  * Format key labels for display (convert snake_case to Title Case)
@@ -138,4 +139,19 @@ export function getDungeonKeyEmojiIdentifier(dungeonKey: string): string | undef
     }
     
     return undefined;
+}
+
+/**
+ * The run lifecycle event means a dungeon was entered; it does not prove a key was used.
+ * Multi-runs intentionally use Realm Clearing's portal icon as their neutral icon.
+ */
+export function getDungeonEnteredEmojiIdentifier(runKind: RunKind, dungeonKey: string): string | undefined {
+    const iconDungeonKey = runKind === 'single' ? dungeonKey : 'REALM_DUNGEON';
+    return dungeonByCode[iconDungeonKey]?.portalEmojiId;
+}
+
+export function getDungeonEnteredEmoji(runKind: RunKind, dungeonKey: string): string {
+    const identifier = getDungeonEnteredEmojiIdentifier(runKind, dungeonKey);
+    if (!identifier) return '🚪';
+    return /^\d+$/.test(identifier) ? `<:dungeon:${identifier}>` : identifier;
 }

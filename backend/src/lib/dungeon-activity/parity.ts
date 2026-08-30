@@ -274,7 +274,7 @@ export async function analyzeHistoricalZeroPointGaps(
              SELECT run.id, run.guild_id, pop_number
              FROM scoped_runs AS run
              CROSS JOIN LATERAL generate_series(1, run.key_pop_count) AS pop_number
-             WHERE run.dungeon_key <> 'ORYX_3'
+             WHERE run.run_kind <> 'oryx_3'
                AND NOT EXISTS (
                    SELECT 1 FROM quota_event AS event
                    WHERE event.guild_id = run.guild_id
@@ -284,7 +284,7 @@ export async function analyzeHistoricalZeroPointGaps(
          o3_organizers AS (
              SELECT run.id
              FROM scoped_runs AS run
-             WHERE run.dungeon_key = 'ORYX_3'
+             WHERE run.run_kind = 'oryx_3'
                AND run.status = 'ended'
                AND NOT EXISTS (
                    SELECT 1 FROM quota_event AS event
@@ -310,6 +310,7 @@ export async function analyzeHistoricalZeroPointGaps(
              JOIN scoped_runs AS run ON run.id = reaction.run_id
              WHERE run.status = 'ended'
                AND run.key_pop_count = 0
+               AND run.run_kind IN ('single', 'oryx_3')
                AND reaction.state = 'join'
                AND NOT EXISTS (
                    SELECT 1 FROM quota_event AS event

@@ -50,7 +50,7 @@ export const party: SlashCommand = {
         )
         .addStringOption(o =>
             o.setName('dungeon_1')
-                .setDescription('First/Main Dungeon (use "Realm Dungeons" for general realm dungeon farming)')
+                .setDescription('First/Main Dungeon (use "Realm Clearing" for general realm clearing)')
                 .setRequired(false)
                 .setAutocomplete(true)
         )

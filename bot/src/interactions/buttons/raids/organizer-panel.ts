@@ -11,9 +11,14 @@ import {
     ChatInputCommandInteraction,
     Message
 } from 'discord.js';
-import { getJSON } from '../../../lib/utilities/http.js';
+import {
+    getJSON,
+    getRunDetails,
+    getRunDisplayLabel,
+    type RunDetails
+} from '../../../lib/utilities/http.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { formatKeyLabel, getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
+import { formatKeyLabel, getDungeonEnteredEmojiIdentifier, getDungeonKeyEmoji, getEmojiDisplayForKeyType } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logButtonClick } from '../../../lib/logging/raid-logger.js';
 import { registerOrganizerPanel, RunOrganizerPanelHandle } from '../../../lib/state/organizer-panel-tracker.js';
 import { isO3RealmClosedStage } from '../../../lib/utilities/run-message-helpers.js';
@@ -31,15 +36,7 @@ export async function buildRunOrganizerPanelContent(
     confirmationMessage?: string
 ): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } | null> {
     // Fetch run data
-    const run = await getJSON<{
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-        o3Stage?: string | null;
-        joinLocked?: boolean;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         return null;
@@ -50,7 +47,8 @@ export async function buildRunOrganizerPanelContent(
         return null;
     }
 
-    const realmIsClosed = run.dungeonKey === 'ORYX_3' && isO3RealmClosedStage(run.o3Stage);
+    const realmIsClosed = run.runKind === 'oryx_3' && isO3RealmClosedStage(run.o3Stage);
+    const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
     // Fetch key reaction users
     let headcountKeys: Record<string, string[]> = {};
@@ -81,7 +79,7 @@ export async function buildRunOrganizerPanelContent(
 
     // Build panel embed
     const panelEmbed = new EmbedBuilder()
-        .setTitle(`Organizer Panel — ${run.dungeonLabel}`)
+        .setTitle(`Organizer Panel - ${displayLabel}`)
         .setTimestamp(new Date());
 
     let description = '';
@@ -149,7 +147,7 @@ export async function buildRunOrganizerPanelContent(
                 .setStyle(ButtonStyle.Secondary)
         ];
         
-        if (run.dungeonKey !== 'ORYX_3') {
+        if (run.runKind !== 'oryx_3') {
             row2Components.push(
                 new ButtonBuilder()
                     .setCustomId(`run:setchain:${runId}`)
@@ -162,7 +160,7 @@ export async function buildRunOrganizerPanelContent(
         controls = [row1, row2];
         
         // Add screenshot button for Oryx 3
-        if (run.dungeonKey === 'ORYX_3') {
+        if (run.runKind === 'oryx_3') {
             const screenshotRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
                 new ButtonBuilder()
                     .setCustomId(`run:screenshot:${runId}`)
@@ -176,7 +174,7 @@ export async function buildRunOrganizerPanelContent(
         // Live phase
         const actionButtons: ButtonBuilder[] = [];
         
-        if (run.dungeonKey === 'ORYX_3') {
+        if (run.runKind === 'oryx_3') {
             const o3Stage = run.o3Stage || null;
             
             if (!o3Stage) {
@@ -206,17 +204,7 @@ export async function buildRunOrganizerPanelContent(
                 );
             }
         } else {
-            const keyPoppedButton = new ButtonBuilder()
-                .setCustomId(`run:keypop:${runId}`)
-                .setLabel('Key popped')
-                .setStyle(ButtonStyle.Success);
-
-            const keyEmojiIdentifier = getDungeonKeyEmojiIdentifier(run.dungeonKey);
-            if (keyEmojiIdentifier) {
-                keyPoppedButton.setEmoji(keyEmojiIdentifier);
-            }
-            
-            actionButtons.push(keyPoppedButton);
+            actionButtons.push(buildDungeonEnteredButton(runId, run));
         }
 
         if (!realmIsClosed) {
@@ -247,7 +235,7 @@ export async function buildRunOrganizerPanelContent(
             );
         }
         
-        if (run.dungeonKey !== 'ORYX_3') {
+        if (run.runKind !== 'oryx_3') {
             row2Components.push(
                 new ButtonBuilder()
                     .setCustomId(`run:setchain:${runId}`)
@@ -268,6 +256,19 @@ export async function buildRunOrganizerPanelContent(
     }
 
     return { embeds: [panelEmbed], components: controls };
+}
+
+export function buildDungeonEnteredButton(
+    runId: number,
+    run: Pick<RunDetails, 'runKind' | 'dungeonKey'>
+): ButtonBuilder {
+    const button = new ButtonBuilder()
+        .setCustomId(`run:keypop:${runId}`)
+        .setLabel('Dungeon Entered')
+        .setStyle(ButtonStyle.Success);
+    const emojiIdentifier = getDungeonEnteredEmojiIdentifier(run.runKind, run.dungeonKey);
+    if (emojiIdentifier) button.setEmoji(emojiIdentifier);
+    return button;
 }
 
 /**
@@ -343,14 +344,7 @@ export async function showOrganizerPanel(
     btn: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     runId: number, 
     guildId: string, 
-    run: {
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-        o3Stage?: string | null; // Track O3 progression: null -> 'closed' -> 'miniboss' -> 'third_room'
-    }, 
+    run: RunDetails,
     confirmationMessage?: string
 ) {
     // Check if run has ended before building content
@@ -400,7 +394,7 @@ export async function showOrganizerPanel(
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: runId
                 },
@@ -425,17 +419,7 @@ export async function handleOrganizerPanel(btn: ButtonInteraction, runId: string
     }
 
     // Fetch run status from backend to determine which buttons to show
-    const run = await getJSON<{
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-        o3Stage?: string | null;
-    }>(
-        `/runs/${runId}`,
-        { guildId }
-    ).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.reply({
@@ -507,14 +491,7 @@ export async function handleOrganizerPanelConfirm(btn: ButtonInteraction, runId:
     }
 
     // Fetch run details
-    const run = await getJSON<{
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-        o3Stage?: string | null;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.editReply({
@@ -574,14 +551,7 @@ export async function refreshOrganizerPanel(
     }
 
     // Fetch run details
-    const run = await getJSON<{
-        status: string;
-        dungeonLabel: string;
-        dungeonKey: string;
-        organizerId: string;
-        screenshotUrl?: string | null;
-        o3Stage?: string | null;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await interaction.editReply({

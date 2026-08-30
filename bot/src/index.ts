@@ -672,6 +672,12 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             // Handle key logging select menus
+            if (interaction.customId.startsWith('keylog:selectdungeon:')) {
+                const runId = interaction.customId.split(':')[2];
+                const { handleKeyLogSelectDungeon } = await import('./interactions/buttons/raids/key-logging.js');
+                await safeHandleInteraction(interaction, () => handleKeyLogSelectDungeon(interaction, runId), { ephemeral: true });
+                return;
+            }
             if (interaction.customId.startsWith('keylog:selectuser:')) {
                 const runId = interaction.customId.split(':')[2];
                 const { handleKeyLogSelectUser } = await import('./interactions/buttons/raids/key-logging.js');

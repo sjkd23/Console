@@ -1,5 +1,5 @@
 import { ButtonInteraction, MessageFlags } from 'discord.js';
-import { getJSON, patchJSON } from '../../../lib/utilities/http.js';
+import { getRunDetails, patchJSON } from '../../../lib/utilities/http.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
@@ -36,14 +36,7 @@ async function handleLockJoinInternal(btn: ButtonInteraction, runId: string) {
     }
 
     // Fetch run info to check authorization and current state
-    const run = await getJSON<{
-        channelId: string | null;
-        postMessageId: string | null;
-        dungeonLabel: string;
-        organizerId: string;
-        status: string;
-        joinLocked: boolean;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.editReply({ content: '❌ Could not fetch run details.', components: [] });
@@ -51,7 +44,7 @@ async function handleLockJoinInternal(btn: ButtonInteraction, runId: string) {
     }
 
     // Check if run is still active
-    if (run.status === 'ended' || run.status === 'cancelled') {
+    if (run.status === 'ended') {
         await btn.editReply({ content: '❌ This run has ended.', components: [] });
         return;
     }

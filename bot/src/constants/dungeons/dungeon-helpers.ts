@@ -1,5 +1,6 @@
 import { DUNGEON_DATA } from './DungeonData';
 import type { DungeonInfo } from './dungeon-types';
+import { getDungeonSelectionClass } from './dungeon-taxonomy.js';
 
 type DIdx = DungeonInfo & {
     _name: string;
@@ -12,8 +13,8 @@ const ALL: DIdx[] = DUNGEON_DATA.map(d => ({
     ...d,
     _name: d.dungeonName.toLowerCase(),
     _code: d.codeName.toLowerCase(),
-    _isExalt: (d.dungeonCategory || '').toLowerCase().includes('exalt'),
-    _isOryx3: d.codeName === 'ORYX_3'
+    _isExalt: getDungeonSelectionClass(d.codeName) === 'exalt',
+    _isOryx3: getDungeonSelectionClass(d.codeName) === 'oryx_3'
 }));
 
 export const dungeonByCode: Record<string, DungeonInfo> =
@@ -134,11 +135,11 @@ export function getCategorizedDungeons(): {
     misc2: DungeonInfo[];
 } {
     const exalt = ALL
-        .filter(d => d._isExalt)
+        .filter(d => d._isExalt || d._isOryx3)
         .sort((a, b) => a.dungeonName.localeCompare(b.dungeonName));
     
     const nonExalt = ALL
-        .filter(d => !d._isExalt)
+        .filter(d => !d._isExalt && !d._isOryx3)
         .sort((a, b) => a.dungeonName.localeCompare(b.dungeonName));
     
     // Split non-exalt dungeons into two groups

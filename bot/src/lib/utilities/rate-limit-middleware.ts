@@ -127,7 +127,7 @@ export async function applyButtonRateLimit(
  * Automatically determine appropriate rate limit for a button based on its identifier.
  */
 function determineButtonRateLimit(identifier: string): RateLimitConfig {
-    // Key popped button - very strict to prevent accidents
+    // Dungeon Entered button - very strict to prevent accidental duplicate entries.
     if (identifier === 'run:keypop') {
         return RateLimitPresets.BUTTON_KEY_POPPED;
     }

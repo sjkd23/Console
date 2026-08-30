@@ -34,7 +34,14 @@ vi.mock('../quota/quota.js', () => ({
     snapshotRaidersAtKeyPop: snapshotMock,
 }));
 
-import { endRunWithTransaction, recordKeyPopWithTransaction, type EndRunInput } from './run-service.js';
+import {
+    createRunWithTransaction,
+    endRunWithTransaction,
+    Oryx3KeyPopError,
+    recordKeyPopWithTransaction,
+    type CreateRunInput,
+    type EndRunInput,
+} from './run-service.js';
 
 const baseInput: EndRunInput = {
     runId: 42,
@@ -51,7 +58,14 @@ describe('endRunWithTransaction organizer completion trigger', () => {
         vi.clearAllMocks();
         transactionClient.query.mockResolvedValue({
             rowCount: 1,
-            rows: [{ ended_at: '2026-08-28T20:48:00.000Z' }],
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z',
+                organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS',
+                activity_key: 'SHATTERS',
+                run_kind: 'single',
+                key_pop_count: 1,
+            }],
         });
         activityMock.mockResolvedValue('inserted');
         snapshotMock.mockResolvedValue(2);
@@ -71,6 +85,13 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('awards no organizer completion when a normal dungeon ends without a key pop', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single', key_pop_count: 0,
+            }],
+        });
         const result = await endRunWithTransaction({
             ...baseInput,
             keyPopCount: 0,
@@ -94,6 +115,13 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('awards Oryx 3 once at end and relies on the existing writer idempotency for a stale retry', async () => {
+        transactionClient.query.mockResolvedValue({
+            rowCount: 1,
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: 'ORYX_3', activity_key: 'ORYX_3', run_kind: 'oryx_3', key_pop_count: 0,
+            }],
+        });
         quotaServiceMock.awardOrganizerQuota
             .mockResolvedValueOnce(1)
             .mockResolvedValueOnce(0);
@@ -130,6 +158,13 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('still finalizes the last key-pop raider snapshot for a normal dungeon', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single', key_pop_count: 2,
+            }],
+        });
         quotaServiceMock.awardRaidersQuotaFromSnapshot.mockResolvedValue(3);
 
         const result = await endRunWithTransaction({
@@ -143,6 +178,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
             {
                 guildId: baseInput.guildId,
                 dungeonKey: baseInput.dungeonKey,
+                activityKey: baseInput.dungeonKey,
                 runId: baseInput.runId,
                 keyPopNumber: 2,
             },
@@ -152,6 +188,13 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('still ends and performs no-key participant finalization for a normal dungeon', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single', key_pop_count: 0,
+            }],
+        });
         quotaServiceMock.awardRaidersQuotaFromParticipants.mockResolvedValue(2);
 
         const result = await endRunWithTransaction({
@@ -177,6 +220,10 @@ describe('endRunWithTransaction organizer completion trigger', () => {
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
                 key_pop_count: 1,
                 occurred_at: '2026-08-28T20:15:00.000Z',
+                organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS',
+                activity_key: 'SHATTERS',
+                run_kind: 'single',
             }],
         });
         quotaServiceMock.awardOrganizerQuota.mockResolvedValue(0);
@@ -207,6 +254,10 @@ describe('endRunWithTransaction organizer completion trigger', () => {
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
                 key_pop_count: 1,
                 occurred_at: '2026-08-28T20:15:00.000Z',
+                organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS',
+                activity_key: 'SHATTERS',
+                run_kind: 'single',
             }],
         });
         quotaServiceMock.awardOrganizerQuota.mockResolvedValue(2);
@@ -231,6 +282,8 @@ describe('endRunWithTransaction organizer completion trigger', () => {
                     key_window_ends_at: '2026-08-28T20:15:25.000Z',
                     key_pop_count: 1,
                     occurred_at: '2026-08-28T20:15:00.000Z',
+                    organizer_id: baseInput.organizerId,
+                    dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single',
                 }],
             })
             .mockResolvedValueOnce({ rowCount: 0, rows: [] });
@@ -255,6 +308,8 @@ describe('endRunWithTransaction organizer completion trigger', () => {
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
                 key_pop_count: 1,
                 occurred_at: '2026-08-28T20:15:00.000Z',
+                organizer_id: baseInput.organizerId,
+                dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single',
             }],
         });
         activityMock.mockRejectedValue(new Error('activity write failed'));
@@ -272,11 +327,11 @@ describe('endRunWithTransaction organizer completion trigger', () => {
         transactionClient.query
             .mockResolvedValueOnce({
                 rowCount: 1,
-                rows: [{ key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date() }],
+                rows: [{ key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date(), organizer_id: baseInput.organizerId, dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single' }],
             })
             .mockResolvedValueOnce({
                 rowCount: 1,
-                rows: [{ key_window_ends_at: new Date(), key_pop_count: 2, occurred_at: new Date() }],
+                rows: [{ key_window_ends_at: new Date(), key_pop_count: 2, occurred_at: new Date(), organizer_id: baseInput.organizerId, dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single' }],
             });
 
         await recordKeyPopWithTransaction({
@@ -296,6 +351,13 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('records O3 organizer activity when configured quota is zero', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: 'ORYX_3', activity_key: 'ORYX_3', run_kind: 'oryx_3', key_pop_count: 0,
+            }],
+        });
         quotaServiceMock.awardOrganizerQuota.mockResolvedValue(0);
 
         const result = await endRunWithTransaction({ ...baseInput, dungeonKey: 'ORYX_3', keyPopCount: 0 });
@@ -305,5 +367,206 @@ describe('endRunWithTransaction organizer completion trigger', () => {
             expect.objectContaining({ subjectId: `run:${baseInput.runId}:o3:organizer` }),
             transactionClient
         );
+    });
+});
+
+describe('createRunWithTransaction normalized persistence', () => {
+    const createInput: CreateRunInput = {
+        guildId: baseInput.guildId,
+        guildName: 'Test Guild',
+        organizerId: baseInput.organizerId!,
+        organizerUsername: 'Organizer',
+        channelId: '100000000000000004',
+        selectedDungeonKeys: ['NEST', 'FUNGAL_CAVERN', 'STEAMWORKS'],
+        autoEndMinutes: 120,
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        transactionClient.query
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+            // pg returns BIGSERIAL/BIGINT values as strings by default.
+            .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: '674' }] })
+            .mockResolvedValue({ rowCount: 1, rows: [] });
+    });
+
+    it('persists authoritative parent taxonomy and ordered backend-resolved selection snapshots', async () => {
+        const spoofed = {
+            ...createInput,
+            dungeonLabel: 'Spoofed',
+            runKind: 'single',
+            activityKey: 'NEST',
+        };
+        const result = await createRunWithTransaction(spoofed);
+
+        expect(result).toMatchObject({
+            runId: 674,
+            runKind: 'multi_exalt',
+            activityKey: 'EXALTATION_DUNGEONS',
+            dungeonKey: 'EXALTATION_DUNGEONS',
+            dungeonLabel: 'Exaltation Dungeons',
+        });
+        expect(result.selectedDungeons).toEqual([
+            { dungeonKey: 'NEST', dungeonLabel: 'Nest', selectionOrder: 1 },
+            { dungeonKey: 'FUNGAL_CAVERN', dungeonLabel: 'Fungal Cavern', selectionOrder: 2 },
+            { dungeonKey: 'STEAMWORKS', dungeonLabel: 'Steamworks', selectionOrder: 3 },
+        ]);
+        expect(transactionClient.query).toHaveBeenNthCalledWith(
+            3,
+            expect.stringContaining('INSERT INTO run'),
+            expect.arrayContaining(['EXALTATION_DUNGEONS', 'Exaltation Dungeons', 'multi_exalt'])
+        );
+        expect(transactionClient.query).toHaveBeenNthCalledWith(
+            4,
+            expect.stringContaining('INSERT INTO run_dungeon_selection'),
+            [674, 'NEST', 'Nest', 1]
+        );
+        expect(transactionClient.query).toHaveBeenNthCalledWith(
+            6,
+            expect.stringContaining('INSERT INTO run_dungeon_selection'),
+            [674, 'STEAMWORKS', 'Steamworks', 3]
+        );
+    });
+
+    it('fails the transactional creation if a selection insert fails', async () => {
+        transactionClient.query
+            .mockReset()
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+            .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 91 }] })
+            .mockRejectedValueOnce(new Error('selection insert failed'));
+
+        await expect(createRunWithTransaction(createInput)).rejects.toThrow('selection insert failed');
+    });
+});
+
+describe('persisted taxonomy activity and fallback routing', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        activityMock.mockResolvedValue('inserted');
+        snapshotMock.mockResolvedValue(2);
+        quotaServiceMock.awardOrganizerQuota.mockResolvedValue(0);
+        quotaServiceMock.awardRaidersQuotaFromSnapshot.mockResolvedValue(0);
+        quotaServiceMock.awardRaidersQuotaFromParticipants.mockResolvedValue(0);
+    });
+
+    it.each([
+        ['single', 'NEST', 'NEST', undefined],
+        ['realm_clearing', 'REALM_DUNGEON', 'MISC_DUNGEONS', undefined],
+        ['multi_non_exalt', 'MISC_DUNGEONS', 'MISC_DUNGEONS', 'non_exalt'],
+        ['multi_exalt', 'EXALTATION_DUNGEONS', 'EXALTATION_DUNGEONS', 'exalt'],
+    ] as const)('routes %s Dungeon Entered through persisted activity_key', async (runKind, dungeonKey, activityKey, baseCategory) => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                key_window_ends_at: '2026-08-28T20:15:25.000Z', key_pop_count: 1,
+                occurred_at: '2026-08-28T20:15:00.000Z', organizer_id: baseInput.organizerId,
+                dungeon_key: dungeonKey, activity_key: activityKey, run_kind: runKind,
+            }],
+        });
+
+        await recordKeyPopWithTransaction({
+            runId: baseInput.runId,
+            guildId: baseInput.guildId,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        });
+
+        expect(activityMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                dungeonStatsKey: activityKey,
+                subjectId: `run:${baseInput.runId}:keypop:1:organizer`,
+            }),
+            transactionClient
+        );
+        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledWith(
+            expect.objectContaining({ dungeonKey, activityKey, baseCategory }),
+            transactionClient
+        );
+    });
+
+    it('explicitly rejects normal Dungeon Entered for persisted O3', async () => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date(),
+                organizer_id: baseInput.organizerId, dungeon_key: 'ORYX_3', activity_key: 'ORYX_3', run_kind: 'oryx_3',
+            }],
+        });
+
+        await expect(recordKeyPopWithTransaction({
+            runId: baseInput.runId,
+            guildId: baseInput.guildId,
+            expectedKeyPopCount: 0,
+            keyWindowSeconds: 25,
+        })).rejects.toBeInstanceOf(Oryx3KeyPopError);
+        expect(activityMock).not.toHaveBeenCalled();
+        expect(quotaServiceMock.awardOrganizerQuota).not.toHaveBeenCalled();
+    });
+
+    it('routes prior-pop and final-pop multi-exalt raider snapshots through the aggregate activity key', async () => {
+        transactionClient.query
+            .mockResolvedValueOnce({
+                rowCount: 1,
+                rows: [{
+                    key_window_ends_at: new Date(), key_pop_count: 2, occurred_at: new Date(),
+                    organizer_id: baseInput.organizerId, dungeon_key: 'EXALTATION_DUNGEONS',
+                    activity_key: 'EXALTATION_DUNGEONS', run_kind: 'multi_exalt',
+                }],
+            })
+            .mockResolvedValueOnce({
+                rowCount: 1,
+                rows: [{
+                    ended_at: new Date(), organizer_id: baseInput.organizerId,
+                    dungeon_key: 'EXALTATION_DUNGEONS', activity_key: 'EXALTATION_DUNGEONS',
+                    run_kind: 'multi_exalt', key_pop_count: 2,
+                }],
+            });
+
+        await recordKeyPopWithTransaction({
+            runId: baseInput.runId,
+            guildId: baseInput.guildId,
+            expectedKeyPopCount: 1,
+            keyWindowSeconds: 25,
+        });
+        await endRunWithTransaction({ runId: baseInput.runId, guildId: baseInput.guildId });
+
+        expect(quotaServiceMock.awardRaidersQuotaFromSnapshot).toHaveBeenNthCalledWith(1, {
+            guildId: baseInput.guildId,
+            dungeonKey: 'EXALTATION_DUNGEONS',
+            activityKey: 'EXALTATION_DUNGEONS',
+            baseCategory: 'exalt',
+            runId: baseInput.runId,
+            keyPopNumber: 1,
+        }, transactionClient);
+        expect(quotaServiceMock.awardRaidersQuotaFromSnapshot).toHaveBeenNthCalledWith(2, {
+            guildId: baseInput.guildId,
+            dungeonKey: 'EXALTATION_DUNGEONS',
+            activityKey: 'EXALTATION_DUNGEONS',
+            baseCategory: 'exalt',
+            runId: baseInput.runId,
+            keyPopNumber: 2,
+        }, transactionClient);
+    });
+
+    it.each([
+        ['realm_clearing', 'REALM_DUNGEON', 'MISC_DUNGEONS'],
+        ['multi_non_exalt', 'MISC_DUNGEONS', 'MISC_DUNGEONS'],
+        ['multi_exalt', 'EXALTATION_DUNGEONS', 'EXALTATION_DUNGEONS'],
+    ] as const)('does not fabricate no-pop participant activity for %s', async (runKind, dungeonKey, activityKey) => {
+        transactionClient.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                ended_at: new Date(), organizer_id: baseInput.organizerId,
+                dungeon_key: dungeonKey, activity_key: activityKey, run_kind: runKind, key_pop_count: 0,
+            }],
+        });
+
+        const result = await endRunWithTransaction({ runId: baseInput.runId, guildId: baseInput.guildId });
+
+        expect(result).toEqual({ organizerQuotaPoints: 0, raiderPointsAwarded: 0 });
+        expect(quotaServiceMock.awardRaidersQuotaFromParticipants).not.toHaveBeenCalled();
+        expect(activityMock).not.toHaveBeenCalled();
     });
 });

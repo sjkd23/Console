@@ -1,6 +1,6 @@
-import { ButtonInteraction, ChannelType, EmbedBuilder } from 'discord.js';
-import { setKeyWindow, getJSON, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
-import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
+import { ButtonInteraction, ChannelType } from 'discord.js';
+import { setKeyWindow, getRunDetails, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
+import { getDungeonEnteredEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyWindow } from '../../../lib/logging/raid-logger.js';
 import { sendKeyPoppedPing } from '../../../lib/utilities/run-ping.js';
 import { getDefaultKeyWindowSeconds } from '../../../config/raid-config.js';
@@ -8,11 +8,12 @@ import { updateQuotaPanelsForUser } from '../../../lib/ui/quota-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
+import { transitionRunEmbed } from '../../../lib/utilities/run-panel-builder.js';
 
 const logger = createLogger('KeyWindow');
 
 /**
- * Handle "Key popped" button press.
+ * Handle the "Dungeon Entered" button press.
  * Sets a configurable party join window and updates the run embed.
  */
 export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
@@ -38,21 +39,7 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
         }, guildId);
 
         // Fetch full run details to rebuild embed
-        const run = await getJSON<{
-            channelId: string | null;
-            postMessageId: string | null;
-            status: string;
-            dungeonKey: string;
-            dungeonLabel: string;
-            organizerId: string;
-            startedAt: string | null;
-            keyWindowEndsAt: string | null;
-            party: string | null;
-            location: string | null;
-            description: string | null;
-            keyPopCount: number;
-            chainAmount: number | null;
-        }>(`/runs/${runId}`, { guildId });
+        const run = await getRunDetails(runId, guildId);
 
         if (!run.channelId || !run.postMessageId) {
             await btn.editReply({ content: 'Run record missing channel/message id.', components: [] });
@@ -78,17 +65,20 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
             return;
         }
 
-        const updatedEmbed = buildLiveEmbed(embeds[0], run, key_window_ends_at, btn);
+        const updatedEmbed = transitionRunEmbed(embeds[0], 'live', {
+            ...run,
+            keyWindowEndsAt: String(key_window_ends_at),
+        });
 
         await pubMsg.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
 
-        // Send key popped ping message
+        // Send the dungeon-entered join-window ping message.
         if (btn.guild) {
             await sendKeyPoppedPing(btn.client, parseInt(runId), btn.guild, key_window_ends_at);
         }
 
-        // Get the dungeon-specific key emoji
-        const keyEmoji = getDungeonKeyEmoji(run.dungeonKey);
+        const enteredEmoji = getDungeonEnteredEmoji(run.runKind, run.dungeonKey);
+        const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
         // Log key window activation to raid-log
         if (btn.guild) {
@@ -99,7 +89,7 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
                         guildId: btn.guild.id,
                         organizerId: run.organizerId,
                         organizerUsername: '',
-                        dungeonName: run.dungeonLabel,
+                        dungeonName: displayLabel,
                         type: 'run',
                         runId: parseInt(runId)
                     },
@@ -111,9 +101,8 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
             }
         }
 
-        // Auto-update quota panels for the organizer after key pop
-        // Key pops award organizer quota points (one per key pop)
-        logger.debug('Triggering quota panel update for organizer after key pop', {
+        // Phase D retains the existing per-entry quota behavior.
+        logger.debug('Triggering quota panel update for organizer after dungeon entry', {
             runId,
             guildId,
             organizerId: run.organizerId,
@@ -126,14 +115,14 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
             guildId,
             run.organizerId
         ).then(() => {
-            logger.debug('Successfully updated quota panel after key pop', {
+            logger.debug('Successfully updated quota panel after dungeon entry', {
                 runId,
                 guildId,
                 organizerId: run.organizerId,
                 keyPopCount: run.keyPopCount
             });
         }).catch(err => {
-            logger.error('Failed to auto-update quota panel after key pop', {
+            logger.error('Failed to auto-update quota panel after dungeon entry', {
                 runId,
                 guildId,
                 organizerId: run.organizerId,
@@ -142,107 +131,20 @@ export async function handleKeyWindow(btn: ButtonInteraction, runId: string) {
         });
 
         // Refresh organizer panel with confirmation message
-        await refreshOrganizerPanel(btn, runId, `${keyEmoji} **Key popped!** Party join window started.`);
+        await refreshOrganizerPanel(btn, runId, `${enteredEmoji} **Dungeon entered!** Party join window started.`);
 
     } catch (err) {
         if (err instanceof BackendError) {
             if (err.code === 'NOT_ORGANIZER') {
-                await refreshOrganizerPanel(btn, runId, '❌ Only the organizer can pop keys.');
+                await refreshOrganizerPanel(btn, runId, '❌ Only the organizer can record a dungeon entry.');
                 return;
             }
             if (err.code === 'RUN_NOT_LIVE') {
-                await refreshOrganizerPanel(btn, runId, '❌ You can only pop keys during Live.');
+                await refreshOrganizerPanel(btn, runId, '❌ You can only record a dungeon entry during Live.');
                 return;
             }
         }
         const msg = err instanceof Error ? err.message : 'Unknown error';
         await btn.editReply({ content: `Error: ${msg}`, embeds: [], components: [] });
     }
-}
-
-/**
- * Build the Live phase embed with optional key window line.
- */
-function buildLiveEmbed(
-    original: any,
-    run: {
-        dungeonKey: string;
-        dungeonLabel: string;
-        organizerId: string;
-        startedAt: string | null;
-        keyWindowEndsAt: string | null;
-        party: string | null;
-        location: string | null;
-        description: string | null;
-        keyPopCount: number;
-        chainAmount: number | null;
-    },
-    keyWindowEndsAt: string | null,
-    btn: ButtonInteraction
-): EmbedBuilder {
-    const embed = EmbedBuilder.from(original);
-
-    // Set title with LIVE badge and optional chain tracking (not for Oryx 3)
-    let chainText = '';
-    if (run.dungeonKey !== 'ORYX_3' && run.keyPopCount > 0) {
-        if (run.chainAmount && run.keyPopCount <= run.chainAmount) {
-            // Show Chain X/Y only if chain amount is set AND not exceeded
-            chainText = ` | Chain ${run.keyPopCount}/${run.chainAmount}`;
-        } else {
-            // Show Chain X if no chain amount set OR if count exceeded amount
-            chainText = ` | Chain ${run.keyPopCount}`;
-        }
-    }
-    embed.setTitle(`🟢 LIVE: ${run.dungeonLabel}${chainText}`);
-
-    // Build description with organizer and key window if active
-    let desc = `Organizer: <@${run.organizerId}>`;
-
-    // Add key window if end time is in the future
-    if (keyWindowEndsAt) {
-        const endsUnix = Math.floor(new Date(keyWindowEndsAt).getTime() / 1000);
-        const now = Math.floor(Date.now() / 1000);
-
-        if (endsUnix > now) {
-            // Get the dungeon-specific key emoji
-            const keyEmoji = getDungeonKeyEmoji(run.dungeonKey);
-
-            desc += `\n\n${keyEmoji} **Key popped**\nParty join window closes <t:${endsUnix}:R>`;
-
-        }
-    }
-
-    embed.setDescription(desc);
-
-    // Keep existing fields (Raiders, Keys, etc.) but remove Party/Location and Classes
-    const data = embed.toJSON();
-    const fields = [...(data.fields ?? [])];
-
-    // Remove Party field if present
-    const partyIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'party');
-    if (partyIdx >= 0) {
-        fields.splice(partyIdx, 1);
-    }
-
-    // Remove Location field if present
-    const locIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'location');
-    if (locIdx >= 0) {
-        fields.splice(locIdx, 1);
-    }
-
-    // Remove Classes field if present
-    const classIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'classes');
-    if (classIdx >= 0) {
-        fields.splice(classIdx, 1);
-    }
-
-    // Update or add Organizer Note field
-    if (run.description) {
-        const noteIdx = fields.findIndex(f => (f.name ?? '').toLowerCase() === 'organizer note');
-        if (noteIdx >= 0) {
-            fields[noteIdx] = { ...fields[noteIdx], value: run.description };
-        }
-    }
-
-    return embed.setFields(fields as any);
 }

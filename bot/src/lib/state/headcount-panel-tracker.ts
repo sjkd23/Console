@@ -19,6 +19,7 @@ export type HeadcountOrganizerPanelHandle =
     | {
         type: 'interactionReply';
         interaction: ButtonInteraction | ChatInputCommandInteraction | ModalSubmitInteraction;
+        messageId: string;
     }
     | {
         type: 'followup';
@@ -35,6 +36,37 @@ export type HeadcountOrganizerPanelHandle =
  * When a key is reacted on a headcount, all tracked panels for that message ID are refreshed.
  */
 const activeHeadcountPanels = new Map<string, Array<HeadcountOrganizerPanelHandle>>();
+const pendingRefreshes = new WeakMap<HeadcountOrganizerPanelHandle, Set<Promise<void>>>();
+
+/** Do not let an already-copied refresh handle write after its panel changes mode. */
+export async function refreshRegisteredHeadcountPanel(
+    publicMessageId: string,
+    handle: HeadcountOrganizerPanelHandle,
+    refresh: () => Promise<void>
+): Promise<void> {
+    if (!getActiveHeadcountPanels(publicMessageId).includes(handle)) return;
+    const pending = pendingRefreshes.get(handle) ?? new Set<Promise<void>>();
+    pendingRefreshes.set(handle, pending);
+    const write = refresh();
+    pending.add(write);
+    try {
+        await write;
+    } finally {
+        pending.delete(write);
+    }
+}
+
+/** Transfer only this ephemeral message to conversion, draining any REST edit already in flight. */
+export async function detachHeadcountPanelForConversion(
+    publicMessageId: string,
+    panelMessageId: string
+): Promise<void> {
+    const handles = getActiveHeadcountPanels(publicMessageId).filter(handle =>
+        (handle.type === 'publicMessage' ? handle.message.id : handle.messageId) === panelMessageId
+    );
+    for (const handle of handles) unregisterHeadcountPanel(publicMessageId, handle);
+    await Promise.allSettled(handles.flatMap(handle => [...(pendingRefreshes.get(handle) ?? [])]));
+}
 
 /**
  * Register a headcount organizer panel for auto-refresh.

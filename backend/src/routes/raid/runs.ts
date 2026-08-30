@@ -6,9 +6,16 @@ import { Errors } from '../../lib/errors/errors.js';
 import { hasInternalRole, authorizeRunActor, buildRunActorContext, RunRow } from '../../lib/auth/authorization.js';
 import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
-import { createRunWithTransaction, endRunWithTransaction, recordKeyPopWithTransaction } from '../../lib/services/run-service.js';
+import {
+    createRunWithTransaction,
+    endRunWithTransaction,
+    Oryx3KeyPopError,
+    recordKeyPopWithTransaction,
+} from '../../lib/services/run-service.js';
 import { RAID_BEHAVIOR } from '../../config/raid-config.js';
 import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.js';
+import { RunSelectionError, type RunKind } from '../../lib/runs/run-taxonomy.js';
+import { normalizeRunId } from '../../lib/runs/run-id.js';
 
 const logger = createLogger('Runs');
 
@@ -53,13 +60,21 @@ const CreateRun = z.object({
     organizerUsername: z.string().min(1),
     organizerRoles: z.array(zSnowflake).optional(), // Discord role IDs of the organizer
     channelId: zSnowflake,
-    dungeonKey: z.string().trim().min(1).max(64),
-    dungeonLabel: z.string().trim().min(1).max(100),
+    selectedDungeonKeys: z.array(z.string().trim().min(1).max(64)).min(1).max(5).optional(),
+    dungeonKey: z.string().trim().min(1).max(64).optional(),
+    dungeonLabel: z.string().trim().min(1).max(100).optional(),
     description: z.string().optional(),
     party: z.string().optional(),
     location: z.string().optional(),
     autoEndMinutes: z.number().int().positive().max(RAID_BEHAVIOR.maxAutoEndMinutes).default(RAID_BEHAVIOR.defaultAutoEndMinutes),
     roleId: zSnowflake.optional(), // Optional Discord role ID for the run
+}).superRefine((value, ctx) => {
+    if (!value.selectedDungeonKeys && !value.dungeonKey) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'selectedDungeonKeys is required' });
+    }
+    if (value.selectedDungeonKeys && value.dungeonKey) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Use selectedDungeonKeys or legacy dungeonKey, not both' });
+    }
 });
 
 export default async function runsRoutes(app: FastifyInstance) {
@@ -91,7 +106,7 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         // Query for active runs (status = 'open' or 'live') for this organizer in this guild
         const res = await query<{
-            id: number;
+            id: string | number;
             dungeon_label: string;
             status: string;
             created_at: string;
@@ -108,7 +123,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         );
 
         const activeRuns = res.rows.map(r => ({
-            id: r.id,
+            id: normalizeRunId(r.id),
             dungeonLabel: r.dungeon_label,
             status: r.status,
             createdAt: r.created_at,
@@ -141,7 +156,7 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         // Query for all active runs (status = 'open' or 'live') in this guild
         const res = await query<{
-            id: number;
+            id: string | number;
             role_id: string | null;
         }>(
             `SELECT id, role_id
@@ -153,7 +168,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         );
 
         const runs = res.rows.map(r => ({
-            id: r.id,
+            id: normalizeRunId(r.id),
             role_id: r.role_id,
         }));
 
@@ -177,8 +192,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             organizerUsername,
             organizerRoles,
             channelId,
+            selectedDungeonKeys,
             dungeonKey,
-            dungeonLabel,
             description,
             party,
             location,
@@ -211,8 +226,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                 organizerUsername,
                 organizerRoles,
                 channelId,
-                dungeonKey,
-                dungeonLabel,
+                selectedDungeonKeys: selectedDungeonKeys ?? [dungeonKey!],
                 description,
                 party,
                 location,
@@ -235,10 +249,16 @@ export default async function runsRoutes(app: FastifyInstance) {
             }
 
             return reply.code(201).send({ 
-                runId: result.runId,
+                runId: normalizeRunId(result.runId),
+                dungeonKey: result.dungeonKey,
+                dungeonLabel: result.dungeonLabel,
+                runKind: result.runKind,
+                activityKey: result.activityKey,
+                selectedDungeons: result.selectedDungeons,
                 earlyLocNotification
             });
         } catch (err) {
+            if (err instanceof RunSelectionError) return Errors.validation(reply, err.message);
             logger.error({ err, guildId, organizerId, dungeonKey }, 'Failed to create run');
             return Errors.internal(reply, 'Failed to create run');
         }
@@ -271,11 +291,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         const statusRes = await query<{
             status: string;
             guild_id: string;
-            dungeon_key: string;
+            run_kind: RunKind;
             o3_stage: string | null;
             join_locked: boolean;
         }>(
-            `SELECT status, guild_id, dungeon_key, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
+            `SELECT status, guild_id, run_kind, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -293,7 +313,7 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         if (state === 'join' && (
             run.join_locked
-            || (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null)
+            || (run.run_kind === 'oryx_3' && run.o3_stage !== null)
         )) {
             return Errors.runClosed(reply);
         }
@@ -312,7 +332,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                OR (
                    status IN ('open', 'live')
                    AND join_locked = FALSE
-                   AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+                    AND (run_kind <> 'oryx_3' OR o3_stage IS NULL)
                )
            )
         ON CONFLICT (run_id, user_id)
@@ -405,11 +425,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         const statusRes = await query<{
             status: string;
             guild_id: string;
-            dungeon_key: string;
+            run_kind: RunKind;
             o3_stage: string | null;
             join_locked: boolean;
         }>(
-            `SELECT status, guild_id, dungeon_key, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
+            `SELECT status, guild_id, run_kind, o3_stage, join_locked FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -433,7 +453,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         // creating or restoring a join still requires joining to be open.
         const reactionResult = await query(
             `WITH current_run AS (
-                SELECT id, dungeon_key, o3_stage, join_locked
+                SELECT id, run_kind, o3_stage, join_locked
                   FROM run
                  WHERE id = $1::bigint
                    AND status IN ('open', 'live')
@@ -443,7 +463,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         SELECT id, $2::bigint, 'join', $3
           FROM current_run
          WHERE (
-             (join_locked = FALSE AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL))
+              (join_locked = FALSE AND (run_kind <> 'oryx_3' OR o3_stage IS NULL))
              OR EXISTS (
                  SELECT 1
                    FROM reaction existing
@@ -462,7 +482,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                SELECT 1
                  FROM current_run
                 WHERE join_locked = FALSE
-                  AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+                  AND (run_kind <> 'oryx_3' OR o3_stage IS NULL)
            )
         RETURNING run_id`,
             [runId, userId, selectedClass]
@@ -537,15 +557,14 @@ export default async function runsRoutes(app: FastifyInstance) {
             isAutoEnd
         } = b.data;
 
-        // Read current status AND organizer_id AND guild_id AND dungeon_key AND party AND location AND screenshot_url
-        const cur = await query<RunRow & { dungeon_key: string; party: string | null; location: string | null; screenshot_url: string | null }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key, party, location, screenshot_url FROM run WHERE id = $1::bigint`,
+        // Read current status and persisted taxonomy needed for lifecycle behavior.
+        const cur = await query<RunRow & { run_kind: RunKind; party: string | null; location: string | null; screenshot_url: string | null }>(
+            `SELECT status, organizer_id, guild_id, run_kind, party, location, screenshot_url FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
         const run = cur.rows[0];
         const from = run.status;
-        const dungeonKey = run.dungeon_key;
 
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
@@ -591,7 +610,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             }
 
             // VALIDATION: Check if screenshot is submitted for Oryx 3
-            if (dungeonKey === 'ORYX_3' && !run.screenshot_url) {
+            if (run.run_kind === 'oryx_3' && !run.screenshot_url) {
                 return reply.code(400).send({
                     error: {
                         code: 'MISSING_SCREENSHOT',
@@ -632,9 +651,6 @@ export default async function runsRoutes(app: FastifyInstance) {
                 const endResult = await endRunWithTransaction({
                     runId,
                     guildId: run.guild_id,
-                    organizerId: run.organizer_id,
-                    dungeonKey,
-                    keyPopCount,
                     organizerRoles: resolvedOrganizerRoles,
                     organizerRolePositions: resolvedOrganizerRolePositions,
                 });
@@ -644,7 +660,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                         runId,
                         guildId: run.guild_id,
                         organizerId: run.organizer_id,
-                        dungeonKey,
+                        runKind: run.run_kind,
                         keyPopCount,
                         organizerQuotaPoints: endResult.organizerQuotaPoints,
                         raiderPointsAwarded: endResult.raiderPointsAwarded,
@@ -790,10 +806,10 @@ export default async function runsRoutes(app: FastifyInstance) {
             status: string;
             organizer_id: string;
             guild_id: string;
-            dungeon_key: string;
+            run_kind: RunKind;
             o3_stage: string | null;
         }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
+            `SELECT status, organizer_id, guild_id, run_kind, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -803,7 +819,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
         // Only allow O3 runs to have O3 stages
-        if (run.dungeon_key !== 'ORYX_3') {
+        if (run.run_kind !== 'oryx_3') {
             return Errors.validation(reply, 'O3 progression is only available for Oryx 3 runs');
         }
 
@@ -853,12 +869,15 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         const runId = Number(p.data.id);
         const res = await query<{
-            id: number;
+            id: string | number;
             guild_id: string;
             channel_id: string | null;
             post_message_id: string | null;
             dungeon_key: string;
             dungeon_label: string;
+            run_kind: RunKind;
+            activity_key: string;
+            selected_dungeons: Array<{ dungeonKey: string; dungeonLabel: string; selectionOrder: number }>;
             status: string;
             organizer_id: string;
             started_at: string | null;
@@ -877,9 +896,18 @@ export default async function runsRoutes(app: FastifyInstance) {
             o3_stage: string | null;
             join_locked: boolean;
         }>(
-                `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, status, organizer_id,
+                `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
                     started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
-                    key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked
+                    key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked,
+                    COALESCE((
+                        SELECT json_agg(json_build_object(
+                            'dungeonKey', selection.dungeon_key,
+                            'dungeonLabel', selection.dungeon_label,
+                            'selectionOrder', selection.selection_order
+                        ) ORDER BY selection.selection_order)
+                        FROM run_dungeon_selection selection
+                        WHERE selection.run_id = run.id
+                    ), '[]'::json) AS selected_dungeons
          FROM run
         WHERE id = $1::bigint`,
             [runId]
@@ -893,11 +921,14 @@ export default async function runsRoutes(app: FastifyInstance) {
         if (!enforceGuildScope(req, reply, r, runId)) return;
 
         return reply.send({
-            id: r.id,
+            id: normalizeRunId(r.id),
             channelId: r.channel_id,
             postMessageId: r.post_message_id,
             dungeonKey: r.dungeon_key,
             dungeonLabel: r.dungeon_label,
+            runKind: r.run_kind,
+            activityKey: r.activity_key,
+            selectedDungeons: r.selected_dungeons,
             status: r.status,
             organizerId: r.organizer_id,
             startedAt: r.started_at,
@@ -1023,7 +1054,7 @@ export default async function runsRoutes(app: FastifyInstance) {
      */
     app.get('/runs/expired', async (req, reply) => {
         const res = await query<{
-            id: number;
+            id: string | number;
             guild_id: string;
             channel_id: string | null;
             post_message_id: string | null;
@@ -1041,7 +1072,9 @@ export default async function runsRoutes(app: FastifyInstance) {
              ORDER BY created_at ASC`
         );
 
-        return reply.send({ expired: res.rows });
+        return reply.send({
+            expired: res.rows.map(run => ({ ...run, id: normalizeRunId(run.id) })),
+        });
     });
 
     /**
@@ -1133,14 +1166,14 @@ export default async function runsRoutes(app: FastifyInstance) {
         const runId = Number(p.data.id);
         const { actor_user_id, actor_roles, actor_role_positions, seconds } = b.data;
 
-        // Read current status, organizer_id, guild_id, dungeon_key, and key_pop_count
-        const cur = await query<RunRow & { dungeon_key: string; key_pop_count: number }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key, key_pop_count FROM run WHERE id = $1::bigint`,
+        // Read current status, organizer_id, guild_id, taxonomy, and key_pop_count.
+        const cur = await query<RunRow & { run_kind: RunKind; key_pop_count: number }>(
+            `SELECT status, organizer_id, guild_id, run_kind, key_pop_count FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
         const run = cur.rows[0];
-        const { dungeon_key, key_pop_count, organizer_id } = run;
+        const { key_pop_count } = run;
 
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
@@ -1171,20 +1204,22 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
+        if (run.run_kind === 'oryx_3') {
+            return Errors.validation(reply, 'Oryx 3 does not use normal Dungeon Entered completion handling.');
+        }
+
         let result;
         try {
             result = await recordKeyPopWithTransaction({
                 runId,
                 guildId: run.guild_id,
-                organizerId: organizer_id,
-                dungeonKey: dungeon_key,
-                keyPopCount: key_pop_count,
                 expectedKeyPopCount: key_pop_count,
                 keyWindowSeconds: seconds,
                 organizerRoles: actor_roles,
                 organizerRolePositions: actor_role_positions,
             });
         } catch (err) {
+            if (err instanceof Oryx3KeyPopError) return Errors.validation(reply, err.message);
             logger.error({ err, runId, keyPopNumber: key_pop_count + 1 }, 'Failed to record key pop transaction');
             return Errors.internal(reply, 'Failed to record key pop');
         }
@@ -1388,8 +1423,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { actorId, actorRoles, joinLocked } = b.data;
 
         // Read current status AND organizer_id AND guild_id
-        const cur = await query<RunRow & { dungeon_key: string; o3_stage: string | null }>(
-            `SELECT status, organizer_id, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
+        const cur = await query<RunRow & { run_kind: RunKind; o3_stage: string | null }>(
+            `SELECT status, organizer_id, guild_id, run_kind, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (cur.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -1420,7 +1455,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
-        if (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null) {
+        if (run.run_kind === 'oryx_3' && run.o3_stage !== null) {
             return Errors.runClosed(reply);
         }
 
@@ -1430,7 +1465,7 @@ export default async function runsRoutes(app: FastifyInstance) {
              SET join_locked = $2
              WHERE id = $1::bigint
                AND status IN ('open', 'live')
-               AND (dungeon_key <> 'ORYX_3' OR o3_stage IS NULL)
+               AND (run_kind <> 'oryx_3' OR o3_stage IS NULL)
              RETURNING join_locked`,
             [runId, joinLocked]
         );
@@ -1539,10 +1574,10 @@ export default async function runsRoutes(app: FastifyInstance) {
         const statusRes = await query<{
             status: string;
             guild_id: string;
-            dungeon_key: string;
+            run_kind: RunKind;
             o3_stage: string | null;
         }>(
-            `SELECT status, guild_id, dungeon_key, o3_stage FROM run WHERE id = $1::bigint`,
+            `SELECT status, guild_id, run_kind, o3_stage FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -1558,7 +1593,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
-        if (run.dungeon_key === 'ORYX_3' && run.o3_stage !== null) {
+        if (run.run_kind === 'oryx_3' && run.o3_stage !== null) {
             return Errors.runClosed(reply);
         }
 

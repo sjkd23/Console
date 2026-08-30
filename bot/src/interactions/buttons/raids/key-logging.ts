@@ -9,7 +9,7 @@ import {
     MessageFlags,
     ModalSubmitInteraction,
 } from 'discord.js';
-import { getJSON, postJSON } from '../../../lib/utilities/http.js';
+import { getJSON, getRunDetails, logRunPhysicalKeys, postJSON } from '../../../lib/utilities/http.js';
 import {
     buildKeyLoggingPanel,
     buildKeyCountMenu,
@@ -21,6 +21,8 @@ import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { findMemberByName } from '../../../lib/utilities/member-helpers.js';
 import { buttonMutex } from '../../../lib/utilities/button-mutex.js';
+import { getLoggableRunDungeons } from '../../../lib/utilities/run-key-logging.js';
+import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 
 const logger = createLogger('KeyLogging');
 
@@ -29,18 +31,25 @@ const keyLoggingSessions = new Map<number, KeyLoggingState>();
 
 /**
  * Initialize and show the key logging panel for a run.
- * Called when the organizer ends a run with key pops.
+ * Called when the organizer ends a run with a physical-key allowance.
  */
 export async function showKeyLoggingPanel(
     btn: ButtonInteraction,
     runId: number,
     guildId: string,
-    organizerId: string,
-    dungeonKey: string,
-    dungeonLabel: string,
-    totalKeys: number
+    legacyO3TotalKeys?: number
 ): Promise<void> {
     try {
+        const run = await getRunDetails(runId, guildId);
+        const runBoundAllowance = run.runKind !== 'oryx_3';
+        const loggableDungeons = runBoundAllowance
+            ? getLoggableRunDungeons(run)
+            : [{ dungeonKey: run.dungeonKey, dungeonLabel: run.dungeonLabel }];
+        const enteredCount = runBoundAllowance ? run.keyPopCount : (legacyO3TotalKeys ?? 0);
+        if (enteredCount < 1 || loggableDungeons.length === 0) {
+            throw new Error('This run has no physical key logging allowance.');
+        }
+
         // Fetch users who pressed key buttons
         const keyReactionData = await getJSON<{ keyUsers: Record<string, string[]> }>(
             `/runs/${runId}/key-reaction-users`,
@@ -51,6 +60,11 @@ export async function showKeyLoggingPanel(
         const keyReactionUsers = Array.from(
             new Set(Object.values(keyReactionData.keyUsers).flat())
         );
+        const keyReactionUsersByDungeon = Object.fromEntries(loggableDungeons.map(dungeon => {
+            const keyTypes = dungeonByCode[dungeon.dungeonKey]?.keyReactions.map(reaction => reaction.mapKey) ?? [];
+            const users = Array.from(new Set(keyTypes.flatMap(keyType => keyReactionData.keyUsers[keyType] ?? [])));
+            return [dungeon.dungeonKey, users];
+        }));
 
         // Fetch usernames/nicknames for display in dropdown
         const userDisplayNames = new Map<string, string>();
@@ -75,12 +89,15 @@ export async function showKeyLoggingPanel(
         // Initialize session state
         const state: KeyLoggingState = {
             runId,
-            organizerId,
-            dungeonKey,
-            dungeonLabel,
-            totalKeys,
-            remainingKeys: totalKeys,
+            organizerId: run.organizerId,
+            dungeonLabel: run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | '),
+            enteredCount,
+            remainingKeys: enteredCount,
+            runBoundAllowance,
+            loggableDungeons,
+            selectedDungeonKey: loggableDungeons.length === 1 ? loggableDungeons[0].dungeonKey : null,
             keyReactionUsers,
+            keyReactionUsersByDungeon,
             userDisplayNames,
             logs: [],
         };
@@ -96,7 +113,7 @@ export async function showKeyLoggingPanel(
         logger.info('Showed key logging panel', {
             runId,
             guildId,
-            totalKeys,
+            enteredCount,
             keyReactionUsers: keyReactionUsers.length,
         });
     } catch (err) {
@@ -111,6 +128,27 @@ export async function showKeyLoggingPanel(
             components: [],
         });
     }
+}
+
+export async function handleKeyLogSelectDungeon(
+    interaction: StringSelectMenuInteraction,
+    runId: string
+): Promise<void> {
+    await interaction.deferUpdate();
+    const state = keyLoggingSessions.get(parseInt(runId, 10));
+    const selectedDungeonKey = interaction.values[0];
+    if (!state || !state.loggableDungeons.some(dungeon => dungeon.dungeonKey === selectedDungeonKey)) {
+        await interaction.editReply({
+            content: 'Key logging session expired or the dungeon choice is invalid.',
+            embeds: [],
+            components: [],
+        });
+        return;
+    }
+
+    state.selectedDungeonKey = selectedDungeonKey;
+    const { embed, components } = buildKeyLoggingPanel(state);
+    await interaction.editReply({ embeds: [embed], components });
 }
 
 /**
@@ -136,13 +174,18 @@ export async function handleKeyLogSelectUser(
     }
 
     const userId = interaction.values[0];
+    const dungeon = state.loggableDungeons.find(candidate => candidate.dungeonKey === state.selectedDungeonKey);
+    if (!dungeon) {
+        await interaction.editReply({ content: 'Select the physical key dungeon first.', embeds: [], components: [] });
+        return;
+    }
 
     // Show key count selection menu
     const { embed, components } = buildKeyCountMenu(
         runIdNum,
         userId,
         state.remainingKeys,
-        state.dungeonLabel
+        dungeon.dungeonLabel
     );
 
     await interaction.editReply({ embeds: [embed], components });
@@ -171,12 +214,18 @@ export async function handleKeyLogSelectUserFromButton(
         return;
     }
 
+    const dungeon = state.loggableDungeons.find(candidate => candidate.dungeonKey === state.selectedDungeonKey);
+    if (!dungeon) {
+        await btn.editReply({ content: 'Select the physical key dungeon first.', embeds: [], components: [] });
+        return;
+    }
+
     // Show key count selection menu
     const { embed, components } = buildKeyCountMenu(
         runIdNum,
         userId,
         state.remainingKeys,
-        state.dungeonLabel
+        dungeon.dungeonLabel
     );
 
     await btn.editReply({ embeds: [embed], components });
@@ -222,6 +271,16 @@ export async function handleKeyLogKeyCount(
         }
 
         const keyCount = parseInt(interaction.values[0]);
+        const selectedDungeon = state.loggableDungeons.find(
+            dungeon => dungeon.dungeonKey === state.selectedDungeonKey
+        );
+        if (!selectedDungeon) {
+            await interaction.followUp({
+                content: 'Select the physical key dungeon first.',
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
 
         // Validate key count doesn't exceed remaining while holding the session lock.
         if (keyCount > state.remainingKeys) {
@@ -236,35 +295,61 @@ export async function handleKeyLogKeyCount(
         const actorRoles = member ? getMemberRoleIds(member) : [];
 
         try {
-            const result = await postJSON<{
-                logged: number;
-                new_total: number;
-                points_awarded: number;
-                user_id: string;
-            }>(
-                '/quota/log-key',
-                {
+            const result = state.runBoundAllowance
+                ? await logRunPhysicalKeys({
                     actorId: interaction.user.id,
                     actorRoles,
                     guildId: interaction.guildId!,
                     userId,
-                    dungeonKey: state.dungeonKey,
+                    dungeonKey: selectedDungeon.dungeonKey,
                     amount: keyCount,
-                }
-            );
+                    runId: String(runIdNum),
+                    interactionId: interaction.id,
+                })
+                : await postJSON<{
+                    logged: number;
+                    new_total: number;
+                    points_awarded: number;
+                    user_id: string;
+                    remaining_allowance?: number;
+                    duplicate?: boolean;
+                }>(
+                    '/quota/log-key',
+                    {
+                        actorId: interaction.user.id,
+                        actorRoles,
+                        guildId: interaction.guildId!,
+                        userId,
+                        dungeonKey: selectedDungeon.dungeonKey,
+                        amount: keyCount,
+                    }
+                );
 
             const user = await interaction.client.users.fetch(userId).catch(() => null);
             const username = user?.username ?? 'Unknown User';
 
-            state.remainingKeys -= keyCount;
-            state.logs.push({
-                userId: result.user_id,
-                username,
-                amount: keyCount,
-                pointsAwarded: Number(result.points_awarded),
-            });
+            if (result.duplicate) {
+                state.remainingKeys = result.remaining_allowance ?? state.remainingKeys;
+                await interaction.followUp({
+                    content: 'This key-log interaction was already recorded; no duplicate key was added.',
+                    flags: MessageFlags.Ephemeral,
+                });
+            } else {
+                state.remainingKeys = state.runBoundAllowance
+                    ? (result.remaining_allowance ?? state.remainingKeys - result.logged)
+                    : state.remainingKeys - result.logged;
+                state.logs.push({
+                    userId: result.user_id,
+                    username,
+                    amount: result.logged,
+                    pointsAwarded: Number(result.points_awarded),
+                    dungeonKey: selectedDungeon.dungeonKey,
+                    dungeonLabel: selectedDungeon.dungeonLabel,
+                });
+                if (state.loggableDungeons.length > 1) state.selectedDungeonKey = null;
+            }
 
-            if (interaction.guild) {
+            if (interaction.guild && !result.duplicate) {
                 try {
                     await logKeyLogged(
                         interaction.client,
@@ -272,13 +357,13 @@ export async function handleKeyLogKeyCount(
                             guildId: interaction.guild.id,
                             organizerId: interaction.user.id,
                             organizerUsername: interaction.user.username,
-                            dungeonName: state.dungeonLabel,
+                            dungeonName: selectedDungeon.dungeonLabel,
                             type: 'run',
                             runId: runIdNum,
                         },
                         userId,
                         username,
-                        keyCount,
+                        result.logged,
                         result.points_awarded
                     );
                 } catch (e) {
@@ -296,7 +381,7 @@ export async function handleKeyLogKeyCount(
             logger.info('Logged keys', {
                 runId: runIdNum,
                 userId,
-                keyCount,
+                keyCount: result.logged,
                 remainingKeys: state.remainingKeys,
             });
         } catch (err) {
@@ -327,6 +412,12 @@ export async function handleKeyLogCustomName(btn: ButtonInteraction, runId: stri
         replied: btn.replied,
         deferred: btn.deferred,
     });
+
+    const state = keyLoggingSessions.get(parseInt(runId, 10));
+    if (!state?.selectedDungeonKey) {
+        await btn.reply({ content: 'Select the physical key dungeon first.', flags: MessageFlags.Ephemeral });
+        return;
+    }
 
     const modal = new ModalBuilder()
         .setCustomId(`keylog:customname:modal:${runId}`)
@@ -384,6 +475,12 @@ export async function handleKeyLogCustomNameModal(
             embeds: [],
             components: [],
         });
+        return;
+    }
+
+    const dungeon = state.loggableDungeons.find(candidate => candidate.dungeonKey === state.selectedDungeonKey);
+    if (!dungeon) {
+        await interaction.editReply({ content: 'Select the physical key dungeon first.', embeds: [], components: [] });
         return;
     }
 
@@ -452,7 +549,7 @@ export async function handleKeyLogCustomNameModal(
         runIdNum,
         searchQuery,
         foundUser,
-        state.dungeonLabel
+        dungeon.dungeonLabel
     );
 
     try {
@@ -522,7 +619,7 @@ export async function handleKeyLogCancel(btn: ButtonInteraction, runId: string):
     }
 
     await btn.editReply({
-        content: '✅ Key logging cancelled. Remaining keys were not logged.',
+        content: '✅ Key logging finished. Previously logged keys were kept; remaining allowance was left unused.',
         embeds: [],
         components: [],
     });

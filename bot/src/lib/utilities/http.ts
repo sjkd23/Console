@@ -5,6 +5,8 @@ import { botConfig } from '../../config.js';
 import { logHttpStart, logHttpSuccess, logHttpError, logHttpTimeout } from '../logging/http-logger.js';
 import { createLogger } from '../logging/logger.js';
 import { updateQuotaPanelsForUser } from '../ui/quota-panel.js';
+import { z } from 'zod';
+import { RUN_KINDS } from '../../constants/dungeons/dungeon-taxonomy.js';
 
 const BASE = botConfig.BACKEND_URL;
 const API_KEY = botConfig.BACKEND_API_KEY;
@@ -169,6 +171,111 @@ export async function patchJSON<T>(path: string, body: any, ctx?: RequestContext
 
 export async function deleteJSON<T>(path: string, body: any, ctx?: RequestContext): Promise<T> {
     return makeRequest<T>('DELETE', path, body, ctx);
+}
+
+export const RunSelectionSchema = z.object({
+    dungeonKey: z.string().min(1),
+    dungeonLabel: z.string().min(1),
+    selectionOrder: z.number().int().min(1).max(5),
+});
+
+export const RunDetailsSchema = z.object({
+    id: z.number().int().positive(),
+    channelId: z.string().nullable(),
+    postMessageId: z.string().nullable(),
+    dungeonKey: z.string().min(1),
+    dungeonLabel: z.string().min(1),
+    runKind: z.enum(RUN_KINDS),
+    activityKey: z.string().min(1),
+    selectedDungeons: z.array(RunSelectionSchema).min(1).max(5),
+    status: z.enum(['open', 'live', 'ended']),
+    organizerId: z.string().min(1),
+    startedAt: z.string().nullable(),
+    endedAt: z.string().nullable(),
+    createdAt: z.string(),
+    autoEndMinutes: z.number(),
+    keyWindowEndsAt: z.string().nullable(),
+    party: z.string().nullable(),
+    location: z.string().nullable(),
+    description: z.string().nullable(),
+    roleId: z.string().nullable(),
+    pingMessageId: z.string().nullable(),
+    keyPopCount: z.number().int().nonnegative(),
+    chainAmount: z.number().int().positive().nullable(),
+    screenshotUrl: z.string().nullable(),
+    o3Stage: z.enum(['closed', 'miniboss', 'third_room']).nullable(),
+    joinLocked: z.boolean().nullable().transform(value => value ?? false),
+});
+
+export type RunDetails = z.infer<typeof RunDetailsSchema>;
+
+export function getRunDisplayLabel(
+    run: Pick<RunDetails, 'selectedDungeons'>
+): string {
+    return run.selectedDungeons.map(selection => selection.dungeonLabel).join(' | ');
+}
+
+export async function getRunDetails(runId: number | string, guildId?: string): Promise<RunDetails> {
+    const response = await getJSON<unknown>(`/runs/${runId}`, guildId ? { guildId } : undefined);
+    return RunDetailsSchema.parse(response);
+}
+
+const CreateRunResponseSchema = z.object({
+    runId: z.number().int().positive(),
+    dungeonKey: z.string().min(1),
+    dungeonLabel: z.string().min(1),
+    runKind: z.enum(RUN_KINDS),
+    activityKey: z.string().min(1),
+    selectedDungeons: z.array(RunSelectionSchema).min(1).max(5),
+    earlyLocNotification: z.object({
+        shouldNotify: z.boolean(),
+        isInitialSet: z.boolean(),
+        party: z.string().nullable(),
+        location: z.string().nullable(),
+    }).optional(),
+});
+
+export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
+
+export async function createRun(payload: {
+    guildId: string;
+    guildName: string;
+    organizerId: string;
+    organizerUsername: string;
+    organizerRoles?: string[];
+    channelId: string;
+    selectedDungeonKeys: string[];
+    description?: string;
+    party?: string;
+    location?: string;
+    autoEndMinutes: number;
+    roleId?: string;
+}): Promise<CreateRunResponse> {
+    const response = await postJSON<unknown>('/runs', payload, { guildId: payload.guildId });
+    return CreateRunResponseSchema.parse(response);
+}
+
+const RunPhysicalKeyLogResponseSchema = z.object({
+    logged: z.number().int().nonnegative(),
+    new_total: z.number().int().nonnegative(),
+    points_awarded: z.number(),
+    user_id: z.string().min(1),
+    remaining_allowance: z.number().int().nonnegative(),
+    duplicate: z.boolean(),
+});
+
+export async function logRunPhysicalKeys(payload: {
+    actorId: string;
+    actorRoles: string[];
+    guildId: string;
+    userId: string;
+    dungeonKey: string;
+    amount: number;
+    runId: string;
+    interactionId: string;
+}) {
+    const response = await postJSON<unknown>('/quota/log-key', payload, { guildId: payload.guildId });
+    return RunPhysicalKeyLogResponseSchema.parse(response);
 }
 
 /** Create a modmail ticket (POST /modmail/tickets) */

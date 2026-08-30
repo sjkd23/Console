@@ -18,7 +18,7 @@ export async function createRunRole(
     dungeonName: string
 ): Promise<Role | null> {
     try {
-        const roleName = `${organizerUsername}'s ${dungeonName}`;
+        const roleName = buildRunRoleName(organizerUsername, dungeonName);
         
         // Create role at the bottom of the role list (position 1)
         const role = await guild.roles.create({
@@ -46,6 +46,12 @@ export async function createRunRole(
         });
         return null;
     }
+}
+
+export function buildRunRoleName(organizerUsername: string, runLabel: string): string {
+    const suffix = `'s ${runLabel}`;
+    const maxOrganizerLength = Math.max(1, 100 - suffix.length);
+    return `${organizerUsername.slice(0, maxOrganizerLength)}${suffix}`.slice(0, 100);
 }
 
 /**

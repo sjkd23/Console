@@ -1,8 +1,7 @@
 import { ButtonInteraction, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
-import { getJSON, patchJSON, deleteJSON, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
+import { getRunDetails, patchJSON, deleteJSON, BackendError, getRolePositions } from '../../../lib/utilities/http.js';
 import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
-import { getDungeonKeyEmoji, getDungeonKeyEmojiIdentifier } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
 import { deleteRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { sendRunPing } from '../../../lib/utilities/run-ping.js';
@@ -13,6 +12,12 @@ import { updateQuotaPanelsForUser } from '../../../lib/ui/quota-panel.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { clearOrganizerPanelsForRun } from '../../../lib/state/organizer-panel-tracker.js';
 import { transitionRunEmbed } from '../../../lib/utilities/run-panel-builder.js';
+import { resolveDungeonRolePingIds } from '../../../lib/utilities/dungeon-role-pings.js';
+import {
+    buildRunLifecycleMessageContent,
+    buildRunMessageContentEdit,
+} from '../../../lib/utilities/run-message-helpers.js';
+import { shouldStartRunKeyLogging } from '../../../lib/utilities/run-key-logging.js';
 
 const logger = createLogger('RunStatus');
 
@@ -45,26 +50,7 @@ async function handleStatusInternal(
 ) {
 
     // Fetch run info first to check authorization
-    const run = await getJSON<{
-        channelId: string | null;
-        postMessageId: string | null;
-        dungeonKey: string;
-        dungeonLabel: string;
-        organizerId: string;
-        status: string;
-        startedAt: string | null;
-        endedAt: string | null;
-        createdAt: string;
-        autoEndMinutes: number;
-        keyWindowEndsAt: string | null;
-        party: string | null;
-        location: string | null;
-        description: string | null;
-        roleId: string | null;
-        pingMessageId: string | null;
-        keyPopCount: number;
-        chainAmount: number | null;
-    }>(`/runs/${runId}`).catch(() => null);
+    const run = await getRunDetails(runId, btn.guildId ?? undefined).catch(() => null);
 
     if (!run) {
         await btn.editReply({ content: 'Could not fetch run details.', components: [] });
@@ -90,6 +76,7 @@ async function handleStatusInternal(
     const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
     const organizerMember = await btn.guild.members.fetch(run.organizerId).catch(() => null);
     const guildId = btn.guildId!;
+    const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
     // 1) Update backend status (PATCH for live/ended, DELETE for cancelled) with actorId
     //    Backend will verify that btn.user.id === run.organizer_id OR has organizer role
@@ -240,16 +227,15 @@ async function handleStatusInternal(
         const liveEmbed = transitionRunEmbed(embeds[0], 'live', run);
 
         // Update the public message content with party/location
-        let content = '@here';
-        if (run.party && run.location) {
-            content += ` Party: **${run.party}** | Location: **${run.location}**`;
-        } else if (run.party) {
-            content += ` Party: **${run.party}**`;
-        } else if (run.location) {
-            content += ` Location: **${run.location}**`;
-        }
+        const rolePingIds = await resolveDungeonRolePingIds(btn.guild, run.selectedDungeons.map(dungeon => dungeon.dungeonKey));
+        const content = buildRunLifecycleMessageContent(run, {
+            additionalPingRoleIds: rolePingIds,
+        });
 
-        await pubMsg.edit({ content, embeds: [liveEmbed, ...embeds.slice(1)] });
+        await pubMsg.edit({
+            ...buildRunMessageContentEdit(content),
+            embeds: [liveEmbed, ...embeds.slice(1)],
+        });
 
         // Send ping message to notify raiders
         await sendRunPing(btn.client, parseInt(runId), btn.guild);
@@ -262,7 +248,7 @@ async function handleStatusInternal(
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: displayLabel,
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -312,7 +298,14 @@ async function handleStatusInternal(
         const endedEmbed = transitionRunEmbed(embeds[0], status === 'cancelled' ? 'cancelled' : 'ended', run);
 
         // Change PUBLIC MESSAGE content and remove buttons
-        await pubMsg.edit({ content: endLabel, embeds: [endedEmbed, ...embeds.slice(1)], components: [] });
+        const endedContent = buildRunLifecycleMessageContent(run, {
+            includeHere: false,
+        });
+        await pubMsg.edit({
+            ...buildRunMessageContentEdit(endedContent),
+            embeds: [endedEmbed, ...embeds.slice(1)],
+            components: [],
+        });
 
         // Clear all reactions from the run message
         try {
@@ -338,7 +331,7 @@ async function handleStatusInternal(
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: displayLabel,
                     type: 'run',
                     runId: parseInt(runId)
                 },
@@ -353,7 +346,7 @@ async function handleStatusInternal(
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: displayLabel,
                     type: 'run',
                     runId: parseInt(runId)
                 }
@@ -365,28 +358,20 @@ async function handleStatusInternal(
             console.error('Failed to log status change to raid-log:', e);
         }
 
-        // If run ended, show key logging panel
-        // Calculate total keys based on dungeon configuration:
-        // - For dungeons with multiple key types (e.g., Oryx 3 with 4 runes): use keyReactions.length
-        // - For regular dungeons: use key_pop_count (number of times "Key Popped" was clicked, defaults to 1)
-        if (status === 'ended') {
-            let totalKeys = Math.max(1, run.keyPopCount);
-            
-            // Check if this dungeon has multiple distinct key types
-            const dungeonData = await import('../../../constants/dungeons/dungeon-helpers.js')
-                .then(m => m.dungeonByCode[run.dungeonKey]);
-            
-            if (dungeonData?.keyReactions && dungeonData.keyReactions.length > 1) {
-                // For dungeons with multiple key types (like Oryx 3 with 4 runes),
-                // use the number of key types defined in the dungeon configuration
-                // This ensures the organizer logs all runes regardless of button clicks
-                totalKeys = dungeonData.keyReactions.length;
+        // For normal runs, the backend's persisted Dungeon Entered count is the maximum
+        // number of actual physical keys that may be logged. O3 keeps its legacy rune flow.
+        if (status === 'ended' && (run.runKind === 'oryx_3' || shouldStartRunKeyLogging(run))) {
+            let legacyO3TotalKeys: number | undefined;
+            if (run.runKind === 'oryx_3') {
+                const dungeonData = await import('../../../constants/dungeons/dungeon-helpers.js')
+                    .then(m => m.dungeonByCode[run.dungeonKey]);
+                legacyO3TotalKeys = Math.max(1, dungeonData?.keyReactions.length ?? 0);
             }
-            
+
             logger.info('Run ended, showing key logging panel', {
                 runId,
-                keyPopCount: run.keyPopCount,
-                totalKeys,
+                dungeonEnteredCount: run.keyPopCount,
+                legacyO3TotalKeys,
             });
 
             // Import showKeyLoggingPanel dynamically to avoid circular dependencies
@@ -396,22 +381,19 @@ async function handleStatusInternal(
                 btn,
                 parseInt(runId),
                 guildId,
-                run.organizerId,
-                run.dungeonKey,
-                run.dungeonLabel,
-                totalKeys
+                legacyO3TotalKeys
             );
             return;
         }
 
-        // For cancelled runs, clear the thread cache immediately since there's no key logging phase
-        if (status === 'cancelled') {
+        // No key logging phase follows cancelled or zero-entry/non-keyable ended runs.
+        if (status === 'cancelled' || status === 'ended') {
             try {
                 clearLogThreadCache({
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '',
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: displayLabel,
                     type: 'run',
                     runId: parseInt(runId)
                 });

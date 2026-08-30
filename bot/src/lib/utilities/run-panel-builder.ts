@@ -13,15 +13,18 @@ import {
 } from 'discord.js';
 import { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
-import { formatKeyLabel, getDungeonKeyEmoji } from './key-emoji-helpers.js';
+import { formatKeyLabel, getDungeonEnteredEmoji } from './key-emoji-helpers.js';
 import { isO3RealmClosedStage, type O3Stage } from './run-message-helpers.js';
+import { classifyRunDungeons, type RunKind } from '../../constants/dungeons/dungeon-taxonomy.js';
+import { getPhysicalDungeonKeyOffers } from './dungeon-key-offers.js';
 
 // ============================================================================
 // INTERFACES
 // ============================================================================
 
 export interface RunEmbedOptions {
-    dungeonData: DungeonInfo;
+    dungeonData: DungeonInfo | readonly DungeonInfo[];
+    runKind?: RunKind;
     organizerId: string;
     status: 'starting' | 'live' | 'ended' | 'cancelled';
     description?: string;
@@ -34,7 +37,8 @@ export interface RunEmbedOptions {
 
 export interface RunButtonsOptions {
     runId: number | string;
-    dungeonData: DungeonInfo;
+    dungeonData: DungeonInfo | readonly DungeonInfo[];
+    runKind?: RunKind;
     joinLocked?: boolean;
     o3Stage?: O3Stage | null;
 }
@@ -52,32 +56,37 @@ export interface KeyButtonsResult {
  * This is the universal function that handles all run embed creation
  */
 export function buildRunEmbed(options: RunEmbedOptions): EmbedBuilder {
-    const { dungeonData, organizerId, status, description } = options;
+    const dungeons = normalizeDungeons(options.dungeonData);
+    const primaryDungeon = dungeons[0];
+    const runKind = options.runKind ?? inferRunKind(dungeons);
+    const { organizerId, status, description } = options;
 
     const embed = new EmbedBuilder()
         .setTimestamp(new Date());
 
     // Apply dungeon theming
-    if (dungeonData.dungeonColors?.length) {
-        embed.setColor(dungeonData.dungeonColors[0]);
+    if (dungeons.length === 1 && primaryDungeon.dungeonColors?.length) {
+        embed.setColor(primaryDungeon.dungeonColors[0]);
+    } else {
+        embed.setColor(0x5865F2);
     }
-    if (dungeonData.portalLink?.url) {
-        embed.setThumbnail(dungeonData.portalLink.url);
+    if (dungeons.length === 1 && primaryDungeon.portalLink?.url) {
+        embed.setThumbnail(primaryDungeon.portalLink.url);
     }
 
     // Build title based on status
     switch (status) {
         case 'starting':
-            embed.setTitle(`⏳ Starting Soon: ${dungeonData.dungeonName}`);
+            embed.setTitle(buildRunTitle('starting', dungeons, runKind, options.keyPopCount, options.chainAmount));
             break;
         case 'live':
-            embed.setTitle(buildLiveTitle(dungeonData, options.keyPopCount ?? 0, options.chainAmount ?? null));
+            embed.setTitle(buildRunTitle('live', dungeons, runKind, options.keyPopCount, options.chainAmount));
             break;
         case 'ended':
-            embed.setTitle(`✅ Ended: ${dungeonData.dungeonName}`);
+            embed.setTitle(buildRunTitle('ended', dungeons, runKind));
             break;
         case 'cancelled':
-            embed.setTitle(`❌ Cancelled: ${dungeonData.dungeonName}`);
+            embed.setTitle(buildRunTitle('cancelled', dungeons, runKind));
             break;
     }
 
@@ -88,11 +97,12 @@ export function buildRunEmbed(options: RunEmbedOptions): EmbedBuilder {
         options.keyWindowEndsAt,
         options.endedAt,
         options.startedAt,
-        dungeonData.codeName
+        primaryDungeon.codeName,
+        runKind
     ));
 
     // Add fields
-    const fields = buildEmbedFields(status, dungeonData, description);
+    const fields = buildEmbedFields(status, dungeons, runKind, description);
     if (fields.length > 0) {
         embed.addFields(fields);
     }
@@ -110,6 +120,8 @@ export function transitionRunEmbed(
     options: {
         dungeonKey: string;
         dungeonLabel: string;
+        runKind?: RunKind;
+        selectedDungeons?: Array<{ dungeonKey: string; dungeonLabel: string }>;
         organizerId: string;
         startedAt?: string | null;
         endedAt?: string | null;
@@ -120,21 +132,24 @@ export function transitionRunEmbed(
     }
 ): EmbedBuilder {
     const embed = EmbedBuilder.from(originalEmbed);
+    const titleDungeons = options.selectedDungeons?.length
+        ? options.selectedDungeons.map(selection => ({
+            codeName: selection.dungeonKey,
+            dungeonName: selection.dungeonLabel,
+        }))
+        : [{ codeName: options.dungeonKey, dungeonName: options.dungeonLabel }];
+    const runKind = options.runKind ?? (options.dungeonKey === 'ORYX_3' ? 'oryx_3' : 'single');
 
     // Update title
     switch (toStatus) {
         case 'live':
-            embed.setTitle(buildLiveTitle(
-                { codeName: options.dungeonKey, dungeonName: options.dungeonLabel } as DungeonInfo,
-                options.keyPopCount ?? 0,
-                options.chainAmount ?? null
-            ));
+            embed.setTitle(buildRunTitle('live', titleDungeons, runKind, options.keyPopCount, options.chainAmount));
             break;
         case 'ended':
-            embed.setTitle(`✅ Ended: ${options.dungeonLabel}`);
+            embed.setTitle(buildRunTitle('ended', titleDungeons, runKind));
             break;
         case 'cancelled':
-            embed.setTitle(`❌ Cancelled: ${options.dungeonLabel}`);
+            embed.setTitle(buildRunTitle('cancelled', titleDungeons, runKind));
             break;
     }
 
@@ -145,12 +160,14 @@ export function transitionRunEmbed(
         options.keyWindowEndsAt,
         options.endedAt,
         options.startedAt,
-        options.dungeonKey
+        options.dungeonKey,
+        runKind
     ));
 
     // Update or clean up fields based on transition
     const data = embed.toJSON();
     const fields = [...(data.fields ?? [])];
+    syncDungeonListField(fields, titleDungeons, runKind);
 
     if (toStatus === 'live') {
         // Merge separate key fields into one
@@ -163,7 +180,7 @@ export function transitionRunEmbed(
             addDurationField(fields, options.startedAt, options.endedAt);
         }
         // Add final chain count for non-O3 dungeons
-        if (options.dungeonKey !== 'ORYX_3' && (options.keyPopCount ?? 0) > 0) {
+        if (runKind !== 'oryx_3' && (options.keyPopCount ?? 0) > 0) {
             addFinalChainField(fields, options.keyPopCount!, options.chainAmount ?? null);
         }
     }
@@ -213,14 +230,16 @@ export function buildMainActionRow(
  * Build key reaction button rows for a dungeon
  * Returns empty array if dungeon has no key reactions
  */
-export function buildKeyButtonRows(runId: number | string, dungeonData: DungeonInfo): ActionRowBuilder<ButtonBuilder>[] {
-    if (!dungeonData.keyReactions || dungeonData.keyReactions.length === 0) {
+export function buildKeyButtonRows(runId: number | string, dungeonData: DungeonInfo | readonly DungeonInfo[]): ActionRowBuilder<ButtonBuilder>[] {
+    const dungeons = normalizeDungeons(dungeonData);
+    const keyOffers = getPhysicalDungeonKeyOffers(dungeons);
+    if (keyOffers.length === 0) {
         return [];
     }
 
     const keyButtons: ButtonBuilder[] = [];
 
-    for (const keyReaction of dungeonData.keyReactions) {
+    for (const { reaction: keyReaction } of keyOffers) {
         const reactionInfo = getReactionInfo(keyReaction.mapKey);
         const button = new ButtonBuilder()
             .setCustomId(`run:key:${runId}:${keyReaction.mapKey}`)
@@ -251,10 +270,12 @@ export function buildKeyButtonRows(runId: number | string, dungeonData: DungeonI
  */
 export function buildRunButtons(options: RunButtonsOptions): ActionRowBuilder<ButtonBuilder>[] {
     const { runId, dungeonData, joinLocked = false, o3Stage = null } = options;
-    const realmIsClosed = dungeonData.codeName === 'ORYX_3' && isO3RealmClosedStage(o3Stage);
+    const dungeons = normalizeDungeons(dungeonData);
+    const runKind = options.runKind ?? inferRunKind(dungeons);
+    const realmIsClosed = runKind === 'oryx_3' && isO3RealmClosedStage(o3Stage);
 
     const mainRow = buildMainActionRow(runId, joinLocked, !realmIsClosed);
-    const keyRows = realmIsClosed ? [] : buildKeyButtonRows(runId, dungeonData);
+    const keyRows = realmIsClosed ? [] : buildKeyButtonRows(runId, dungeons);
 
     return [mainRow, ...keyRows];
 }
@@ -263,11 +284,18 @@ export function buildRunButtons(options: RunButtonsOptions): ActionRowBuilder<Bu
 // HELPER FUNCTIONS
 // ============================================================================
 
-function buildLiveTitle(dungeonData: { codeName: string; dungeonName: string }, keyPopCount: number, chainAmount: number | null): string {
+export function buildRunTitle(
+    status: 'starting' | 'live' | 'ended' | 'cancelled',
+    dungeons: readonly { codeName: string; dungeonName: string }[],
+    runKind: RunKind,
+    keyPopCount: number = 0,
+    chainAmount: number | null = null
+): string {
+    const dungeonLabel = getRunTitleLabel(dungeons, runKind);
     let chainText = '';
 
     // Add chain tracking for non-O3 dungeons
-    if (dungeonData.codeName !== 'ORYX_3' && keyPopCount > 0) {
+    if (runKind !== 'oryx_3' && keyPopCount > 0) {
         if (chainAmount && keyPopCount <= chainAmount) {
             chainText = ` | Chain ${keyPopCount}/${chainAmount}`;
         } else {
@@ -275,7 +303,20 @@ function buildLiveTitle(dungeonData: { codeName: string; dungeonName: string }, 
         }
     }
 
-    return `🟢 LIVE: ${dungeonData.dungeonName}${chainText}`;
+    if (status === 'starting') return `⏳ Starting Soon: ${dungeonLabel}`;
+    if (status === 'ended') return `✅ Ended: ${dungeonLabel}`;
+    if (status === 'cancelled') return `❌ Cancelled: ${dungeonLabel}`;
+    return `🟢 LIVE: ${dungeonLabel}${chainText}`;
+}
+
+export function getRunTitleLabel(
+    dungeons: readonly { codeName: string; dungeonName: string }[],
+    runKind: RunKind
+): string {
+    if (runKind === 'realm_clearing') return 'Realm Clearing';
+    if (runKind === 'multi_non_exalt') return 'Misc Dungeons';
+    if (runKind === 'multi_exalt') return 'Exalt Dungeons';
+    return dungeons[0]?.dungeonName ?? 'Unknown Dungeon';
 }
 
 function buildDescription(
@@ -284,7 +325,8 @@ function buildDescription(
     keyWindowEndsAt?: string | null,
     endedAt?: string | null,
     startedAt?: string | null,
-    dungeonKey?: string
+    dungeonKey?: string,
+    runKind: RunKind = 'single'
 ): string {
     let desc = `Organizer: <@${organizerId}>`;
 
@@ -294,8 +336,8 @@ function buildDescription(
         const now = Math.floor(Date.now() / 1000);
 
         if (endsUnix > now) {
-            const keyEmoji = dungeonKey ? getDungeonKeyEmoji(dungeonKey) : '🔑';
-            desc += `\n\n${keyEmoji} **Key popped**\nParty join window closes <t:${endsUnix}:R>`;
+            const enteredEmoji = getDungeonEnteredEmoji(runKind, dungeonKey ?? 'REALM_DUNGEON');
+            desc += `\n\n${enteredEmoji} **Dungeon entered**\nParty join window closes <t:${endsUnix}:R>`;
         }
     }
 
@@ -309,11 +351,20 @@ function buildDescription(
     return desc;
 }
 
-function buildEmbedFields(status: 'starting' | 'live' | 'ended' | 'cancelled', dungeonData: DungeonInfo, description?: string): APIEmbedField[] {
+function buildEmbedFields(
+    status: 'starting' | 'live' | 'ended' | 'cancelled',
+    dungeons: readonly DungeonInfo[],
+    runKind: RunKind,
+    description?: string
+): APIEmbedField[] {
     const fields: APIEmbedField[] = [];
 
+    if (runKind === 'multi_non_exalt' || runKind === 'multi_exalt') {
+        fields.push(buildDungeonListField(dungeons));
+    }
+
     // Add Keys field for starting/live runs with key reactions
-    if ((status === 'starting' || status === 'live') && dungeonData.keyReactions && dungeonData.keyReactions.length > 0) {
+    if ((status === 'starting' || status === 'live') && dungeons.some(dungeon => dungeon.keyReactions.length > 0)) {
         fields.push({ name: 'Keys', value: 'None', inline: false });
     }
 
@@ -327,6 +378,43 @@ function buildEmbedFields(status: 'starting' | 'live' | 'ended' | 'cancelled', d
     }
 
     return fields;
+}
+
+function buildDungeonListField(
+    dungeons: readonly { dungeonName: string }[]
+): APIEmbedField {
+    return {
+        name: 'Dungeons',
+        value: dungeons.map(dungeon => `• ${dungeon.dungeonName}`).join('\n'),
+        inline: false,
+    };
+}
+
+function syncDungeonListField(
+    fields: APIEmbedField[],
+    dungeons: readonly { dungeonName: string }[],
+    runKind: RunKind
+): void {
+    const existingIndex = fields.findIndex(field => field.name.toLowerCase() === 'dungeons');
+    if (runKind !== 'multi_non_exalt' && runKind !== 'multi_exalt') {
+        if (existingIndex >= 0) fields.splice(existingIndex, 1);
+        return;
+    }
+
+    const dungeonField = buildDungeonListField(dungeons);
+    if (existingIndex >= 0) {
+        fields[existingIndex] = dungeonField;
+    } else {
+        fields.unshift(dungeonField);
+    }
+}
+
+function normalizeDungeons(input: DungeonInfo | readonly DungeonInfo[]): DungeonInfo[] {
+    return Array.isArray(input) ? [...input] : [input as DungeonInfo];
+}
+
+function inferRunKind(dungeons: readonly DungeonInfo[]): RunKind {
+    return classifyRunDungeons(dungeons).runKind;
 }
 
 function mergeKeyFields(fields: APIEmbedField[]): void {

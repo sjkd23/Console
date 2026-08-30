@@ -1,5 +1,5 @@
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { postJSON, getJSON } from '../../../lib/utilities/http.js';
+import { postJSON, getJSON, getRunDetails, getRunDisplayLabel } from '../../../lib/utilities/http.js';
 import { logRaidJoin } from '../../../lib/logging/raid-logger.js';
 import { assignRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { updateRunParticipation } from '../../../lib/utilities/run-embed-helpers.js';
@@ -17,14 +17,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
     }
 
     // Fetch run details for logging and role assignment
-    const run = await getJSON<{ 
-        dungeonKey: string; 
-        dungeonLabel: string; 
-        organizerId: string;
-        roleId: string | null;
-        status: string;
-        joinLocked: boolean;
-    }>(`/runs/${runId}`, { guildId }).catch(() => null);
+    const run = await getRunDetails(runId, guildId).catch(() => null);
 
     if (!run) {
         await btn.editReply({ content: '❌ Run not found.' });
@@ -38,7 +31,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
     }
 
     // Check if run is still joinable
-    if (run.status === 'ended' || run.status === 'cancelled') {
+    if (run.status === 'ended') {
         await btn.editReply({ content: '❌ **This run has ended.**' });
         return;
     }
@@ -94,7 +87,7 @@ export async function handleJoin(btn: ButtonInteraction, runId: string) {
                     guildId: btn.guild.id,
                     organizerId: run.organizerId,
                     organizerUsername: '', // Not needed for log lookup
-                    dungeonName: run.dungeonLabel,
+                    dungeonName: getRunDisplayLabel(run),
                     type: 'run',
                     runId: parseInt(runId)
                 },

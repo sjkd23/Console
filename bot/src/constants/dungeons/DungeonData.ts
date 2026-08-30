@@ -2234,14 +2234,9 @@ export const DUNGEON_DATA: readonly DungeonInfo[] = [
     },
     {
         codeName: "REALM_DUNGEON",
-        dungeonName: "Realm Dungeons",
+        dungeonName: "Realm Clearing",
         portalEmojiId: "574080648000569353",
-        keyReactions: [
-            {
-                mapKey: "REALM_DUNGEON_KEY",
-                maxEarlyLocation: 15
-            }
-        ],
+        keyReactions: [],
         otherReactions: [],
         portalLink: {
             url: "https://static.drips.pw/rotmg/wiki/Environment/Portals/Pirate%20Cave%20Portal.png",
