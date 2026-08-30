@@ -11,8 +11,8 @@ import {
     ButtonStyle,
     ButtonInteraction,
 } from 'discord.js';
-import type { SlashCommand } from '../../_types.js';
-import { getUserPunishments, getUserNotes, getRaider, BackendError } from '../../../lib/utilities/http.js';
+import type { SlashCommand } from './_types.js';
+import { getUserPunishments, getUserNotes, getRaider, BackendError } from './../lib/utilities/http.js';
 
 type TabMode = 'userinfo' | 'punishments' | 'notes';
 
@@ -325,13 +325,13 @@ async function setupFindNavigation(
 
 /**
  * /find - Find and view detailed information about a user
- * Security+ command with user info, punishment history, and notes
+ * Organizer+ command with user info, punishment history, and notes
  */
 export const find: SlashCommand = {
-    requiredRole: 'security',
+    requiredRole: 'organizer',
     data: new SlashCommandBuilder()
         .setName('find')
-        .setDescription('Find and view detailed information about a member (Security+ only)')
+        .setDescription('Find and view detailed information about a member (Organizer+ only)')
         .addUserOption(option =>
             option
                 .setName('member')
