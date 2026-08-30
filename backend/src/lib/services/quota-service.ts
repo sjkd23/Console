@@ -182,6 +182,11 @@ export class QuotaService {
         // resolve from all quota configs so organizer events still attach to a panel role.
         if (!quotaRole) {
             const allConfigs = await getAllQuotaRoleConfigs(input.guildId);
+            // A matching configuration with an effective zero is an intentional no-award,
+            // not missing role context. Do not replace it with another role's positive value.
+            if (allConfigs.some(config => input.organizerRoles?.includes(config.discord_role_id))) {
+                return 0;
+            }
             const candidates: Array<{ roleId: string; points: number }> = [];
 
             for (const config of allConfigs) {

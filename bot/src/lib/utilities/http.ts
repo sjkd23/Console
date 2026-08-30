@@ -6,6 +6,8 @@ import { logHttpStart, logHttpSuccess, logHttpError, logHttpTimeout } from '../l
 import { createLogger } from '../logging/logger.js';
 import { updateQuotaPanelsForUser } from '../ui/quota-panel.js';
 import { z } from 'zod';
+import { DecimalPointsSchema } from './decimal-points.js';
+import { OrganizerMinuteQuotaSchema } from './minute-quota-contract.js';
 import { RUN_KINDS } from '../../constants/dungeons/dungeon-taxonomy.js';
 
 const BASE = botConfig.BACKEND_URL;
@@ -189,6 +191,8 @@ export const RunDetailsSchema = z.object({
     activityKey: z.string().min(1),
     selectedDungeons: z.array(RunSelectionSchema).min(1).max(5),
     status: z.enum(['open', 'live', 'ended']),
+    finalizationKind: z.enum(['completed', 'cancelled']).nullable(),
+    organizerMinuteQuota: OrganizerMinuteQuotaSchema,
     organizerId: z.string().min(1),
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
@@ -820,11 +824,14 @@ export async function getQuotaRoleConfig(
         moderation_points: number;
         base_exalt_points: number;
         base_non_exalt_points: number;
+        misc_points_per_minute: number;
     } | null;
     active_period: QuotaPeriod | null;
     dungeon_overrides: Record<string, number>;
 }> {
-    return getJSON(`/quota/config/${guildId}/${roleId}`);
+    const result = await getJSON<Awaited<ReturnType<typeof getQuotaRoleConfig>>>(`/quota/config/${guildId}/${roleId}`);
+    if (result.config) result.config.misc_points_per_minute = DecimalPointsSchema.parse(result.config.misc_points_per_minute);
+    return result;
 }
 
 /** Update quota role configuration (PUT /quota/config/:guild_id/:role_id) */
@@ -845,6 +852,7 @@ export async function updateQuotaRoleConfig(
         moderation_points?: number;
         base_exalt_points?: number;
         base_non_exalt_points?: number;
+        misc_points_per_minute?: number;
         verify_points?: number;
         warn_points?: number;
         suspend_points?: number;
@@ -862,6 +870,7 @@ export async function updateQuotaRoleConfig(
         moderation_points: number;
         base_exalt_points: number;
         base_non_exalt_points: number;
+        misc_points_per_minute: number;
         verify_points: number;
         warn_points: number;
         suspend_points: number;
@@ -872,7 +881,9 @@ export async function updateQuotaRoleConfig(
     active_period: QuotaPeriod;
     dungeon_overrides: Record<string, number>;
 }> {
-    return makeRequest('PUT', `/quota/config/${guildId}/${roleId}`, payload);
+    const result = await makeRequest<Awaited<ReturnType<typeof updateQuotaRoleConfig>>>('PUT', `/quota/config/${guildId}/${roleId}`, payload);
+    result.config.misc_points_per_minute = DecimalPointsSchema.parse(result.config.misc_points_per_minute);
+    return result;
 }
 
 /** Set dungeon point override (PUT /quota/config/:guild_id/:role_id/dungeon/:dungeon_key) */

@@ -51,7 +51,8 @@ export interface QuotaRoleConfig {
     rollover_enabled: boolean;
     moderation_points: number; // DEPRECATED: Use individual command points instead
     base_exalt_points: number; // Base points for exaltation dungeons (default: 1.0)
-    base_non_exalt_points: number; // Base points for non-exaltation dungeons (default: 1.0)
+    base_non_exalt_points: number; // Optional additive non-exalt per-log points (default: 0)
+    misc_points_per_minute: number;
     // Individual moderation command points
     verify_points: number; // Points awarded for /verify command
     warn_points: number; // Points awarded for /warn command
@@ -88,6 +89,7 @@ export async function getQuotaRoleConfig(
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
+        misc_points_per_minute: string;
         verify_points: string; // DECIMAL comes as string from pg
         warn_points: string; // DECIMAL comes as string from pg
         suspend_points: string; // DECIMAL comes as string from pg
@@ -97,7 +99,7 @@ export async function getQuotaRoleConfig(
     }>(
         `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
                 reset_interval_days, rollover_enabled,
-                moderation_points, base_exalt_points, base_non_exalt_points,
+                moderation_points, base_exalt_points, base_non_exalt_points, misc_points_per_minute,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points
          FROM quota_role_config
          WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
@@ -119,6 +121,7 @@ export async function getQuotaRoleConfig(
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
+        misc_points_per_minute: Number(row.misc_points_per_minute),
         verify_points: Number(row.verify_points),
         warn_points: Number(row.warn_points),
         suspend_points: Number(row.suspend_points),
@@ -146,6 +149,7 @@ export async function getAllQuotaRoleConfigs(
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
+        misc_points_per_minute: string;
         verify_points: string; // DECIMAL comes as string from pg
         warn_points: string; // DECIMAL comes as string from pg
         suspend_points: string; // DECIMAL comes as string from pg
@@ -155,7 +159,7 @@ export async function getAllQuotaRoleConfigs(
     }>(
         `SELECT guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
                 reset_interval_days, rollover_enabled,
-                moderation_points, base_exalt_points, base_non_exalt_points,
+                moderation_points, base_exalt_points, base_non_exalt_points, misc_points_per_minute,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points
          FROM quota_role_config
          WHERE guild_id = $1::bigint
@@ -175,6 +179,7 @@ export async function getAllQuotaRoleConfigs(
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
+        misc_points_per_minute: Number(row.misc_points_per_minute),
         verify_points: Number(row.verify_points),
         warn_points: Number(row.warn_points),
         suspend_points: Number(row.suspend_points),
@@ -200,6 +205,7 @@ export async function upsertQuotaRoleConfig(
         moderation_points?: number; // DEPRECATED: Use individual command points
         base_exalt_points?: number; // Base points for exaltation dungeons
         base_non_exalt_points?: number; // Base points for non-exaltation dungeons
+        misc_points_per_minute?: number;
         verify_points?: number; // Points for /verify command
         warn_points?: number; // Points for /warn command
         suspend_points?: number; // Points for /suspend command
@@ -219,7 +225,7 @@ export async function upsertQuotaRoleConfig(
     const periodStartAt = config.period_start_at ?? null; // Will use COALESCE in query
     const moderationPoints = config.moderation_points ?? 0;
     const baseExaltPoints = config.base_exalt_points ?? 1.0;
-    const baseNonExaltPoints = config.base_non_exalt_points ?? 1.0;
+    const baseNonExaltPoints = config.base_non_exalt_points ?? 0;
     const verifyPoints = config.verify_points ?? 0;
     const warnPoints = config.warn_points ?? 0;
     const suspendPoints = config.suspend_points ?? 0;
@@ -243,6 +249,8 @@ export async function upsertQuotaRoleConfig(
     values.push(addnotePoints); // $14
     values.push(resetIntervalDays); // $15
     values.push(rolloverEnabled); // $16
+
+    values.push(config.misc_points_per_minute ?? 0.10); // $17
 
     // Build UPDATE fields
     if (config.required_points !== undefined) {
@@ -315,6 +323,11 @@ export async function upsertQuotaRoleConfig(
     }
     idx++; // Move past $16
 
+    if (config.misc_points_per_minute !== undefined) {
+        fields.push(`misc_points_per_minute = $${idx}`);
+    }
+    idx++; // Move past $17
+
     if (config.panel_message_id !== undefined) {
         fields.push(`panel_message_id = $${idx++}::bigint`);
         values.push(config.panel_message_id);
@@ -335,6 +348,7 @@ export async function upsertQuotaRoleConfig(
         moderation_points: string; // DECIMAL comes as string from pg
         base_exalt_points: string; // DECIMAL comes as string from pg
         base_non_exalt_points: string; // DECIMAL comes as string from pg
+        misc_points_per_minute: string;
         verify_points: string; // DECIMAL comes as string from pg
         warn_points: string; // DECIMAL comes as string from pg
         suspend_points: string; // DECIMAL comes as string from pg
@@ -343,7 +357,7 @@ export async function upsertQuotaRoleConfig(
         addnote_points: string; // DECIMAL comes as string from pg
     }>(
         `INSERT INTO quota_role_config (guild_id, discord_role_id, required_points, reset_at, period_start_at, 
-                moderation_points, base_exalt_points, base_non_exalt_points,
+                moderation_points, base_exalt_points, base_non_exalt_points, misc_points_per_minute,
                 verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points,
                 reset_interval_days, rollover_enabled,
                 updated_at)
@@ -351,13 +365,13 @@ export async function upsertQuotaRoleConfig(
                  $3, 
                  COALESCE($4::timestamptz, NOW() + ($15::int * INTERVAL '1 day')),
                  COALESCE($5::timestamptz, NOW()),
-                 $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $6, $7, $8, $17, $9, $10, $11, $12, $13, $14, $15, $16,
                  NOW())
          ON CONFLICT (guild_id, discord_role_id)
          DO UPDATE SET updated_at = NOW() ${updateClause}
          RETURNING guild_id, discord_role_id, required_points, reset_at, panel_message_id, period_start_at,
                    reset_interval_days, rollover_enabled,
-                   moderation_points, base_exalt_points, base_non_exalt_points,
+                   moderation_points, base_exalt_points, base_non_exalt_points, misc_points_per_minute,
                    verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points`,
         values
     );
@@ -386,6 +400,7 @@ export async function upsertQuotaRoleConfig(
         moderation_points: Number(row.moderation_points),
         base_exalt_points: Number(row.base_exalt_points),
         base_non_exalt_points: Number(row.base_non_exalt_points),
+        misc_points_per_minute: Number(row.misc_points_per_minute),
         verify_points: Number(row.verify_points),
         warn_points: Number(row.warn_points),
         suspend_points: Number(row.suspend_points),

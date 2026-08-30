@@ -1,17 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { transactionClient, quotaServiceMock, activityMock, snapshotMock } = vi.hoisted(() => ({
-    transactionClient: {
-        query: vi.fn(),
-    },
-    quotaServiceMock: {
-        awardOrganizerQuota: vi.fn(),
-        awardRaidersQuotaFromSnapshot: vi.fn(),
-        awardRaidersQuotaFromParticipants: vi.fn(),
-    },
-    activityMock: vi.fn(),
-    snapshotMock: vi.fn(),
-}));
+const { transactionClient, businessQuery, lifecycleState, quotaServiceMock, activityMock, snapshotMock } = vi.hoisted(() => {
+    const businessQuery = vi.fn();
+    const lifecycleState = { status: 'live' };
+    return {
+        businessQuery,
+        lifecycleState,
+        transactionClient: {
+            query: vi.fn(async (sql: string, params?: unknown[]) => {
+                if (sql.includes('SELECT status, finalization_kind FROM run')) {
+                    return { rowCount: 1, rows: [{ status: lifecycleState.status, finalization_kind: null }] };
+                }
+                if (sql.includes("SET status = 'ended'")) lifecycleState.status = 'ended';
+                return businessQuery(sql, params);
+            }),
+        },
+        quotaServiceMock: {
+            awardOrganizerQuota: vi.fn(),
+            awardRaidersQuotaFromSnapshot: vi.fn(),
+            awardRaidersQuotaFromParticipants: vi.fn(),
+        },
+        activityMock: vi.fn(),
+        snapshotMock: vi.fn(),
+    };
+});
+
+beforeEach(() => {
+    businessQuery.mockReset();
+    lifecycleState.status = 'live';
+});
 
 vi.mock('../database/transaction.js', () => ({
     withTransaction: vi.fn(async (work: (client: typeof transactionClient) => Promise<unknown>) =>
@@ -56,7 +73,7 @@ const baseInput: EndRunInput = {
 describe('endRunWithTransaction organizer completion trigger', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        transactionClient.query.mockResolvedValue({
+        businessQuery.mockResolvedValue({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z',
@@ -85,7 +102,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('awards no organizer completion when a normal dungeon ends without a key pop', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
@@ -114,8 +131,8 @@ describe('endRunWithTransaction organizer completion trigger', () => {
         expect(quotaServiceMock.awardOrganizerQuota).not.toHaveBeenCalled();
     });
 
-    it('awards Oryx 3 once at end and relies on the existing writer idempotency for a stale retry', async () => {
-        transactionClient.query.mockResolvedValue({
+    it('awards Oryx 3 once at end and skips accounting on a stale terminal retry', async () => {
+        businessQuery.mockResolvedValue({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
@@ -136,7 +153,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
 
         expect(firstResult.organizerQuotaPoints).toBe(1);
         expect(retryResult.organizerQuotaPoints).toBe(0);
-        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledTimes(2);
+        expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledTimes(1);
         expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledWith(
             expect.objectContaining({
                 dungeonKey: 'ORYX_3',
@@ -145,7 +162,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
             }),
             transactionClient
         );
-        expect(activityMock).toHaveBeenCalledTimes(2);
+        expect(activityMock).toHaveBeenCalledTimes(1);
         expect(activityMock).toHaveBeenCalledWith(
             expect.objectContaining({
                 role: 'organizer',
@@ -158,7 +175,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('still finalizes the last key-pop raider snapshot for a normal dungeon', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
@@ -188,7 +205,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('still ends and performs no-key participant finalization for a normal dungeon', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
@@ -214,7 +231,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('records normal organizer key-pop activity even when configured quota is zero', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
@@ -248,7 +265,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('records one normal organizer activity and preserves the configured nonzero quota award', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
@@ -275,7 +292,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('does not duplicate organizer activity or quota on a stale key-pop retry', async () => {
-        transactionClient.query
+        businessQuery
             .mockResolvedValueOnce({
                 rowCount: 1,
                 rows: [{
@@ -302,7 +319,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('does not attempt quota when the organizer activity write fails', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 key_window_ends_at: '2026-08-28T20:15:25.000Z',
@@ -324,7 +341,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('uses distinct organizer activity identities across multiple key pops', async () => {
-        transactionClient.query
+        businessQuery
             .mockResolvedValueOnce({
                 rowCount: 1,
                 rows: [{ key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date(), organizer_id: baseInput.organizerId, dungeon_key: 'SHATTERS', activity_key: 'SHATTERS', run_kind: 'single' }],
@@ -351,7 +368,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
     });
 
     it('records O3 organizer activity when configured quota is zero', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 ended_at: '2026-08-28T20:48:00.000Z', organizer_id: baseInput.organizerId,
@@ -383,7 +400,7 @@ describe('createRunWithTransaction normalized persistence', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        transactionClient.query
+        businessQuery
             .mockResolvedValueOnce({ rowCount: 1, rows: [] })
             .mockResolvedValueOnce({ rowCount: 1, rows: [] })
             // pg returns BIGSERIAL/BIGINT values as strings by default.
@@ -430,7 +447,7 @@ describe('createRunWithTransaction normalized persistence', () => {
     });
 
     it('fails the transactional creation if a selection insert fails', async () => {
-        transactionClient.query
+        businessQuery
             .mockReset()
             .mockResolvedValueOnce({ rowCount: 1, rows: [] })
             .mockResolvedValueOnce({ rowCount: 1, rows: [] })
@@ -453,11 +470,11 @@ describe('persisted taxonomy activity and fallback routing', () => {
 
     it.each([
         ['single', 'NEST', 'NEST', undefined],
-        ['realm_clearing', 'REALM_DUNGEON', 'MISC_DUNGEONS', undefined],
+        ['realm_clearing', 'REALM_DUNGEON', 'MISC_DUNGEONS', 'non_exalt'],
         ['multi_non_exalt', 'MISC_DUNGEONS', 'MISC_DUNGEONS', 'non_exalt'],
         ['multi_exalt', 'EXALTATION_DUNGEONS', 'EXALTATION_DUNGEONS', 'exalt'],
     ] as const)('routes %s Dungeon Entered through persisted activity_key', async (runKind, dungeonKey, activityKey, baseCategory) => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 key_window_ends_at: '2026-08-28T20:15:25.000Z', key_pop_count: 1,
@@ -481,13 +498,12 @@ describe('persisted taxonomy activity and fallback routing', () => {
             transactionClient
         );
         expect(quotaServiceMock.awardOrganizerQuota).toHaveBeenCalledWith(
-            expect.objectContaining({ dungeonKey, activityKey, baseCategory }),
-            transactionClient
+            expect.objectContaining({ dungeonKey, activityKey, baseCategory }), transactionClient
         );
     });
 
     it('explicitly rejects normal Dungeon Entered for persisted O3', async () => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 key_window_ends_at: new Date(), key_pop_count: 1, occurred_at: new Date(),
@@ -506,7 +522,7 @@ describe('persisted taxonomy activity and fallback routing', () => {
     });
 
     it('routes prior-pop and final-pop multi-exalt raider snapshots through the aggregate activity key', async () => {
-        transactionClient.query
+        businessQuery
             .mockResolvedValueOnce({
                 rowCount: 1,
                 rows: [{
@@ -555,7 +571,7 @@ describe('persisted taxonomy activity and fallback routing', () => {
         ['multi_non_exalt', 'MISC_DUNGEONS', 'MISC_DUNGEONS'],
         ['multi_exalt', 'EXALTATION_DUNGEONS', 'EXALTATION_DUNGEONS'],
     ] as const)('does not fabricate no-pop participant activity for %s', async (runKind, dungeonKey, activityKey) => {
-        transactionClient.query.mockResolvedValueOnce({
+        businessQuery.mockResolvedValueOnce({
             rowCount: 1,
             rows: [{
                 ended_at: new Date(), organizer_id: baseInput.organizerId,

@@ -16,6 +16,7 @@
 
 import { getJSON } from './http.js';
 import { createLogger } from '../logging/logger.js';
+import { DecimalPointsSchema } from './decimal-points.js';
 
 const logger = createLogger('OperationContext');
 
@@ -89,6 +90,9 @@ export class OperationContext {
             guildId, 
             roleId 
         });
+        if (result.config) {
+            result.config.misc_points_per_minute = DecimalPointsSchema.parse(result.config.misc_points_per_minute);
+        }
         this.quotaRoleConfigs.set(key, result);
         return result;
     }
@@ -155,6 +159,7 @@ export interface QuotaRoleConfigResponse {
         moderation_points: number;
         base_exalt_points: number;
         base_non_exalt_points: number;
+        misc_points_per_minute: number;
         verify_points: number;
         warn_points: number;
         suspend_points: number;

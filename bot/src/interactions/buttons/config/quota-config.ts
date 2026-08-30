@@ -16,7 +16,8 @@ import {
 import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError, recalculateQuotaPoints, manuallyResetQuotaPeriod } from '../../../lib/utilities/http.js';
 import { DUNGEON_DATA } from '../../../constants/dungeons/DungeonData.js';
 import { updateQuotaPanel } from '../../../lib/ui/quota-panel.js';
-import { formatPoints } from '../../../lib/utilities/format-helpers.js';
+import { formatPoints, formatPointAmount } from '../../../lib/utilities/format-helpers.js';
+import { buildQuotaBasePointsModal, QuotaBasePointsSchema } from '../../../lib/ui/quota-base-points.js';
 import { buildQuotaConfigPanel } from '../../../lib/ui/quota-config-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { getRoleMembersWithCache } from '../../../lib/utilities/member-fetching.js';
@@ -109,9 +110,13 @@ async function buildDungeonSelectorPanel(guildId: string, roleId: string): Promi
 }> {
     // Fetch current overrides
     let dungeonOverrides: Record<string, number> = {};
+    let baseExaltPoints = 1;
+    let baseNonExaltPoints = 0;
     try {
         const result = await getQuotaRoleConfig(guildId, roleId);
         dungeonOverrides = result.dungeon_overrides;
+        baseExaltPoints = result.config?.base_exalt_points ?? 1;
+        baseNonExaltPoints = result.config?.base_non_exalt_points ?? 0;
     } catch { }
 
     // Split dungeons into categories
@@ -128,8 +133,9 @@ async function buildDungeonSelectorPanel(guildId: string, roleId: string): Promi
             return {
                 label: dungeon.dungeonName,
                 value: dungeon.codeName,
-                description: override ? `Current: ${formatPoints(override)} pts` : 'Default: 1 pt',
-                emoji: override ? '⭐' : undefined,
+                description: override !== undefined ? `Current: ${formatPointAmount(override)}`
+                    : `Base: ${formatPointAmount(dungeon.dungeonCategory === 'Exaltation Dungeons' ? baseExaltPoints : baseNonExaltPoints)}`,
+                emoji: override !== undefined ? '⭐' : undefined,
             };
         });
 
@@ -642,37 +648,9 @@ export async function handleQuotaConfigBasePoints(interaction: ButtonInteraction
         return;
     }
 
-    // Fetch current config to pre-fill
-    let config: any = null;
-    try {
-        const result = await getQuotaRoleConfig(interaction.guildId!, roleId);
-        config = result.config;
-    } catch { }
-
-    const modal = new ModalBuilder()
-        .setCustomId(`quota_base_points_modal:${roleId}:${interaction.message.id}`)
-        .setTitle('Configure Base Dungeon Points');
-
-    const baseExaltPointsInput = new TextInputBuilder()
-        .setCustomId('base_exalt_points')
-        .setLabel('Base Exalt Dungeon Points')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 2 or 1.5')
-        .setRequired(true)
-        .setValue(config?.base_exalt_points?.toFixed(2) || '1.00');
-
-    const baseNonExaltPointsInput = new TextInputBuilder()
-        .setCustomId('base_non_exalt_points')
-        .setLabel('Base Non-Exalt Dungeon Points')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 1 or 0.5')
-        .setRequired(true)
-        .setValue(config?.base_non_exalt_points?.toFixed(2) || '1.00');
-
-    modal.addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(baseExaltPointsInput),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(baseNonExaltPointsInput)
-    );
+    // Fetch failures must not turn an existing configuration into default values.
+    const { config } = await getQuotaRoleConfig(interaction.guildId!, roleId);
+    const modal = buildQuotaBasePointsModal(roleId, interaction.message.id, config);
 
     await interaction.showModal(modal);
 }
@@ -692,31 +670,17 @@ export async function handleQuotaBasePointsModal(interaction: ModalSubmitInterac
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // Parse inputs
-    const baseExaltPoints = parseFloat(interaction.fields.getTextInputValue('base_exalt_points'));
-    const baseNonExaltPoints = parseFloat(interaction.fields.getTextInputValue('base_non_exalt_points'));
-
-    // Validate both fields
-    if (isNaN(baseExaltPoints) || baseExaltPoints < 0) {
-        await interaction.editReply('❌ Base exalt points must be a non-negative number.');
+    const parsed = QuotaBasePointsSchema.safeParse({
+        base_exalt_points: interaction.fields.getTextInputValue('base_exalt_points'),
+        base_non_exalt_points: interaction.fields.getTextInputValue('base_non_exalt_points'),
+        misc_points_per_minute: interaction.fields.getTextInputValue('misc_points_per_minute'),
+    });
+    if (!parsed.success) {
+        await interaction.editReply('❌ Enter nonnegative points with at most two decimal places (maximum 99999999.99).');
         return;
     }
-
-    if (isNaN(baseNonExaltPoints) || baseNonExaltPoints < 0) {
-        await interaction.editReply('❌ Base non-exalt points must be a non-negative number.');
-        return;
-    }
-
-    // Check decimal places (max 2)
-    if (Math.round(baseExaltPoints * 100) !== baseExaltPoints * 100) {
-        await interaction.editReply('❌ Base exalt points can have at most 2 decimal places (e.g., 1.50).');
-        return;
-    }
-
-    if (Math.round(baseNonExaltPoints * 100) !== baseNonExaltPoints * 100) {
-        await interaction.editReply('❌ Base non-exalt points can have at most 2 decimal places (e.g., 1.50).');
-        return;
-    }
+    const { base_exalt_points: baseExaltPoints, base_non_exalt_points: baseNonExaltPoints,
+        misc_points_per_minute: miscPointsPerMinute } = parsed.data;
 
     // Check permissions
     const member = await interaction.guild?.members.fetch(interaction.user.id);
@@ -728,13 +692,16 @@ export async function handleQuotaBasePointsModal(interaction: ModalSubmitInterac
             actor_has_admin_permission: hasAdminPerm,
             base_exalt_points: baseExaltPoints,
             base_non_exalt_points: baseNonExaltPoints,
+            misc_points_per_minute: miscPointsPerMinute,
         });
 
         await interaction.editReply(
             `✅ **Base dungeon points updated!**\n\n` +
-            `**Exalt Dungeons:** ${formatPoints(baseExaltPoints)} point${baseExaltPoints === 1 ? '' : 's'}\n` +
-            `**Non-Exalt Dungeons:** ${formatPoints(baseNonExaltPoints)} point${baseNonExaltPoints === 1 ? '' : 's'}\n\n` +
-            `Note: You can still override specific dungeons using the "Configure Dungeons" button.`
+            `**Exalt Dungeons:** ${formatPointAmount(baseExaltPoints)}\n` +
+            `**Non-Exalt Dungeons:** ${formatPointAmount(baseNonExaltPoints)} per Dungeon Entered (additive)\n` +
+            `**Non-Exalt Minute Rate:** ${formatPoints(miscPointsPerMinute)}/min\n\n` +
+            `The shared minute rate applies to single non-exalt runs, Realm Clearing, and multi non-exalt runs. ` +
+            `Dungeon overrides apply to individual dungeons; grouped runs and Realm Clearing use base points.`
         );
 
         // Refresh the original /configquota panel using webhook

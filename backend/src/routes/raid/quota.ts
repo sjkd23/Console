@@ -1,6 +1,7 @@
 // backend/src/routes/quota.ts
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { DecimalPointsSchema } from '../../lib/quota/decimal-points.js';
 import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
@@ -649,14 +650,9 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
                 { message: 'Moderation points must have at most 2 decimal places' }
             ),
-            base_exalt_points: z.number().min(0).optional().refine(
-                (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
-                { message: 'Base exalt points must have at most 2 decimal places' }
-            ),
-            base_non_exalt_points: z.number().min(0).optional().refine(
-                (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
-                { message: 'Base non-exalt points must have at most 2 decimal places' }
-            ),
+            base_exalt_points: DecimalPointsSchema.optional(),
+            base_non_exalt_points: DecimalPointsSchema.optional(),
+            misc_points_per_minute: DecimalPointsSchema.optional(),
             // Individual moderation command points
             verify_points: z.number().min(0).optional().refine(
                 (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,

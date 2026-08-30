@@ -7,7 +7,9 @@ import {
 } from 'discord.js';
 import { getQuotaRoleConfig, BackendError } from '../utilities/http.js';
 import type { QuotaPeriod } from '../utilities/http.js';
-import { formatPoints } from '../utilities/format-helpers.js';
+import { formatPoints, formatPointAmount } from '../utilities/format-helpers.js';
+import { MINUTE_QUOTA_LABEL, MINUTE_QUOTA_DESCRIPTION } from './quota-base-points.js';
+import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 
 /**
  * Build the /configquota main panel embed and buttons
@@ -49,7 +51,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
     // For now, we'll just use the roleId in the embed
     const embed = new EmbedBuilder()
         .setTitle(`📊 Quota Configuration`)
-        .setDescription(`Configure quota settings for <@&${roleId}>.`)
+        .setDescription(`Configure quota settings for <@&${roleId}>.\n\n${MINUTE_QUOTA_DESCRIPTION}`)
         .setColor(0x5865F2)
         .setTimestamp();
 
@@ -61,7 +63,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         
         // Use ?? instead of || to handle 0 values correctly
         const baseExaltPoints = config.base_exalt_points ?? 1;
-        const baseNonExaltPoints = config.base_non_exalt_points ?? 1;
+        const baseNonExaltPoints = config.base_non_exalt_points ?? 0;
         
         embed.addFields(
             { name: '🎯 Next Required Points', value: formatPoints(config.required_points), inline: true },
@@ -125,7 +127,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
             const overrideList = Object.entries(dungeonOverrides)
                 .sort(([, a], [, b]) => b - a)
                 .slice(0, 10)
-                .map(([key, pts]) => `${key}: ${formatPoints(pts)} pts`)
+                .map(([key, pts]) => `${dungeonByCode[key]?.dungeonName ?? key}: ${formatPointAmount(pts)}`)
                 .join('\n');
             
             embed.addFields({
@@ -148,6 +150,8 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
             { name: '🎯 Required Points', value: formatPoints(config.required_points), inline: true },
             { name: '⏱️ Configured Interval', value: `${config.reset_interval_days} day${config.reset_interval_days === 1 ? '' : 's'}`, inline: true },
             { name: '🔄 Rollover', value: config.rollover_enabled ? 'Enabled' : 'Disabled', inline: true },
+            { name: '⚔️ Base Exalt Points', value: formatPoints(config.base_exalt_points ?? 1), inline: true },
+            { name: '🗡️ Base Non-Exalt Points', value: formatPoints(config.base_non_exalt_points ?? 0), inline: true },
         );
     } else {
         embed.addFields({
@@ -155,6 +159,10 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
             value: 'No configuration found. Click the buttons below to set up quota tracking for this role.',
             inline: false
         });
+    }
+
+    if (config) {
+        embed.addFields({ name: MINUTE_QUOTA_LABEL, value: `${formatPoints(config.misc_points_per_minute)}/min`, inline: false });
     }
 
     // Build action buttons with creation timestamp for expiry checking (10 minute expiry)
@@ -233,6 +241,7 @@ interface QuotaConfigPanelConfig {
     moderation_points: number;
     base_exalt_points?: number;
     base_non_exalt_points?: number;
+    misc_points_per_minute: number;
     verify_points?: number;
     warn_points?: number;
     suspend_points?: number;

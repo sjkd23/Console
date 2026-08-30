@@ -8,6 +8,9 @@ import { ensureMemberExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
 import {
     createRunWithTransaction,
+    startRunWithTransaction,
+    cancelRunWithTransaction,
+    RunLifecycleError,
     endRunWithTransaction,
     Oryx3KeyPopError,
     recordKeyPopWithTransaction,
@@ -16,6 +19,7 @@ import { RAID_BEHAVIOR } from '../../config/raid-config.js';
 import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.js';
 import { RunSelectionError, type RunKind } from '../../lib/runs/run-taxonomy.js';
 import { normalizeRunId } from '../../lib/runs/run-id.js';
+import { ORGANIZER_MINUTE_QUOTA_SQL, OrganizerMinuteQuotaSchema, MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS } from '../../lib/runs/minute-quota.js';
 
 const logger = createLogger('Runs');
 
@@ -536,7 +540,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             actorRoles: z.array(zSnowflake).optional(),
             actorRolePositions: z.record(z.string(), z.number()).optional(),
             organizerRoles: z.array(zSnowflake).optional(),
-            organizerRolePositions: z.record(z.string(), z.number()).optional(),
+            organizerRolePositions: z.record(zSnowflake, z.number().int().nonnegative()).optional(),
             status: z.enum(['live', 'ended']),
             isAutoEnd: z.boolean().optional(), // Flag for automatic ending
         });
@@ -590,42 +594,16 @@ export default async function runsRoutes(app: FastifyInstance) {
         }
 
         if (status === 'live') {
-            // allow only open -> live
-            if (from !== 'open') {
-                return Errors.invalidStatusTransition(reply, from, status);
+            try {
+                // Explicit original-organizer context only; never substitute the acting staff roles.
+                await startRunWithTransaction({ runId, guildId: run.guild_id, organizerRoles, organizerRolePositions });
+            } catch (err) {
+                if (err instanceof RunLifecycleError) {
+                    return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message, ...err.details } });
+                }
+                logger.error({ err, runId }, 'Failed to start run');
+                return Errors.internal(reply, 'Failed to start run');
             }
-
-            // VALIDATION: Check if party and location are set (required for all dungeons)
-            if (!run.party || !run.location) {
-                return reply.code(400).send({
-                    error: {
-                        code: 'MISSING_PARTY_LOCATION',
-                        message: 'Party and Location must be set before starting the run.',
-                        missing: {
-                            party: !run.party,
-                            location: !run.location,
-                        },
-                    },
-                });
-            }
-
-            // VALIDATION: Check if screenshot is submitted for Oryx 3
-            if (run.run_kind === 'oryx_3' && !run.screenshot_url) {
-                return reply.code(400).send({
-                    error: {
-                        code: 'MISSING_SCREENSHOT',
-                        message: 'Screenshot must be submitted before starting Oryx 3 runs.',
-                    },
-                });
-            }
-
-            await query(
-                `UPDATE run
-            SET status='live',
-                started_at = COALESCE(started_at, now())
-          WHERE id = $1::bigint`,
-                [runId]
-            );
         } else {
             // status === 'ended'
             // For auto-end, allow any status -> ended
@@ -651,6 +629,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                 const endResult = await endRunWithTransaction({
                     runId,
                     guildId: run.guild_id,
+                    isAutoEnd,
                     organizerRoles: resolvedOrganizerRoles,
                     organizerRolePositions: resolvedOrganizerRolePositions,
                 });
@@ -668,6 +647,9 @@ export default async function runsRoutes(app: FastifyInstance) {
                     'Run ended and quota pipeline processed'
                 );
             } catch (err) {
+                if (err instanceof RunLifecycleError) {
+                    return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });
+                }
                 logger.error({ err, runId, guildId: run.guild_id, organizerId: run.organizer_id }, 
                     'Failed to end run with transaction');
                 return Errors.internal(reply, 'Failed to end run');
@@ -877,6 +859,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             dungeon_label: string;
             run_kind: RunKind;
             activity_key: string;
+            organizer_minute_quota: unknown;
+            finalization_kind: 'completed' | 'cancelled' | null;
             selected_dungeons: Array<{ dungeonKey: string; dungeonLabel: string; selectionOrder: number }>;
             status: string;
             organizer_id: string;
@@ -898,7 +882,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         }>(
                 `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
                     started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
-                    key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked,
+                    key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked, finalization_kind,
+                    ${ORGANIZER_MINUTE_QUOTA_SQL} AS organizer_minute_quota,
                     COALESCE((
                         SELECT json_agg(json_build_object(
                             'dungeonKey', selection.dungeon_key,
@@ -910,7 +895,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                     ), '[]'::json) AS selected_dungeons
          FROM run
         WHERE id = $1::bigint`,
-            [runId]
+            [runId, MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS]
         );
 
         if (res.rowCount === 0) return Errors.runNotFound(reply, runId);
@@ -931,6 +916,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             selectedDungeons: r.selected_dungeons,
             status: r.status,
             organizerId: r.organizer_id,
+            organizerMinuteQuota: OrganizerMinuteQuotaSchema.parse(r.organizer_minute_quota),
+            finalizationKind: r.finalization_kind,
             startedAt: r.started_at,
             endedAt: r.ended_at,
             createdAt: r.created_at,
@@ -1132,11 +1119,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.alreadyTerminal(reply);
         }
 
-        // Set status to ended (cancel = immediate end)
-        await query(
-            `UPDATE run SET status = 'ended', ended_at = COALESCE(ended_at, now()) WHERE id = $1::bigint`,
-            [runId]
-        );
+        await cancelRunWithTransaction({ runId, guildId: run.guild_id });
 
         return reply.send({ ok: true, status: 'ended' });
     });

@@ -313,7 +313,7 @@ async function setupFindNavigation(
         try {
             const totalPages = getTotalPages();
             await interaction.editReply({
-                components: createFindButtons(mode, hasNotes, hasPunishments, currentPage, totalPages, true),
+                components: createFindButtons(mode, hasNotes, hasPunishments, currentPage, totalPages, true),                              
             });
         } catch (err) {
             // Message might have been deleted

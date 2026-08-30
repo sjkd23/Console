@@ -21,12 +21,15 @@ import {
 import { z } from 'zod';
 import {
     classifyRunSelection,
+    RunKindSchema,
     quotaBaseCategoryForRun,
     usesAggregateActivity,
     type ClassifiedRunSelection,
     type RunKind,
 } from '../runs/run-taxonomy.js';
 import { normalizeRunId } from '../runs/run-id.js';
+import { isMinuteOrganizerQuotaRun, resolveMinuteQuotaRole } from '../runs/minute-quota.js';
+import type { PoolClient } from 'pg';
 
 const logger = createLogger('RunService');
 
@@ -65,6 +68,109 @@ export interface EndRunInput {
     keyPopCount?: number;
     organizerRoles?: string[];
     organizerRolePositions?: Record<string, number>;
+    isAutoEnd?: boolean;
+}
+
+export interface StartRunInput {
+    runId: number;
+    guildId: string;
+    organizerRoles?: string[];
+    organizerRolePositions?: Record<string, number>;
+}
+
+export class RunLifecycleError extends Error {
+    constructor(
+        public readonly code: string,
+        message: string,
+        public readonly statusCode = 409,
+        public readonly details?: { missing: { party: boolean; location: boolean } }
+    ) {
+        super(message);
+        this.name = 'RunLifecycleError';
+    }
+}
+
+const LifecycleRunSchema = z.object({
+    status: z.enum(['open', 'live', 'ended']),
+    finalization_kind: z.enum(['completed', 'cancelled']).nullable(),
+});
+
+/** Serialize End/Cancel with Start, then take database time in a later statement. */
+async function lockRunForFinalization(client: PoolClient, runId: number, guildId: string) {
+    const result = await client.query(
+        `SELECT status, finalization_kind FROM run
+         WHERE id = $1::bigint AND guild_id = $2::bigint FOR UPDATE`,
+        [runId, guildId]
+    );
+    if (result.rowCount !== 1) throw new RunLifecycleError('RUN_NOT_FOUND', 'Run not found.', 404);
+    return LifecycleRunSchema.parse(result.rows[0]);
+}
+
+/** Snapshot only at the first legitimate open -> live transition. */
+export async function startRunWithTransaction(input: StartRunInput): Promise<void> {
+    await withTransaction(async client => {
+        const result = await client.query(
+            `SELECT status, run_kind, activity_key, party, location, screenshot_url,
+                    started_at, ended_at, organizer_minute_rate, organizer_minute_quota_role_id, finalization_kind
+             FROM run WHERE id = $1::bigint AND guild_id = $2::bigint FOR UPDATE`,
+            [input.runId, input.guildId]
+        );
+        if (result.rowCount !== 1) throw new RunLifecycleError('RUN_NOT_FOUND', 'Run not found.', 404);
+        const run = LifecycleRunSchema.extend({
+            run_kind: RunKindSchema,
+            activity_key: z.string().min(1),
+            party: z.string().nullable(),
+            location: z.string().nullable(),
+            screenshot_url: z.string().nullable(),
+            started_at: z.union([z.date(), z.string()]).nullable(),
+            ended_at: z.union([z.date(), z.string()]).nullable(),
+            organizer_minute_rate: z.string().nullable(),
+            organizer_minute_quota_role_id: z.string().nullable(),
+        }).parse(result.rows[0]);
+        if (run.status !== 'open' || run.started_at !== null || run.ended_at !== null
+            || run.finalization_kind !== null || run.organizer_minute_rate !== null
+            || run.organizer_minute_quota_role_id !== null) {
+            throw new RunLifecycleError('INVALID_STATUS_TRANSITION', 'Only an unstarted open run can be started.');
+        }
+        if (!run.party || !run.location) {
+            throw new RunLifecycleError('MISSING_PARTY_LOCATION', 'Party and Location must be set before starting the run.', 400,
+                { missing: { party: !run.party, location: !run.location } });
+        }
+        if (run.run_kind === 'oryx_3' && !run.screenshot_url) {
+            throw new RunLifecycleError('MISSING_SCREENSHOT', 'Screenshot must be submitted before starting Oryx 3 runs.', 400);
+        }
+
+        let rate: string | null = null;
+        let quotaRoleId: string | null = null;
+        if (isMinuteOrganizerQuotaRun(run)) {
+            if (input.organizerRoles === undefined) {
+                throw new RunLifecycleError('ORGANIZER_ROLE_CONTEXT_REQUIRED', 'Fresh original-organizer role context is required to start this run.', 400);
+            }
+            const resolved = await resolveMinuteQuotaRole(client, input.guildId, input.organizerRoles, input.organizerRolePositions);
+            rate = resolved?.rate ?? '0.00';
+            quotaRoleId = resolved?.roleId ?? null;
+        }
+        await client.query(
+            `UPDATE run SET status = 'live', started_at = statement_timestamp(),
+                            organizer_minute_rate = $3::numeric, organizer_minute_quota_role_id = $4::bigint
+             WHERE id = $1::bigint AND guild_id = $2::bigint AND status = 'open'`,
+            [input.runId, input.guildId, rate, quotaRoleId]
+        );
+    });
+}
+
+/** Cancellation deliberately performs no completion/accounting writes. */
+export async function cancelRunWithTransaction(input: { runId: number; guildId: string }): Promise<void> {
+    await withTransaction(async client => {
+        const run = await lockRunForFinalization(client, input.runId, input.guildId);
+        if (run.status === 'ended') return;
+        await client.query(
+            `UPDATE run SET status = 'ended', ended_at = COALESCE(ended_at, statement_timestamp()),
+                            finalization_kind = 'cancelled'
+             WHERE id = $1::bigint AND guild_id = $2::bigint AND status <> 'ended'`,
+            [input.runId, input.guildId]
+        );
+    });
 }
 
 export interface EndRunResult {
@@ -230,7 +336,9 @@ export async function recordKeyPopWithTransaction(input: RecordKeyPopInput): Pro
             guildId: input.guildId,
             dungeonKey: run.dungeon_key,
             activityKey: run.activity_key,
-            baseCategory,
+            // Realm organizer entries have no authoritative physical dungeon override.
+            // Keep the raider baseCategory above unchanged.
+            baseCategory: run.run_kind === 'realm_clearing' ? 'non_exalt' : baseCategory,
             runId: input.runId,
             organizerDiscordId: run.organizer_id,
             organizerRoles: input.organizerRoles,
@@ -271,6 +379,12 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         'Ending run with transaction');
 
     const result = await withTransaction(async (client) => {
+        const current = await lockRunForFinalization(client, input.runId, input.guildId);
+        // Preserve first terminal outcome, including historical ended rows with unknown outcome.
+        if (current.status === 'ended') return { organizerQuotaPoints: 0, raiderPointsAwarded: 0 };
+        if (current.status !== 'live' && !input.isAutoEnd) {
+            throw new RunLifecycleError('INVALID_STATUS_TRANSITION', 'Only a live run can be ended manually.');
+        }
         // Step 1: Update run status to 'ended'
         const ended = await client.query<{
             ended_at: string | Date;
@@ -282,8 +396,9 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
         }>(
             `UPDATE run
              SET status = 'ended',
-                 ended_at = COALESCE(ended_at, now())
-             WHERE id = $1::bigint AND guild_id = $2::bigint
+                 ended_at = COALESCE(ended_at, statement_timestamp()),
+                 finalization_kind = 'completed'
+             WHERE id = $1::bigint AND guild_id = $2::bigint AND status <> 'ended'
              RETURNING ended_at, organizer_id, dungeon_key, activity_key, run_kind, key_pop_count`,
             [input.runId, input.guildId]
         );

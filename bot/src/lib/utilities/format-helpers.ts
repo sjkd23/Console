@@ -18,3 +18,7 @@ export function formatPoints(value: number): string {
     // If it has decimals, show them (up to 2 places, removing trailing zeros)
     return rounded.toFixed(2).replace(/\.?0+$/, '');
 }
+
+export function formatPointAmount(value: number): string {
+    return `${formatPoints(value)} ${value === 1 ? 'point' : 'points'}`;
+}

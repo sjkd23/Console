@@ -18,6 +18,7 @@ import {
     buildRunMessageContentEdit,
 } from '../../../lib/utilities/run-message-helpers.js';
 import { shouldStartRunKeyLogging } from '../../../lib/utilities/run-key-logging.js';
+import { fetchOrganizerStartContext } from '../../../lib/utilities/organizer-start-context.js';
 
 const logger = createLogger('RunStatus');
 
@@ -74,7 +75,17 @@ async function handleStatusInternal(
     }
 
     const member = await btn.guild.members.fetch(btn.user.id).catch(() => null);
-    const organizerMember = await btn.guild.members.fetch(run.organizerId).catch(() => null);
+    const organizerMember = status === 'live' ? null : await btn.guild.members.fetch(run.organizerId).catch(() => null);
+    let startContext: Awaited<ReturnType<typeof fetchOrganizerStartContext>> | undefined;
+    if (status === 'live') {
+        try {
+            startContext = await fetchOrganizerStartContext(run.organizerId, options => btn.guild!.members.fetch(options));
+        } catch (err) {
+            logger.warn('Could not fetch original organizer roles for Start', { runId, error: String(err) });
+            await refreshOrganizerPanel(btn, runId, '❌ Cannot Start: could not reliably fetch the original organizer’s roles. Please retry.');
+            return;
+        }
+    }
     const guildId = btn.guildId!;
     const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
@@ -91,8 +102,8 @@ async function handleStatusInternal(
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member),
                 actorRolePositions: member ? getRolePositions(member) : undefined,
-                organizerRoles: organizerMember ? getMemberRoleIds(organizerMember) : undefined,
-                organizerRolePositions: organizerMember ? getRolePositions(organizerMember) : undefined,
+                organizerRoles: startContext?.organizerRoles ?? (organizerMember ? getMemberRoleIds(organizerMember) : undefined),
+                organizerRolePositions: startContext?.organizerRolePositions ?? (organizerMember ? getRolePositions(organizerMember) : undefined),
                 status
             }, { guildId });
         }

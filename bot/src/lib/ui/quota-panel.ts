@@ -3,14 +3,15 @@ import {
     EmbedBuilder,
     TextChannel,
     Message,
-    Guild,
 } from 'discord.js';
 import { getQuotaLeaderboard, updateQuotaRoleConfig, getJSON, BackendError } from '../utilities/http.js';
 import { OperationContext } from '../utilities/operation-context.js';
 import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
 import { createLogger } from '../logging/logger.js';
-import { formatPoints } from '../utilities/format-helpers.js';
+import { formatPoints, formatPointAmount } from '../utilities/format-helpers.js';
+import { minuteQuotaPointSource } from './quota-base-points.js';
 import { getQuotaLeaderboardPresentation } from './quota-leaderboard-format.js';
+import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 
 const logger = createLogger('QuotaPanel');
 
@@ -101,7 +102,8 @@ export async function updateQuotaPanel(
         // If config is null, use defaults
         const quotaConfig = configResult.config || {
             base_exalt_points: 1,
-            base_non_exalt_points: 1,
+            base_non_exalt_points: 0,
+            misc_points_per_minute: 0.10,
             moderation_points: 0,
             verify_points: 0,
             warn_points: 0,
@@ -118,7 +120,6 @@ export async function updateQuotaPanel(
             result.period_start,
             result.period_end,
             result.leaderboard,
-            guild,
             quotaConfig,
             configResult.dungeon_overrides
         );
@@ -170,7 +171,7 @@ export async function updateQuotaPanel(
 /**
  * Build the leaderboard embed
  */
-function buildLeaderboardEmbed(
+export function buildLeaderboardEmbed(
     roleName: string,
     requiredPoints: number,
     periodStart: string,
@@ -182,10 +183,10 @@ function buildLeaderboardEmbed(
         effective_total: number;
         runs: number;
     }>,
-    guild: Guild,
     config: {
         base_exalt_points: number;
         base_non_exalt_points: number;
+        misc_points_per_minute: number;
         moderation_points: number;
         verify_points?: number;
         warn_points?: number;
@@ -206,35 +207,36 @@ function buildLeaderboardEmbed(
     
     // Add base points if they're not 0
     if (config.base_exalt_points > 0) {
-        pointSources.push(`**Exalt Dungeons:** ${formatPoints(config.base_exalt_points)} pts/run`);
+        pointSources.push(`**Exalt Dungeons:** ${formatPointAmount(config.base_exalt_points)}`);
     }
     if (config.base_non_exalt_points > 0) {
-        pointSources.push(`**Non-Exalt Dungeons:** ${formatPoints(config.base_non_exalt_points)} pts/run`);
+        pointSources.push(`**Non-Exalt Dungeons:** ${formatPointAmount(config.base_non_exalt_points)}`);
     }
+    pointSources.push(minuteQuotaPointSource(config.misc_points_per_minute));
     
     // Add moderation command points (individual commands)
     if (config.verify_points && config.verify_points > 0) {
-        pointSources.push(`**Verifications:** ${formatPoints(config.verify_points)} pts each`);
+        pointSources.push(`**Verifications:** ${formatPointAmount(config.verify_points)} each`);
     }
     if (config.warn_points && config.warn_points > 0) {
-        pointSources.push(`**Warnings:** ${formatPoints(config.warn_points)} pts each`);
+        pointSources.push(`**Warnings:** ${formatPointAmount(config.warn_points)} each`);
     }
     if (config.suspend_points && config.suspend_points > 0) {
-        pointSources.push(`**Suspensions:** ${formatPoints(config.suspend_points)} pts each`);
+        pointSources.push(`**Suspensions:** ${formatPointAmount(config.suspend_points)} each`);
     }
     if (config.modmail_reply_points && config.modmail_reply_points > 0) {
-        pointSources.push(`**Modmail Replies:** ${formatPoints(config.modmail_reply_points)} pts each`);
+        pointSources.push(`**Modmail Replies:** ${formatPointAmount(config.modmail_reply_points)} each`);
     }
     if (config.editname_points && config.editname_points > 0) {
-        pointSources.push(`**Name Edits:** ${formatPoints(config.editname_points)} pts each`);
+        pointSources.push(`**Name Edits:** ${formatPointAmount(config.editname_points)} each`);
     }
     if (config.addnote_points && config.addnote_points > 0) {
-        pointSources.push(`**Notes Added:** ${formatPoints(config.addnote_points)} pts each`);
+        pointSources.push(`**Notes Added:** ${formatPointAmount(config.addnote_points)} each`);
     }
     
     // Fallback: show old moderation_points if new fields aren't set (backward compatibility)
     if (config.moderation_points > 0 && (!config.verify_points || config.verify_points === 0)) {
-        pointSources.push(`**Verifications:** ${formatPoints(config.moderation_points)} pts each`);
+        pointSources.push(`**Verifications:** ${formatPointAmount(config.moderation_points)} each`);
     }
     
     // Add dungeon overrides (sorted by points descending)
@@ -242,7 +244,7 @@ function buildLeaderboardEmbed(
         .filter(([, pts]) => pts > 0)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 10) // Show top 10 overrides
-        .map(([dungeon, pts]) => `${dungeon}: ${formatPoints(pts)} pts`);
+        .map(([dungeon, pts]) => `${dungeonByCode[dungeon]?.dungeonName ?? dungeon}: ${formatPointAmount(pts)}`);
     
     if (overridesList.length > 0) {
         pointSources.push(`**Dungeon Overrides:** ${overridesList.join(', ')}`);
