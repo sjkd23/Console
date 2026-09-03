@@ -193,7 +193,7 @@ mock.module('../../../lib/logging/bot-logger.js', {
     namedExports: { logCommandExecution: async () => undefined },
 });
 
-const { handleStatus } = await import('./run-status.js');
+const { buildPostRunComponents, handleStatus } = await import('./run-status.js');
 const { logkey } = await import('../../../commands/organizer/logkey.js');
 
 function runFixture(dungeonKey: string, dungeonLabel: string, runKind: 'single' | 'oryx_3', keyPopCount: number): RunFixture {
@@ -308,8 +308,26 @@ describe('normal run End interaction', () => {
             assert.equal(reactionCleanupCalls, 1);
             assert.equal(editReplies.length, 1);
             assertNoKeyLoggingPayload([...editReplies, ...followUps, ...publicEdits]);
+            const closurePayload = JSON.stringify(editReplies[0]);
+            if (testCase.runKind === 'oryx_3') {
+                assert.match(closurePayload, /run:chaino3:42/);
+                assert.match(closurePayload, /Start New O3/);
+                assert.match(closurePayload, /run:finish:42/);
+            } else {
+                assert.doesNotMatch(closurePayload, /chaino3|Start New O3/);
+            }
         });
     }
+});
+
+describe('post-run O3 chaining visibility', () => {
+    it('is shown only after a successful O3 End', () => {
+        assert.equal(buildPostRunComponents('42', 'oryx_3', 'ended').length, 1);
+        assert.equal(buildPostRunComponents('42', 'oryx_3', 'cancelled').length, 0);
+        assert.equal(buildPostRunComponents('42', 'single', 'ended').length, 0);
+        assert.equal(buildPostRunComponents('42', 'multi_exalt', 'ended').length, 0);
+        assert.equal(buildPostRunComponents('42', 'realm_clearing', 'ended').length, 0);
+    });
 });
 
 describe('/logkey manual command', () => {

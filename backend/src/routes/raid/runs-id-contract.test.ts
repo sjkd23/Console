@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const testState = vi.hoisted(() => ({
     query: vi.fn(),
     createRunWithTransaction: vi.fn(),
+    chainOryx3RunWithTransaction: vi.fn(),
     hasInternalRole: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock('../../lib/database/database-helpers.js', () => ({
 
 vi.mock('../../lib/services/run-service.js', () => ({
     createRunWithTransaction: testState.createRunWithTransaction,
+    chainOryx3RunWithTransaction: testState.chainOryx3RunWithTransaction,
     endRunWithTransaction: vi.fn(),
     recordKeyPopWithTransaction: vi.fn(),
     Oryx3KeyPopError: class extends Error {},
@@ -120,6 +122,7 @@ describe('run ID HTTP contract', () => {
                 screenshot_url: null,
                 o3_stage: null,
                 join_locked: false,
+                chained_from_run_id: null,
             }],
         });
 
@@ -176,5 +179,43 @@ describe('run ID HTTP contract', () => {
         expect(organizerResponse.json()).toMatchObject({ activeRuns: [{ id: 676 }] });
         expect(activeResponse.json()).toMatchObject({ runs: [{ id: 677 }] });
         expect(expiredResponse.json()).toMatchObject({ expired: [{ id: 678 }] });
+    });
+
+    it('creates a canonical new run ID through the O3 chain endpoint', async () => {
+        testState.query.mockResolvedValueOnce({
+            rowCount: 1,
+            rows: [{
+                status: 'ended',
+                organizer_id: organizerId,
+                guild_id: guildId,
+                run_kind: 'oryx_3',
+            }],
+        });
+        testState.chainOryx3RunWithTransaction.mockResolvedValueOnce({
+            runId: '701',
+            dungeonKey: 'ORYX_3',
+            dungeonLabel: 'Oryx 3',
+            runKind: 'oryx_3',
+            activityKey: 'ORYX_3',
+            selectedDungeons: [{ dungeonKey: 'ORYX_3', dungeonLabel: 'Oryx 3', selectionOrder: 1 }],
+        });
+
+        const response = await app.inject({
+            method: 'POST',
+            url: '/runs/700/o3-chain',
+            payload: {
+                actorId: organizerId,
+                actorRoles: [organizerRoleId],
+                guildName: 'Test Guild',
+                organizerUsername: 'Organizer',
+            },
+        });
+
+        expect(response.statusCode).toBe(201);
+        expect(response.json()).toMatchObject({ runId: 701, runKind: 'oryx_3' });
+        expect(testState.chainOryx3RunWithTransaction).toHaveBeenCalledWith(expect.objectContaining({
+            previousRunId: 700,
+            guildId,
+        }));
     });
 });

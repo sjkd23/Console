@@ -14,6 +14,7 @@ import {
     endRunWithTransaction,
     Oryx3KeyPopError,
     recordKeyPopWithTransaction,
+    chainOryx3RunWithTransaction,
 } from '../../lib/services/run-service.js';
 import { RAID_BEHAVIOR } from '../../config/raid-config.js';
 import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.js';
@@ -265,6 +266,73 @@ export default async function runsRoutes(app: FastifyInstance) {
             if (err instanceof RunSelectionError) return Errors.validation(reply, err.message);
             logger.error({ err, guildId, organizerId, dungeonKey }, 'Failed to create run');
             return Errors.internal(reply, 'Failed to create run');
+        }
+    });
+
+    /**
+     * POST /runs/:id/o3-chain
+     * Atomically creates one clean O3 successor from a fully completed O3.
+     */
+    app.post('/runs/:id/o3-chain', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            actorId: zSnowflake,
+            actorRoles: z.array(zSnowflake).optional(),
+            guildName: z.string().min(1),
+            organizerUsername: z.string().min(1),
+            roleId: zSnowflake.optional(),
+        });
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) return Errors.validation(reply);
+
+        const previousRunId = Number(p.data.id);
+        const sourceResult = await query<RunRow & { run_kind: RunKind }>(
+            `SELECT status, organizer_id, guild_id, run_kind
+             FROM run WHERE id = $1::bigint`,
+            [previousRunId]
+        );
+        if (sourceResult.rowCount !== 1) return Errors.runNotFound(reply, previousRunId);
+        const source = sourceResult.rows[0];
+        if (!enforceGuildScope(req, reply, source, previousRunId)) return;
+
+        try {
+            await authorizeRunActor(
+                source,
+                buildRunActorContext(b.data.actorId, b.data.actorRoles),
+                { allowOrganizer: true, allowOrganizerRole: true }
+            );
+        } catch (error: unknown) {
+            if (error instanceof Error && 'code' in error && error.code === 'NOT_ORGANIZER') {
+                return Errors.notOrganizer(reply);
+            }
+            throw error;
+        }
+
+        try {
+            const result = await chainOryx3RunWithTransaction({
+                previousRunId,
+                guildId: source.guild_id,
+                guildName: b.data.guildName,
+                organizerUsername: b.data.organizerUsername,
+                roleId: b.data.roleId,
+            });
+            return reply.code(201).send({
+                runId: normalizeRunId(result.runId),
+                dungeonKey: result.dungeonKey,
+                dungeonLabel: result.dungeonLabel,
+                runKind: result.runKind,
+                activityKey: result.activityKey,
+                selectedDungeons: result.selectedDungeons,
+            });
+        } catch (error) {
+            if (error instanceof RunLifecycleError) {
+                return reply.code(error.statusCode).send({
+                    error: { code: error.code, message: error.message, ...error.details },
+                });
+            }
+            logger.error({ error, previousRunId, guildId: source.guild_id }, 'Failed to chain Oryx 3 run');
+            return Errors.internal(reply, 'Failed to start a new Oryx 3');
         }
     });
 
@@ -880,10 +948,12 @@ export default async function runsRoutes(app: FastifyInstance) {
             screenshot_url: string | null;
             o3_stage: string | null;
             join_locked: boolean;
+            chained_from_run_id: string | number | null;
         }>(
                 `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
                     started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
                     key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked, finalization_kind,
+                    chained_from_run_id,
                     ${ORGANIZER_MINUTE_QUOTA_SQL} AS organizer_minute_quota,
                     COALESCE((
                         SELECT json_agg(json_build_object(
@@ -934,6 +1004,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             screenshotUrl: r.screenshot_url,
             o3Stage: r.o3_stage,
             joinLocked: r.join_locked,
+            chainedFromRunId: r.chained_from_run_id === null ? null : normalizeRunId(r.chained_from_run_id),
         });
     });
 

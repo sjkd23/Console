@@ -60,12 +60,109 @@ vi.mock('./organizer-minute-settlement-service.js', () => ({
 
 import {
     createRunWithTransaction,
+    chainOryx3RunWithTransaction,
     endRunWithTransaction,
     Oryx3KeyPopError,
     recordKeyPopWithTransaction,
     type CreateRunInput,
     type EndRunInput,
 } from './run-service.js';
+
+describe('chainOryx3RunWithTransaction', () => {
+    const source = {
+        status: 'ended',
+        finalization_kind: 'completed',
+        run_kind: 'oryx_3',
+        organizer_id: '100000000000000002',
+        channel_id: '100000000000000004',
+        description: 'Bring maxed characters',
+        party: '2',
+        location: 'USWest',
+        auto_end_minutes: 120,
+    };
+
+    it('creates a fresh O3 run with a new ID while carrying only safe setup context', async () => {
+        const calls: Array<{ sql: string; params?: unknown[] }> = [];
+        businessQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
+            calls.push({ sql, params });
+            if (sql.includes('SELECT status, finalization_kind, run_kind')) {
+                return { rowCount: 1, rows: [source] };
+            }
+            if (sql.includes('SELECT id FROM run WHERE chained_from_run_id')) {
+                return { rowCount: 0, rows: [] };
+            }
+            if (sql.includes("status IN ('open', 'live')")) {
+                return { rowCount: 0, rows: [] };
+            }
+            if (sql.includes('INSERT INTO run (')) {
+                return { rowCount: 1, rows: [{ id: '101' }] };
+            }
+            return { rowCount: 1, rows: [] };
+        });
+
+        const result = await chainOryx3RunWithTransaction({
+            previousRunId: 100,
+            guildId: '100000000000000001',
+            guildName: 'Guill 2.0',
+            organizerUsername: 'Organizer',
+            roleId: '100000000000000005',
+        });
+
+        expect(result).toMatchObject({ runId: 101, runKind: 'oryx_3', dungeonKey: 'ORYX_3' });
+        const insert = calls.find(call => call.sql.includes('INSERT INTO run ('));
+        expect(insert?.params).toEqual([
+            '100000000000000001',
+            source.organizer_id,
+            'ORYX_3',
+            'Oryx 3',
+            source.channel_id,
+            source.description,
+            source.party,
+            source.location,
+            source.auto_end_minutes,
+            '100000000000000005',
+            'oryx_3',
+            'ORYX_3',
+            100,
+        ]);
+        expect(activityMock).not.toHaveBeenCalled();
+        expect(quotaServiceMock.awardOrganizerQuota).not.toHaveBeenCalled();
+    });
+
+    it('rejects a second successor before attempting another insert', async () => {
+        businessQuery.mockImplementation(async (sql: string) => {
+            if (sql.includes('SELECT status, finalization_kind, run_kind')) {
+                return { rowCount: 1, rows: [source] };
+            }
+            if (sql.includes('SELECT id FROM run WHERE chained_from_run_id')) {
+                return { rowCount: 1, rows: [{ id: '101' }] };
+            }
+            return { rowCount: 0, rows: [] };
+        });
+
+        await expect(chainOryx3RunWithTransaction({
+            previousRunId: 100,
+            guildId: '100000000000000001',
+            guildName: 'Guill 2.0',
+            organizerUsername: 'Organizer',
+        })).rejects.toMatchObject({ code: 'O3_ALREADY_CHAINED', details: { successorRunId: 101 } });
+        expect(businessQuery.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO run ('))).toBe(false);
+    });
+
+    it.each([
+        [{ ...source, run_kind: 'single' }, 'NOT_ORYX_3'],
+        [{ ...source, status: 'live', finalization_kind: null }, 'RUN_NOT_COMPLETED'],
+        [{ ...source, finalization_kind: 'cancelled' }, 'RUN_NOT_COMPLETED'],
+    ])('rejects invalid predecessor state %#', async (invalidSource, code) => {
+        businessQuery.mockResolvedValueOnce({ rowCount: 1, rows: [invalidSource] });
+        await expect(chainOryx3RunWithTransaction({
+            previousRunId: 100,
+            guildId: '100000000000000001',
+            guildName: 'Guill 2.0',
+            organizerUsername: 'Organizer',
+        })).rejects.toMatchObject({ code });
+    });
+});
 
 const baseInput: EndRunInput = {
     runId: 42,

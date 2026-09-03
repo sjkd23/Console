@@ -29,6 +29,24 @@ import {
 
 const logger = createLogger('RunStatus');
 
+export function buildPostRunComponents(
+    runId: string,
+    runKind: string,
+    status: 'ended' | 'cancelled'
+): ActionRowBuilder<ButtonBuilder>[] {
+    if (status !== 'ended' || runKind !== 'oryx_3') return [];
+    return [new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`run:chaino3:${runId}`)
+            .setLabel('Start New O3')
+            .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+            .setCustomId(`run:finish:${runId}`)
+            .setLabel('Finish')
+            .setStyle(ButtonStyle.Secondary)
+    )];
+}
+
 export async function handleStatus(
     btn: ButtonInteraction,
     runId: string,
@@ -420,10 +438,17 @@ async function handleStatusInternal(
         // Close the organizer panel with clear message
         const closureEmbed = new EmbedBuilder()
             .setTitle(`${icon} Run ${endLabel}`)
-            .setDescription(`The run has ${endLabel.toLowerCase()}. This panel is now closed.`)
+            .setDescription(
+                status === 'ended' && run.runKind === 'oryx_3'
+                    ? 'Oryx 3 ended successfully. Its completion and accounting are finalized.'
+                    : `The run has ${endLabel.toLowerCase()}. This panel is now closed.`
+            )
             .setColor(status === 'cancelled' ? 0xff0000 : 0x00ff00)
             .setTimestamp(new Date());
 
-        await btn.editReply({ embeds: [closureEmbed], components: [] });
+        await btn.editReply({
+            embeds: [closureEmbed],
+            components: buildPostRunComponents(runId, run.runKind, status),
+        });
     }
 }

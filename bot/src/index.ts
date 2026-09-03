@@ -18,6 +18,7 @@ import { handleOrganizerPanel, handleOrganizerPanelConfirm, handleOrganizerPanel
 import { handleJoin } from './interactions/buttons/raids/join.js';
 import { handleLeave } from './interactions/buttons/raids/leave.js';
 import { handleStatus } from './interactions/buttons/raids/run-status.js';
+import { handleFinishO3Chain, handleStartNewO3 } from './interactions/buttons/raids/o3-chain.js';
 import {
     handleMinuteCancel,
     handleMinuteConfirm,
@@ -578,6 +579,16 @@ client.on('interactionCreate', async (interaction) => {
                 await safeHandleInteraction(interaction, () => handleStatus(interaction, runId, 'ended'), { ephemeral: true });
                 return;
             }
+            if (action === 'chaino3') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleStartNewO3(interaction, runId), { ephemeral: true });
+                return;
+            }
+            if (action === 'finish') {
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                await safeHandleInteraction(interaction, () => handleFinishO3Chain(interaction), { ephemeral: true });
+                return;
+            }
             if (action === 'cancel') {
                 if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
                 await safeHandleInteraction(interaction, () => handleStatus(interaction, runId, 'cancelled'), { ephemeral: true });
@@ -661,7 +672,6 @@ client.on('interactionCreate', async (interaction) => {
                 await safeHandleInteraction(interaction, () => handleMinuteModifySubmit(interaction, runId, revision), { ephemeral: true });
                 return;
             }
-
             // Handle key logging custom name modal
             if (interaction.customId.startsWith('keylog:customname:modal:')) {
                 const runId = interaction.customId.split(':')[3];

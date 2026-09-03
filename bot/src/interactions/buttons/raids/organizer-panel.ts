@@ -575,7 +575,7 @@ export async function refreshOrganizerPanel(
  * @param guildId The guild ID
  */
 export async function sendRunOrganizerPanelAsFollowUp(
-    interaction: ChatInputCommandInteraction,
+    interaction: ChatInputCommandInteraction | ButtonInteraction,
     runId: number,
     guildId: string
 ): Promise<void> {

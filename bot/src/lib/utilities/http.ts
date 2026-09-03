@@ -245,6 +245,7 @@ export const RunDetailsSchema = z.object({
     screenshotUrl: z.string().nullable(),
     o3Stage: z.enum(['closed', 'miniboss', 'third_room']).nullable(),
     joinLocked: z.boolean().nullable().transform(value => value ?? false),
+    chainedFromRunId: z.number().int().positive().nullable().default(null),
 });
 
 export type RunDetails = z.infer<typeof RunDetailsSchema>;
@@ -292,6 +293,20 @@ export async function createRun(payload: {
     roleId?: string;
 }): Promise<CreateRunResponse> {
     const response = await postJSON<unknown>('/runs', payload, { guildId: payload.guildId });
+    return CreateRunResponseSchema.parse(response);
+}
+
+export async function chainOryx3Run(previousRunId: number | string, payload: {
+    actorId: string;
+    actorRoles?: string[];
+    guildId: string;
+    guildName: string;
+    organizerUsername: string;
+    roleId?: string;
+}): Promise<CreateRunResponse> {
+    const response = await postJSON<unknown>(`/runs/${previousRunId}/o3-chain`, payload, {
+        guildId: payload.guildId,
+    });
     return CreateRunResponseSchema.parse(response);
 }
 

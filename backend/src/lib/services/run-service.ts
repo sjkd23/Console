@@ -60,6 +60,14 @@ export interface CreateRunResult extends ClassifiedRunSelection {
     runId: number;
 }
 
+export interface ChainOryx3RunInput {
+    previousRunId: number;
+    guildId: string;
+    guildName: string;
+    organizerUsername: string;
+    roleId?: string;
+}
+
 export interface EndRunInput {
     runId: number;
     guildId: string;
@@ -84,7 +92,7 @@ export class RunLifecycleError extends Error {
         public readonly code: string,
         message: string,
         public readonly statusCode = 409,
-        public readonly details?: { missing: { party: boolean; location: boolean } }
+        public readonly details?: Record<string, unknown>
     ) {
         super(message);
         this.name = 'RunLifecycleError';
@@ -213,67 +221,145 @@ export interface RecordKeyPopResult {
  * @param input - Run creation parameters
  * @returns The created run ID
  */
-export async function createRunWithTransaction(input: CreateRunInput): Promise<CreateRunResult> {
+async function createRunInTransaction(
+    client: PoolClient,
+    input: CreateRunInput,
+    chainedFromRunId: number | null = null
+): Promise<CreateRunResult> {
     const classification = classifyRunSelection(input.selectedDungeonKeys);
-    logger.debug({ guildId: input.guildId, organizerId: input.organizerId, runKind: classification.runKind },
-        'Creating run with transaction');
-
-    const runId = await withTransaction(async (client) => {
-        // Step 1: Ensure guild exists (upsert)
+    await client.query(
+        `INSERT INTO guild (id, name) VALUES ($1::bigint, $2)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+        [input.guildId, input.guildName]
+    );
+    await client.query(
+        `INSERT INTO member (id, username) VALUES ($1::bigint, $2)
+         ON CONFLICT (id) DO UPDATE SET username = COALESCE(EXCLUDED.username, member.username)`,
+        [input.organizerId, input.organizerUsername]
+    );
+    const res = await client.query<{ id: string | number }>(
+        `INSERT INTO run (
+            guild_id, organizer_id, dungeon_key, dungeon_label, channel_id,
+            status, description, party, location, auto_end_minutes, role_id,
+            run_kind, activity_key, chained_from_run_id
+        )
+        VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9,
+                $10::bigint, $11, $12, $13::bigint)
+        RETURNING id`,
+        [
+            input.guildId,
+            input.organizerId,
+            classification.dungeonKey,
+            classification.dungeonLabel,
+            input.channelId,
+            input.description || null,
+            input.party || null,
+            input.location || null,
+            input.autoEndMinutes,
+            input.roleId || null,
+            classification.runKind,
+            classification.activityKey,
+            chainedFromRunId,
+        ]
+    );
+    const runId = normalizeRunId(res.rows[0].id);
+    for (const selection of classification.selectedDungeons) {
         await client.query(
-            `INSERT INTO guild (id, name) VALUES ($1::bigint, $2)
-             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
-            [input.guildId, input.guildName]
+            `INSERT INTO run_dungeon_selection (run_id, dungeon_key, dungeon_label, selection_order)
+             VALUES ($1::bigint, $2, $3, $4)`,
+            [runId, selection.dungeonKey, selection.dungeonLabel, selection.selectionOrder]
         );
+    }
+    return { runId, ...classification };
+}
 
-        // Step 2: Ensure member exists (upsert)
-        await client.query(
-            `INSERT INTO member (id, username) VALUES ($1::bigint, $2)
-             ON CONFLICT (id) DO UPDATE SET username = COALESCE(EXCLUDED.username, member.username)`,
-            [input.organizerId, input.organizerUsername]
+export async function createRunWithTransaction(input: CreateRunInput): Promise<CreateRunResult> {
+    logger.debug({ guildId: input.guildId, organizerId: input.organizerId }, 'Creating run with transaction');
+    const result = await withTransaction(client => createRunInTransaction(client, input));
+
+    logger.info({ runId: result.runId, guildId: input.guildId, organizerId: input.organizerId, runKind: result.runKind },
+        'Run created successfully');
+
+    return result;
+}
+
+const ChainedOryx3SourceSchema = z.object({
+    status: z.enum(['open', 'live', 'ended']),
+    finalization_kind: z.enum(['completed', 'cancelled']).nullable(),
+    run_kind: RunKindSchema,
+    organizer_id: z.string().min(1),
+    channel_id: z.string().min(1),
+    description: z.string().nullable(),
+    party: z.string().nullable(),
+    location: z.string().nullable(),
+    auto_end_minutes: z.number().int().positive(),
+});
+
+/** Create a clean O3 successor while holding a row lock on its ended predecessor. */
+export async function chainOryx3RunWithTransaction(input: ChainOryx3RunInput): Promise<CreateRunResult> {
+    return withTransaction(async client => {
+        const sourceResult = await client.query(
+            `SELECT status, finalization_kind, run_kind, organizer_id, channel_id,
+                    description, party, location, auto_end_minutes
+             FROM run
+             WHERE id = $1::bigint AND guild_id = $2::bigint
+             FOR UPDATE`,
+            [input.previousRunId, input.guildId]
         );
+        if (sourceResult.rowCount !== 1) {
+            throw new RunLifecycleError('RUN_NOT_FOUND', 'Previous run not found.', 404);
+        }
+        const source = ChainedOryx3SourceSchema.parse(sourceResult.rows[0]);
+        if (source.run_kind !== 'oryx_3') {
+            throw new RunLifecycleError('NOT_ORYX_3', 'Only Oryx 3 runs can be chained.', 400);
+        }
+        if (source.status !== 'ended' || source.finalization_kind !== 'completed') {
+            throw new RunLifecycleError('RUN_NOT_COMPLETED', 'The previous Oryx 3 must be fully ended before chaining.');
+        }
 
-        // Step 3: Insert run row
-        const res = await client.query<{ id: string | number }>(
-            `INSERT INTO run (
-                guild_id, organizer_id, dungeon_key, dungeon_label, channel_id, 
-                status, description, party, location, auto_end_minutes, role_id,
-                run_kind, activity_key
-            )
-            VALUES ($1::bigint, $2::bigint, $3, $4, $5::bigint, 'open', $6, $7, $8, $9, $10::bigint, $11, $12)
-            RETURNING id`,
-            [
-                input.guildId,
-                input.organizerId,
-                classification.dungeonKey,
-                classification.dungeonLabel,
-                input.channelId,
-                input.description || null,
-                input.party || null,
-                input.location || null,
-                input.autoEndMinutes,
-                input.roleId || null,
-                classification.runKind,
-                classification.activityKey,
-            ]
+        const existing = await client.query<{ id: string | number }>(
+            `SELECT id FROM run WHERE chained_from_run_id = $1::bigint`,
+            [input.previousRunId]
         );
-
-        const createdRunId = normalizeRunId(res.rows[0].id);
-        for (const selection of classification.selectedDungeons) {
-            await client.query(
-                `INSERT INTO run_dungeon_selection (run_id, dungeon_key, dungeon_label, selection_order)
-                 VALUES ($1::bigint, $2, $3, $4)`,
-                [createdRunId, selection.dungeonKey, selection.dungeonLabel, selection.selectionOrder]
+        if (existing.rowCount !== 0) {
+            throw new RunLifecycleError(
+                'O3_ALREADY_CHAINED',
+                'A new Oryx 3 has already been created from this run.',
+                409,
+                { successorRunId: normalizeRunId(existing.rows[0].id) }
             );
         }
 
-        return createdRunId;
+        const active = await client.query<{ id: string | number }>(
+            `SELECT id FROM run
+             WHERE guild_id = $1::bigint AND organizer_id = $2::bigint
+               AND status IN ('open', 'live')
+             LIMIT 1`,
+            [input.guildId, source.organizer_id]
+        );
+        if (active.rowCount !== 0) {
+            throw new RunLifecycleError(
+                'ORGANIZER_ALREADY_ACTIVE',
+                'The organizer already has an active run.',
+                409,
+                { activeRunId: normalizeRunId(active.rows[0].id) }
+            );
+        }
+
+        return createRunInTransaction(client, {
+            guildId: input.guildId,
+            guildName: input.guildName,
+            organizerId: source.organizer_id,
+            organizerUsername: input.organizerUsername,
+            channelId: source.channel_id,
+            selectedDungeonKeys: ['ORYX_3'],
+            description: source.description ?? undefined,
+            party: source.party ?? undefined,
+            location: source.location ?? undefined,
+            autoEndMinutes: source.auto_end_minutes,
+            roleId: input.roleId,
+        }, input.previousRunId);
     });
-
-    logger.info({ runId, guildId: input.guildId, organizerId: input.organizerId, runKind: classification.runKind },
-        'Run created successfully');
-
-    return { runId, ...classification };
 }
 
 // ============================================================================
