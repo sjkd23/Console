@@ -490,7 +490,7 @@ client.on('interactionCreate', async (interaction) => {
             // Handle run management buttons
             const [ns, action, runId, ...rest] = interaction.customId.split(':');
             
-            // Handle key logging buttons (after run ends)
+            // Handle buttons from an existing key logging session.
             if (ns === 'keylog') {
                 if (action === 'custom') {
                     const { handleKeyLogCustomName } = await import('./interactions/buttons/raids/key-logging.js');

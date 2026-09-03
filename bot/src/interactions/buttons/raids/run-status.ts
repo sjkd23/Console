@@ -17,7 +17,6 @@ import {
     buildRunLifecycleMessageContent,
     buildRunMessageContentEdit,
 } from '../../../lib/utilities/run-message-helpers.js';
-import { shouldStartRunKeyLogging } from '../../../lib/utilities/run-key-logging.js';
 import { fetchOrganizerStartContext } from '../../../lib/utilities/organizer-start-context.js';
 import {
     EndRunResponseSchema,
@@ -397,41 +396,12 @@ async function handleStatusInternal(
                 }
             );
 
-            // DON'T clear thread cache when ending - keep it for key logging phase
-            // Thread cache will be cleared after key logging is complete or if run is cancelled
         } catch (e) {
             console.error('Failed to log status change to raid-log:', e);
         }
 
-        // For normal runs, the backend's persisted Dungeon Entered count is the maximum
-        // number of actual physical keys that may be logged. O3 keeps its legacy rune flow.
-        if (status === 'ended' && (run.runKind === 'oryx_3' || shouldStartRunKeyLogging(run))) {
-            let legacyO3TotalKeys: number | undefined;
-            if (run.runKind === 'oryx_3') {
-                const dungeonData = await import('../../../constants/dungeons/dungeon-helpers.js')
-                    .then(m => m.dungeonByCode[run.dungeonKey]);
-                legacyO3TotalKeys = Math.max(1, dungeonData?.keyReactions.length ?? 0);
-            }
-
-            logger.info('Run ended, showing key logging panel', {
-                runId,
-                dungeonEnteredCount: run.keyPopCount,
-                legacyO3TotalKeys,
-            });
-
-            // Import showKeyLoggingPanel dynamically to avoid circular dependencies
-            const { showKeyLoggingPanel } = await import('./key-logging.js');
-
-            await showKeyLoggingPanel(
-                btn,
-                parseInt(runId),
-                guildId,
-                legacyO3TotalKeys
-            );
-            return;
-        }
-
-        // No key logging phase follows cancelled or zero-entry/non-keyable ended runs.
+        // Normal run finalization closes immediately. Key logging remains available
+        // independently through /logkey and its existing interaction handlers.
         if (status === 'cancelled' || status === 'ended') {
             try {
                 clearLogThreadCache({
@@ -443,7 +413,7 @@ async function handleStatusInternal(
                     runId: parseInt(runId)
                 });
             } catch (e) {
-                console.error('Failed to clear thread cache for cancelled run:', e);
+                console.error('Failed to clear thread cache for closed run:', e);
             }
         }
 

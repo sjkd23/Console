@@ -31,7 +31,7 @@ const keyLoggingSessions = new Map<number, KeyLoggingState>();
 
 /**
  * Initialize and show the key logging panel for a run.
- * Called when the organizer ends a run with a physical-key allowance.
+ * Available to explicit workflows that initialize a run-bound key logging session.
  */
 export async function showKeyLoggingPanel(
     btn: ButtonInteraction,
