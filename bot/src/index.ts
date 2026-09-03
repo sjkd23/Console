@@ -18,6 +18,12 @@ import { handleOrganizerPanel, handleOrganizerPanelConfirm, handleOrganizerPanel
 import { handleJoin } from './interactions/buttons/raids/join.js';
 import { handleLeave } from './interactions/buttons/raids/leave.js';
 import { handleStatus } from './interactions/buttons/raids/run-status.js';
+import {
+    handleMinuteCancel,
+    handleMinuteConfirm,
+    handleMinuteModify,
+    handleMinuteModifySubmit,
+} from './interactions/buttons/raids/organizer-minute-settlement.js';
 import { handleKeyWindow } from './interactions/buttons/raids/key-window.js';
 import { handleRealmScore } from './interactions/buttons/raids/realm-score.js';
 import { handleRealmClosed, handleMiniboss, handleThirdRoom } from './interactions/buttons/raids/o3-progression.js';
@@ -236,6 +242,31 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.isButton()) {
+            if (interaction.customId.startsWith('minute:')) {
+                const [, minuteAction, runIdText, revisionText] = interaction.customId.split(':');
+                const runId = Number(runIdText);
+                const revision = Number(revisionText);
+                if (!Number.isSafeInteger(runId) || runId <= 0) {
+                    await interaction.reply({ content: 'Invalid run reference.', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                if (!await applyButtonRateLimit(interaction, 'run:organizer')) return;
+                if (minuteAction === 'confirm' && Number.isSafeInteger(revision) && revision >= 0) {
+                    await safeHandleInteraction(interaction, () => handleMinuteConfirm(interaction, runId, revision), { ephemeral: true });
+                    return;
+                }
+                if (minuteAction === 'modify' && Number.isSafeInteger(revision) && revision >= 0) {
+                    await safeHandleInteraction(interaction, () => handleMinuteModify(interaction, runId, revision), { ephemeral: true });
+                    return;
+                }
+                if (minuteAction === 'cancel') {
+                    await safeHandleInteraction(interaction, () => handleMinuteCancel(interaction, runId), { ephemeral: true });
+                    return;
+                }
+                await interaction.reply({ content: 'Invalid minute logging action.', flags: MessageFlags.Ephemeral });
+                return;
+            }
+
             // Handle party buttons
             if (interaction.customId.startsWith('party:close:')) {
                 if (!await applyButtonRateLimit(interaction, 'party:close')) return;
@@ -619,6 +650,18 @@ client.on('interactionCreate', async (interaction) => {
 
         // Handle modal submissions
         if (interaction.isModalSubmit()) {
+            if (interaction.customId.startsWith('minute:submit:')) {
+                const [, , runIdText, revisionText] = interaction.customId.split(':');
+                const runId = Number(runIdText);
+                const revision = Number(revisionText);
+                if (!Number.isSafeInteger(runId) || runId <= 0 || !Number.isSafeInteger(revision) || revision < 0) {
+                    await interaction.reply({ content: 'Invalid minute logging reference.', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                await safeHandleInteraction(interaction, () => handleMinuteModifySubmit(interaction, runId, revision), { ephemeral: true });
+                return;
+            }
+
             // Handle key logging custom name modal
             if (interaction.customId.startsWith('keylog:customname:modal:')) {
                 const runId = interaction.customId.split(':')[3];

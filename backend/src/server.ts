@@ -14,12 +14,14 @@ import verificationRoutes from './routes/system/verification.js';
 import commandLogRoutes from './routes/admin/command-log.js';
 import modmailRoutes from './routes/moderation/modmail.js';
 import customRoleVerificationRoutes from './routes/system/custom-role-verification.js';
+import organizerMinuteSettlementRoutes from './routes/raid/organizer-minute-settlements.js';
 
 const app = Fastify({ logger: true });
 
 await app.register(authPlugin);
 await app.register(healthRoutes, { prefix: '/v1' });
 await app.register(runsRoutes, { prefix: '/v1' });
+await app.register(organizerMinuteSettlementRoutes, { prefix: '/v1' });
 await app.register(raidersRoutes, { prefix: '/v1' });
 await app.register(syncRoutes, { prefix: '/v1' });
 await app.register(guildsRoutes, { prefix: '/v1' });

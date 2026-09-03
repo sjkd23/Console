@@ -392,3 +392,15 @@ export async function updateQuotaPanelsForUser(
         logger.error('Failed to update panels for user', { guildId, userId, err });
     }
 }
+
+/** Refresh exactly the snapshotted earning role without repricing historical events. */
+export async function updateQuotaPanelForRole(client: Client, guildId: string, roleId: string): Promise<void> {
+    try {
+        const ctx = new OperationContext();
+        const configs = await ctx.getQuotaConfigs(guildId);
+        const config = configs.configs.find(candidate => candidate.discord_role_id === roleId);
+        if (config?.active_period) await updateQuotaPanel(client, guildId, roleId, config, ctx);
+    } catch (err) {
+        logger.error('Failed to refresh quota panel for snapshotted role', { guildId, roleId, err });
+    }
+}

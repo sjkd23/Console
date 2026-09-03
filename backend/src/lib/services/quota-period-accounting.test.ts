@@ -30,6 +30,39 @@ describe('quota rollover accounting', () => {
             carryOut: 0,
         });
     });
+
+    it.each([
+        { earned: 0.7, carryIn: 0.1, required: 0.8, met: true, effective: 0.8, carryOut: 0 },
+        { earned: 0.69, carryIn: 0.1, required: 0.8, met: false, effective: 0.79, carryOut: 0 },
+        { earned: 0.81, carryIn: 0.1, required: 0.8, met: true, effective: 0.91, carryOut: 0.11 },
+        { earned: 2.5, carryIn: 1.5, required: 1.25, met: true, effective: 4, carryOut: 1.25 },
+        { earned: -0.2, carryIn: 0.1, required: 0.8, met: false, effective: -0.1, carryOut: 0 },
+    ])('calculates fractional accounting exactly for $earned + $carryIn', ({ earned, carryIn, required, met, effective, carryOut }) => {
+        expect(calculateQuotaResult(earned, carryIn, required, true)).toEqual({
+            effectiveTotal: effective,
+            metQuota: met,
+            carryOut,
+        });
+    });
+
+    it('keeps fractional arithmetic exact when rollover is disabled', () => {
+        expect(calculateQuotaResult(0.7, 0.1, 0.8, false)).toEqual({
+            effectiveTotal: 0.8,
+            metQuota: true,
+            carryOut: 0,
+        });
+    });
+
+    it('rejects inputs beyond the persisted two-decimal contract instead of silently rounding', () => {
+        expect(() => calculateQuotaResult(0.001, 0, 1, true)).toThrow(/two decimal places/);
+    });
+
+    it('normalizes negative zero at the public boundary', () => {
+        const result = calculateQuotaResult(-0, -0, 0, false);
+        expect(Object.is(result.effectiveTotal, -0)).toBe(false);
+        expect(Object.is(result.carryOut, -0)).toBe(false);
+        expect(result).toEqual({ effectiveTotal: 0, metQuota: true, carryOut: 0 });
+    });
 });
 
 describe('legacy quota transition', () => {

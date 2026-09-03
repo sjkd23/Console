@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { transactionClient, businessQuery, lifecycleState, quotaServiceMock, activityMock, snapshotMock } = vi.hoisted(() => {
+const { transactionClient, businessQuery, lifecycleState, quotaServiceMock, activityMock, snapshotMock, settlementMock } = vi.hoisted(() => {
     const businessQuery = vi.fn();
     const lifecycleState = { status: 'live' };
     return {
@@ -22,12 +22,15 @@ const { transactionClient, businessQuery, lifecycleState, quotaServiceMock, acti
         },
         activityMock: vi.fn(),
         snapshotMock: vi.fn(),
+        settlementMock: vi.fn(),
     };
 });
 
 beforeEach(() => {
     businessQuery.mockReset();
     lifecycleState.status = 'live';
+    settlementMock.mockReset();
+    settlementMock.mockResolvedValue(null);
 });
 
 vi.mock('../database/transaction.js', () => ({
@@ -49,6 +52,10 @@ vi.mock('../dungeon-activity/activity-service.js', () => ({
 
 vi.mock('../quota/quota.js', () => ({
     snapshotRaidersAtKeyPop: snapshotMock,
+}));
+
+vi.mock('./organizer-minute-settlement-service.js', () => ({
+    ensureOrganizerMinuteSettlement: settlementMock,
 }));
 
 import {
@@ -222,6 +229,7 @@ describe('endRunWithTransaction organizer completion trigger', () => {
         expect(result).toEqual({
             organizerQuotaPoints: 0,
             raiderPointsAwarded: 2,
+            organizerMinuteSettlement: null,
         });
         expect(transactionClient.query).toHaveBeenCalledWith(
             expect.stringContaining("SET status = 'ended'"),
@@ -581,7 +589,7 @@ describe('persisted taxonomy activity and fallback routing', () => {
 
         const result = await endRunWithTransaction({ runId: baseInput.runId, guildId: baseInput.guildId });
 
-        expect(result).toEqual({ organizerQuotaPoints: 0, raiderPointsAwarded: 0 });
+        expect(result).toEqual({ organizerQuotaPoints: 0, raiderPointsAwarded: 0, organizerMinuteSettlement: null });
         expect(quotaServiceMock.awardRaidersQuotaFromParticipants).not.toHaveBeenCalled();
         expect(activityMock).not.toHaveBeenCalled();
     });

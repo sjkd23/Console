@@ -9,6 +9,10 @@ import { z } from 'zod';
 import { DecimalPointsSchema } from './decimal-points.js';
 import { OrganizerMinuteQuotaSchema } from './minute-quota-contract.js';
 import { RUN_KINDS } from '../../constants/dungeons/dungeon-taxonomy.js';
+import {
+    OrganizerMinuteRecoveryResponseSchema,
+    OrganizerMinuteSettlementResponseSchema,
+} from './organizer-minute-settlement-contract.js';
 
 const BASE = botConfig.BACKEND_URL;
 const API_KEY = botConfig.BACKEND_API_KEY;
@@ -173,6 +177,38 @@ export async function patchJSON<T>(path: string, body: any, ctx?: RequestContext
 
 export async function deleteJSON<T>(path: string, body: any, ctx?: RequestContext): Promise<T> {
     return makeRequest<T>('DELETE', path, body, ctx);
+}
+
+export async function viewOrganizerMinuteSettlement(runId: number | string, guildId: string, actorId: string) {
+    return OrganizerMinuteSettlementResponseSchema.parse(await postJSON<unknown>(
+        `/runs/${runId}/minute-settlement/view`, { actorId }, { guildId }
+    )).settlement;
+}
+
+export async function confirmOrganizerMinuteSettlement(runId: number | string, guildId: string, actorId: string, expectedRevision: number) {
+    return OrganizerMinuteSettlementResponseSchema.parse(await postJSON<unknown>(
+        `/runs/${runId}/minute-settlement/confirm`, { actorId, expectedRevision }, { guildId }
+    )).settlement;
+}
+
+export async function modifyOrganizerMinuteSettlement(runId: number | string, guildId: string, actorId: string, expectedRevision: number, selectedMinutes: number) {
+    return OrganizerMinuteSettlementResponseSchema.parse(await patchJSON<unknown>(
+        `/runs/${runId}/minute-settlement`, { actorId, expectedRevision, selectedMinutes }, { guildId }
+    )).settlement;
+}
+
+export async function cancelOrganizerMinuteSettlement(runId: number | string, guildId: string, actorId: string) {
+    return OrganizerMinuteSettlementResponseSchema.parse(await postJSON<unknown>(
+        `/runs/${runId}/minute-settlement/cancel`, { actorId }, { guildId }
+    )).settlement;
+}
+
+export async function recoverOrganizerMinutes(runId: number, guildId: string, payload: {
+    actorId: string; selectedMinutes: number;
+}) {
+    return OrganizerMinuteRecoveryResponseSchema.parse(await postJSON<unknown>(
+        `/runs/${runId}/minute-settlement/recover`, payload, { guildId }
+    ));
 }
 
 export const RunSelectionSchema = z.object({
@@ -772,6 +808,7 @@ export async function getQuotaStats(
     total_points: number;
     total_quota_points: number;
     total_runs_organized: number;
+    non_exalt_run_minutes: number;
     total_verifications: number;
     total_keys_popped: number;
     dungeons: Array<{ dungeon_key: string; completed: number; organized: number; keys_popped: number }>;
@@ -1181,13 +1218,15 @@ export async function adjustQuotaPoints(
         actor_roles?: string[];
         actor_has_admin_permission?: boolean;
         amount: number;
+        quota_role_id: string;
     }
 ): Promise<{
     success: boolean;
     amount_adjusted: number;
     new_total: number;
+    quota_role_id: string;
 }> {
-    return makeRequest('POST', `/quota/adjust-quota-points/${guildId}/${userId}`, payload);
+    return makeRequest('POST', `/quota/adjust-quota-points/${guildId}/${userId}`, payload, { guildId });
 }
 
 /** Manually adjust regular (raider) points for a user (POST /quota/adjust-points/:guild_id/:user_id) */

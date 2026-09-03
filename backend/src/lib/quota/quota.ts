@@ -13,6 +13,7 @@ import {
     getCanonicalActivityRows,
     summarizeCanonicalActivity,
 } from '../dungeon-activity/stats-service.js';
+import { MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS } from '../runs/minute-quota.js';
 
 const logger = createLogger('Quota');
 
@@ -999,6 +1000,7 @@ export async function getUserQuotaStats(
     total_points: number;
     total_quota_points: number;
     total_runs_organized: number;
+    non_exalt_run_minutes: number;
     total_verifications: number;
     total_keys_popped: number;
     dungeons: Array<{ dungeon_key: string; completed: number; organized: number; keys_popped: number }>;
@@ -1020,6 +1022,29 @@ export async function getUserQuotaStats(
     );
 
     const canonicalActivity = summarizeCanonicalActivity(await getCanonicalActivityRows({ guildId, userId }));
+
+    const nonExaltMinutesRes = await query<{ total: string }>(
+        `SELECT COALESCE(SUM(floor(
+                    (extract(epoch FROM ended_at) - extract(epoch FROM started_at)) / 60
+                )), 0)::text AS total
+         FROM run
+         WHERE guild_id = $1::bigint
+           AND organizer_id = $2::bigint
+           AND status = 'ended'
+           AND finalization_kind = 'completed'
+           AND started_at IS NOT NULL
+           AND ended_at IS NOT NULL
+           AND isfinite(started_at)
+           AND isfinite(ended_at)
+           AND ended_at >= started_at
+           AND (run_kind IN ('realm_clearing', 'multi_non_exalt')
+                OR (run_kind = 'single' AND activity_key = ANY($3::text[])))`,
+        [guildId, userId, MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS]
+    );
+    const nonExaltRunMinutes = Number(nonExaltMinutesRes.rows[0].total);
+    if (!Number.isSafeInteger(nonExaltRunMinutes) || nonExaltRunMinutes < 0) {
+        throw new Error('Non-exalt run minute total is outside the supported range');
+    }
 
     // Get verification count
     const verifRes = await query<{ count: string }>(
@@ -1069,6 +1094,7 @@ export async function getUserQuotaStats(
         total_points: Number(totalPointsRes.rows[0].total),
         total_quota_points: Number(totalQuotaPointsRes.rows[0].total),
         total_runs_organized: canonicalActivity.total_runs_organized,
+        non_exalt_run_minutes: nonExaltRunMinutes,
         total_verifications: Number(verifRes.rows[0].count),
         total_keys_popped: Number(keysRes.rows[0].total),
         dungeons,

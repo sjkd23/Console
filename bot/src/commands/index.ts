@@ -49,6 +49,7 @@ import { modmail } from './moderation/modmail.js';
 import { modmailreply } from './moderation/security/modmailreply.js';
 import { modmailblacklist } from './moderation/officer/modmailblacklist.js';
 import { modmailunblacklist } from './moderation/officer/modmailunblacklist.js';
+import { logminutes } from './moderation/moderator/logminutes.js';
 
 /**
  * Helper to apply both permission checks and rate limiting to a command.
@@ -116,6 +117,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(modmailreply),
     withMiddleware(modmailblacklist),
     withMiddleware(modmailunblacklist),
+    withMiddleware(logminutes),
 ];
 
 export function toJSON() {

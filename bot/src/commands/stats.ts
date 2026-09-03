@@ -14,6 +14,14 @@ import { formatErrorMessage } from '../lib/errors/error-handler.js';
 import { formatPoints } from '../lib/utilities/format-helpers.js';
 import { AGGREGATE_ACTIVITY_LABELS } from '../constants/dungeons/dungeon-taxonomy.js';
 
+export function formatNonExaltRunTime(totalMinutes: number): string {
+    if (totalMinutes < 60) return `${totalMinutes} ${totalMinutes === 1 ? 'minute' : 'minutes'}`;
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const duration = minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+    return `${duration} (${totalMinutes} minutes)`;
+}
+
 /**
  * /stats - View quota statistics for yourself or another member.
  * Shows total points, runs organized, verifications, and per-dungeon breakdown.
@@ -66,6 +74,11 @@ export const stats: SlashCommand = {
             // Add runs organized and verifications
             embed.addFields(
                 { name: 'Runs Organized', value: `${stats.total_runs_organized}`, inline: true },
+                {
+                    name: 'Non-Exalt Run Time',
+                    value: formatNonExaltRunTime(stats.non_exalt_run_minutes),
+                    inline: true,
+                },
                 { name: 'Verifications', value: `${stats.total_verifications}`, inline: true },
                 { name: 'Keys Popped', value: `${stats.total_keys_popped}`, inline: true }
             );

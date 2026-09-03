@@ -17,10 +17,20 @@ vi.mock('../../db/pool.js', () => ({
 import { createRunWithTransaction, startRunWithTransaction, endRunWithTransaction,
     cancelRunWithTransaction, recordKeyPopWithTransaction } from '../services/run-service.js';
 import { getQuotaRoleConfig, upsertQuotaRoleConfig } from '../quota/quota.js';
+import { getUserQuotaStats } from '../quota/quota.js';
+import {
+    cancelOrganizerMinuteSettlement,
+    confirmOrganizerMinuteSettlement,
+    getOrganizerMinuteSettlement,
+    recoverOrganizerMinutes,
+    modifyOrganizerMinuteSettlement,
+} from '../services/organizer-minute-settlement-service.js';
 import { ORGANIZER_MINUTE_QUOTA_SQL, OrganizerMinuteQuotaSchema, resolveMinuteQuotaRole, MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS, isMinuteOrganizerQuotaRun } from './minute-quota.js';
 import { DUNGEONS } from '../../config/raid-config.js';
 import quotaRoutes from '../../routes/raid/quota.js';
 import runsRoutes from '../../routes/raid/runs.js';
+import organizerMinuteSettlementRoutes from '../../routes/raid/organizer-minute-settlements.js';
+import { manuallyResetQuotaPeriod } from '../services/quota-period-service.js';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const integration = describe.runIf(Boolean(connectionString));
@@ -77,11 +87,18 @@ integration('Phase E PostgreSQL lifecycle, configuration, and migration', () => 
                 runsUnchanged: JSON.stringify(runsBefore) === JSON.stringify((await client.query('SELECT * FROM run ORDER BY id')).rows),
                 ledgersUnchanged: JSON.stringify(before) === JSON.stringify(await ledgers(client)),
             };
+            await client.query(readFileSync(resolve(directory, '068_manual_quota_adjustments.sql'), 'utf8'));
+            await client.query(readFileSync(resolve(directory, '069_organizer_minute_settlements.sql'), 'utf8'));
         } finally {
             client.release();
         }
+        app.addHook('onRequest', async request => {
+            const header = request.headers['x-guild-id'];
+            if (typeof header === 'string') request.guildContext = { guildId: header };
+        });
         await app.register(quotaRoutes);
         await app.register(runsRoutes);
+        await app.register(organizerMinuteSettlementRoutes);
     }, 30000);
 
     beforeEach(async () => {
@@ -128,6 +145,17 @@ integration('Phase E PostgreSQL lifecycle, configuration, and migration', () => 
         for (let i = 0; i < count; i++) {
             await recordKeyPopWithTransaction({ runId, guildId, expectedKeyPopCount: i, keyWindowSeconds: 25, organizerRoles: [roleId] });
         }
+    }
+    async function payable(keys = ['REALM_DUNGEON'], minutes = 5, rate = 0.29) {
+        await config(rate);
+        const runId = await create(keys);
+        await start(runId);
+        await database.pool!.query(
+            "UPDATE run SET started_at = statement_timestamp() - $2 * interval '1 minute' WHERE id = $1",
+            [runId, minutes]
+        );
+        const ended = await endRunWithTransaction({ runId, guildId });
+        return { runId, settlement: ended.organizerMinuteSettlement! };
     }
 
     it('adds defaults without changing historical run evidence or either ledger', () => {
@@ -533,5 +561,319 @@ integration('Phase E PostgreSQL lifecycle, configuration, and migration', () => 
         expect(response.json().finalizationKind).toBe('completed');
         expect(response.json().organizerMinuteQuota).toEqual(await basis(runId));
         expect((await database.pool!.query('SELECT * FROM quota_event WHERE subject_id LIKE $1', [`run:${runId}%`])).rowCount).toBe(0);
+    });
+
+    it.each([
+        [['SNAKE_PIT'], 'single'],
+        [['REALM_DUNGEON'], 'realm_clearing'],
+        [['SNAKE_PIT', 'MAGIC_WOODS'], 'multi_non_exalt'],
+    ] as const)('creates one snapshotted pending minute row for payable %j', async (keys, runKind) => {
+        const { runId, settlement } = await payable([...keys], 7, 0.29);
+        expect(settlement).toMatchObject({
+            runId, organizerId, runKind, quotaRoleId: roleId, rate: 0.29,
+            maxMinutes: 7, selectedMinutes: 7, selectedPoints: 2.03,
+            status: 'pending', revision: 0, quotaEventId: null,
+        });
+        await endRunWithTransaction({ runId, guildId });
+        expect((await database.pool!.query('SELECT count(*)::int AS count FROM organizer_minute_settlement WHERE run_id = $1', [runId])).rows[0].count).toBe(1);
+    });
+
+    it.each([
+        ['single exalt', ['NEST']],
+        ['multi exalt', ['NEST', 'FUNGAL_CAVERN']],
+        ['O3', ['ORYX_3']],
+    ] as const)('creates no minute row for %s', async (_label, keys) => {
+        const runId = await create([...keys]);
+        if (keys[0] === 'ORYX_3') {
+            await database.pool!.query("UPDATE run SET screenshot_url = 'https://example.test/proof' WHERE id = $1", [runId]);
+        }
+        await start(runId);
+        const ended = await endRunWithTransaction({ runId, guildId });
+        expect(ended.organizerMinuteSettlement).toBeNull();
+        expect(await getOrganizerMinuteSettlement({ runId, guildId })).toBeNull();
+    });
+
+    it('creates no actionable row for zero duration, zero rate, no role, or cancellation', async () => {
+        const zeroDuration = await create(); await start(zeroDuration);
+        expect((await endRunWithTransaction({ runId: zeroDuration, guildId })).organizerMinuteSettlement).toBeNull();
+
+        await config(0);
+        const zeroRate = await create(); await start(zeroRate);
+        await database.pool!.query("UPDATE run SET started_at = statement_timestamp() - interval '2 minutes' WHERE id = $1", [zeroRate]);
+        expect((await endRunWithTransaction({ runId: zeroRate, guildId })).organizerMinuteSettlement).toBeNull();
+
+        await config(0.1);
+        const noRole = await create(); await start(noRole, [raiderId]);
+        await database.pool!.query("UPDATE run SET started_at = statement_timestamp() - interval '2 minutes' WHERE id = $1", [noRole]);
+        expect((await endRunWithTransaction({ runId: noRole, guildId })).organizerMinuteSettlement).toBeNull();
+
+        const cancelled = await create(); await start(cancelled);
+        await database.pool!.query("UPDATE run SET started_at = statement_timestamp() - interval '2 minutes' WHERE id = $1", [cancelled]);
+        await cancelRunWithTransaction({ runId: cancelled, guildId });
+        expect(await getOrganizerMinuteSettlement({ runId: cancelled, guildId })).toBeNull();
+    });
+
+    it('books the snapshot exactly once at confirmation time without changing activity', async () => {
+        const { runId, settlement } = await payable(['SNAKE_PIT'], 5, 0.29);
+        const activityBefore = await database.pool!.query('SELECT count(*)::int AS count FROM dungeon_activity_event');
+        await config(9);
+        await database.pool!.query('DELETE FROM quota_role_config WHERE guild_id = $1', [guildId]);
+        const confirmed = await confirmOrganizerMinuteSettlement({
+            runId, guildId, actorId: organizerId, expectedRevision: settlement.revision,
+        });
+        expect(confirmed).toMatchObject({ status: 'confirmed', selectedMinutes: 5, selectedPoints: 1.45, rate: 0.29, quotaRoleId: roleId });
+        const repeated = await confirmOrganizerMinuteSettlement({ runId, guildId, actorId: organizerId, expectedRevision: 0 });
+        expect(repeated.quotaEventId).toBe(confirmed.quotaEventId);
+        const events = await database.pool!.query(
+            `SELECT actor_user_id::text, action_type, subject_id, dungeon_key,
+                    points::text, quota_points::text, quota_role_id::text,
+                    created_at >= (SELECT ended_at FROM run WHERE id = $1) AS booked_after_end
+             FROM quota_event WHERE subject_id = $2`,
+            [runId, `run:${runId}:organizer_minutes`]
+        );
+        expect(events.rows).toEqual([{
+            actor_user_id: organizerId,
+            action_type: 'organizer_minutes',
+            subject_id: `run:${runId}:organizer_minutes`,
+            dungeon_key: null,
+            points: '0.00',
+            quota_points: '1.45',
+            quota_role_id: roleId,
+            booked_after_end: true,
+        }]);
+        expect((await database.pool!.query('SELECT count(*)::int AS count FROM dungeon_activity_event')).rows[0].count)
+            .toBe(activityBefore.rows[0].count);
+    });
+
+    it('enforces integer-minute bounds, revisions, terminal states, and terminal cancellation', async () => {
+        const first = await payable(['REALM_DUNGEON'], 6, 0.1);
+        await expect(confirmOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: raiderId,
+            expectedRevision: 0 })).rejects.toMatchObject({ code: 'NOT_ORIGINAL_ORGANIZER' });
+        await expect(modifyOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId,
+            expectedRevision: 0, selectedMinutes: 0 })).rejects.toMatchObject({ code: 'INVALID_MINUTES' });
+        const modified = await modifyOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId,
+            expectedRevision: 0, selectedMinutes: 1 });
+        expect(modified).toMatchObject({ selectedMinutes: 1, selectedPoints: 0.1, revision: 1, status: 'pending' });
+        await expect(confirmOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId,
+            expectedRevision: 0 })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+        const cancelled = await cancelOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId });
+        expect(cancelled.status).toBe('cancelled');
+        expect((await cancelOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId })).status).toBe('cancelled');
+        await expect(confirmOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId,
+            expectedRevision: cancelled.revision })).rejects.toMatchObject({ code: 'SETTLEMENT_CANCELLED' });
+        await expect(recoverOrganizerMinutes({ runId: first.runId, guildId,
+            actorId: organizerId, selectedMinutes: 4 })).rejects.toMatchObject({ code: 'SETTLEMENT_CANCELLED' });
+        await expect(modifyOrganizerMinuteSettlement({ runId: first.runId, guildId, actorId: organizerId,
+            expectedRevision: cancelled.revision, selectedMinutes: 2 })).rejects.toMatchObject({ code: 'SETTLEMENT_TERMINAL' });
+    });
+
+    it('serializes Confirm and organizer recovery races to one accounting event', async () => {
+        const confirmRace = await payable(['REALM_DUNGEON'], 5, 0.1);
+        const confirms = await Promise.all([
+            confirmOrganizerMinuteSettlement({ runId: confirmRace.runId, guildId, actorId: organizerId, expectedRevision: 0 }),
+            confirmOrganizerMinuteSettlement({ runId: confirmRace.runId, guildId, actorId: organizerId, expectedRevision: 0 }),
+        ]);
+        expect(new Set(confirms.map(value => value.quotaEventId)).size).toBe(1);
+
+        const mixedRace = await payable(['SNAKE_PIT'], 5, 0.1);
+        const mixed = await Promise.all([
+            confirmOrganizerMinuteSettlement({ runId: mixedRace.runId, guildId, actorId: organizerId, expectedRevision: 0 }),
+            recoverOrganizerMinutes({ runId: mixedRace.runId, guildId, actorId: organizerId, selectedMinutes: 3 })
+                .then(result => result.settlement),
+        ]);
+        expect(new Set(mixed.map(value => value.quotaEventId)).size).toBe(1);
+
+        const recoveryRace = await payable(['SNAKE_PIT', 'MAGIC_WOODS'], 5, 0.1);
+        const recoveries = await Promise.all([
+            recoverOrganizerMinutes({ runId: recoveryRace.runId, guildId, actorId: organizerId, selectedMinutes: 2 }),
+            recoverOrganizerMinutes({ runId: recoveryRace.runId, guildId, actorId: organizerId, selectedMinutes: 4 }),
+        ]);
+        expect(new Set(recoveries.map(value => value.settlement.quotaEventId)).size).toBe(1);
+        expect(recoveries.filter(value => value.alreadyConfirmed)).toHaveLength(1);
+        for (const runId of [confirmRace.runId, mixedRace.runId, recoveryRace.runId]) {
+            expect((await database.pool!.query("SELECT count(*)::int AS count FROM quota_event WHERE action_type = 'organizer_minutes' AND subject_id = $1", [`run:${runId}:organizer_minutes`])).rows[0].count).toBe(1);
+        }
+    });
+
+    it('shares receipts and event identity across sequential Confirm and organizer recovery calls', async () => {
+        const confirmFirst = await payable(['REALM_DUNGEON'], 5, 0.1);
+        const confirmed = await confirmOrganizerMinuteSettlement({
+            runId: confirmFirst.runId, guildId, actorId: organizerId, expectedRevision: 0,
+        });
+        const recoveredAfterConfirm = await recoverOrganizerMinutes({
+            runId: confirmFirst.runId, guildId, actorId: organizerId, selectedMinutes: 2,
+        });
+        expect(recoveredAfterConfirm.alreadyConfirmed).toBe(true);
+        expect(recoveredAfterConfirm.settlement.quotaEventId).toBe(confirmed.quotaEventId);
+        expect(recoveredAfterConfirm.settlement.selectedMinutes).toBe(confirmed.selectedMinutes);
+
+        const recoveryFirst = await payable(['SNAKE_PIT'], 5, 0.1);
+        const recovered = await recoverOrganizerMinutes({
+            runId: recoveryFirst.runId, guildId, actorId: organizerId, selectedMinutes: 3,
+        });
+        const confirmedAfterRecovery = await confirmOrganizerMinuteSettlement({
+            runId: recoveryFirst.runId, guildId, actorId: organizerId, expectedRevision: 0,
+        });
+        expect(confirmedAfterRecovery.quotaEventId).toBe(recovered.settlement.quotaEventId);
+        expect(confirmedAfterRecovery.selectedMinutes).toBe(3);
+
+        for (const runId of [confirmFirst.runId, recoveryFirst.runId]) {
+            const count = await database.pool!.query(
+                "SELECT count(*)::int AS count FROM quota_event WHERE action_type = 'organizer_minutes' AND subject_id = $1",
+                [`run:${runId}:organizer_minutes`]
+            );
+            expect(count.rows[0].count).toBe(1);
+        }
+    });
+
+    it('serializes terminal and revision races on the settlement row', async () => {
+        const terminal = await payable(['REALM_DUNGEON'], 5, 0.1);
+        const terminalRace = await Promise.allSettled([
+            confirmOrganizerMinuteSettlement({ runId: terminal.runId, guildId, actorId: organizerId, expectedRevision: 0 }),
+            cancelOrganizerMinuteSettlement({ runId: terminal.runId, guildId, actorId: organizerId }),
+        ]);
+        expect(terminalRace.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+        const terminalState = (await getOrganizerMinuteSettlement({ runId: terminal.runId, guildId }))!;
+        expect((await database.pool!.query("SELECT count(*)::int AS count FROM quota_event WHERE action_type = 'organizer_minutes' AND subject_id = $1", [`run:${terminal.runId}:organizer_minutes`])).rows[0].count)
+            .toBe(terminalState.status === 'confirmed' ? 1 : 0);
+
+        const modifyConfirm = await payable(['SNAKE_PIT'], 5, 0.1);
+        const mixed = await Promise.allSettled([
+            modifyOrganizerMinuteSettlement({ runId: modifyConfirm.runId, guildId, actorId: organizerId, expectedRevision: 0, selectedMinutes: 2 }),
+            confirmOrganizerMinuteSettlement({ runId: modifyConfirm.runId, guildId, actorId: organizerId, expectedRevision: 0 }),
+        ]);
+        expect(mixed.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+
+        const modifies = await payable(['SNAKE_PIT', 'MAGIC_WOODS'], 5, 0.1);
+        const modifyRace = await Promise.allSettled([
+            modifyOrganizerMinuteSettlement({ runId: modifies.runId, guildId, actorId: organizerId, expectedRevision: 0, selectedMinutes: 2 }),
+            modifyOrganizerMinuteSettlement({ runId: modifies.runId, guildId, actorId: organizerId, expectedRevision: 0, selectedMinutes: 4 }),
+        ]);
+        expect(modifyRace.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+        expect((await getOrganizerMinuteSettlement({ runId: modifies.runId, guildId }))?.revision).toBe(1);
+    });
+
+    it('coordinates confirmation booking with quota-period finalization on the snapshotted role', async () => {
+        await upsertQuotaRoleConfig(guildId, roleId, { required_points: 1, reset_interval_days: 7 });
+        const { runId } = await payable(['REALM_DUNGEON'], 5, 0.1);
+        const blocker = await database.pool!.connect();
+        await blocker.query('BEGIN');
+        await blocker.query('SELECT 1 FROM quota_role_config WHERE guild_id = $1 AND discord_role_id = $2 FOR UPDATE', [guildId, roleId]);
+        const finalizing = manuallyResetQuotaPeriod(guildId, roleId, [organizerId]);
+        await waitForBlocked(1);
+        const confirming = confirmOrganizerMinuteSettlement({ runId, guildId, actorId: organizerId, expectedRevision: 0 });
+        try {
+            await waitForBlocked(2);
+        } finally {
+            await blocker.query('COMMIT');
+            blocker.release();
+        }
+        await Promise.all([finalizing, confirming]);
+        const coverage = await database.pool!.query(
+            `SELECT period.id::text, period.status,
+                    result.earned_points::text,
+                    event.quota_points::text AS event_points
+             FROM quota_event event
+             JOIN quota_period period
+               ON period.guild_id = event.guild_id
+              AND period.quota_role_id = event.quota_role_id
+              AND event.created_at >= period.starts_at
+              AND event.created_at < period.ends_at
+             LEFT JOIN quota_period_member_result result
+               ON result.period_id = period.id AND result.user_id = event.actor_user_id
+             WHERE event.subject_id = $1`,
+            [`run:${runId}:organizer_minutes`]
+        );
+        expect(coverage.rows).toHaveLength(1);
+        expect(coverage.rows[0].event_points).toBe('0.50');
+        if (coverage.rows[0].status === 'finalized') expect(coverage.rows[0].earned_points).toBe('0.50');
+    });
+
+    it('keeps actual non-exalt time independent from selected, cancelled, and missing payouts', async () => {
+        const baseline = (await getUserQuotaStats(guildId, organizerId)).non_exalt_run_minutes;
+        const snake = await payable(['SNAKE_PIT'], 2, 0.1);
+        await modifyOrganizerMinuteSettlement({ runId: snake.runId, guildId, actorId: organizerId, expectedRevision: 0, selectedMinutes: 1 });
+        await confirmOrganizerMinuteSettlement({ runId: snake.runId, guildId, actorId: organizerId, expectedRevision: 1 });
+        const realm = await payable(['REALM_DUNGEON'], 3, 0.1);
+        await cancelOrganizerMinuteSettlement({ runId: realm.runId, guildId, actorId: organizerId });
+        await payable(['SNAKE_PIT', 'MAGIC_WOODS'], 4, 0.1);
+        const exalt = await create(['NEST']); await start(exalt);
+        await database.pool!.query("UPDATE run SET started_at = statement_timestamp() - interval '8 minutes' WHERE id = $1", [exalt]);
+        await endRunWithTransaction({ runId: exalt, guildId });
+        const cancelledRun = await create(['REALM_DUNGEON']); await start(cancelledRun);
+        await database.pool!.query("UPDATE run SET started_at = statement_timestamp() - interval '9 minutes' WHERE id = $1", [cancelledRun]);
+        await cancelRunWithTransaction({ runId: cancelledRun, guildId });
+        const after = await getUserQuotaStats(guildId, organizerId);
+        expect(after.non_exalt_run_minutes - baseline).toBe(9);
+    });
+
+    it('allows only the persisted original organizer to recover and derives payout data from the run', async () => {
+        const { runId } = await payable(['REALM_DUNGEON'], 5, 0.29);
+        await database.pool!.query('DELETE FROM organizer_minute_settlement WHERE run_id = $1', [runId]);
+        const headers = { 'x-guild-id': guildId };
+        const denied = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`, headers,
+            payload: { actorId: raiderId, selectedMinutes: 3, points: 999, organizerId: raiderId } });
+        expect(denied.statusCode).toBe(403);
+        await database.pool!.query(`INSERT INTO guild_role (guild_id, role_key, discord_role_id)
+            VALUES ($1, 'moderator', $2) ON CONFLICT (guild_id, role_key) DO UPDATE SET discord_role_id = EXCLUDED.discord_role_id`,
+        [guildId, otherRoleId]);
+        const staffDenied = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`, headers,
+            payload: { actorId: raiderId, actorRoles: [otherRoleId], actorHasAdminPermission: true, selectedMinutes: 3 } });
+        expect(staffDenied.statusCode).toBe(403);
+        const allowed = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`, headers,
+            payload: { actorId: organizerId, selectedMinutes: 3, points: 999, organizerId: raiderId } });
+        expect(allowed.statusCode).toBe(200);
+        expect(allowed.json().settlement).toMatchObject({ organizerId, quotaRoleId: roleId, rate: 0.29, selectedMinutes: 3, selectedPoints: 0.87 });
+        expect(allowed.json().alreadyConfirmed).toBe(false);
+        const repeated = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`, headers,
+            payload: { actorId: organizerId, selectedMinutes: 5 } });
+        expect(repeated.statusCode).toBe(200);
+        expect(repeated.json()).toMatchObject({ alreadyConfirmed: true,
+            settlement: { selectedMinutes: 3, selectedPoints: 0.87 } });
+        const invalidConfirmed = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`, headers,
+            payload: { actorId: organizerId, selectedMinutes: 6 } });
+        expect(invalidConfirmed.statusCode).toBe(400);
+        const wrongGuild = await app.inject({ method: 'POST', url: `/runs/${runId}/minute-settlement/recover`,
+            headers: { 'x-guild-id': '999999999999999999' }, payload: { actorId: organizerId, selectedMinutes: 3 } });
+        expect(wrongGuild.statusCode).toBe(404);
+    });
+
+    it('clamps append-only manual corrections within the selected role without activity semantics', async () => {
+        const manualUserId = '100000000000000099';
+        await upsertQuotaRoleConfig(guildId, otherRoleId, {});
+        const activityBefore = (await database.pool!.query('SELECT count(*)::int AS count FROM dungeon_activity_event')).rows[0].count;
+        const addOtherRole = await app.inject({ method: 'POST', url: `/quota/adjust-quota-points/${guildId}/${manualUserId}`,
+            payload: { actor_user_id: raiderId, actor_has_admin_permission: true, amount: 1, quota_role_id: otherRoleId } });
+        expect(addOtherRole.statusCode).toBe(200);
+        const add = await app.inject({ method: 'POST', url: `/quota/adjust-quota-points/${guildId}/${manualUserId}`,
+            payload: { actor_user_id: raiderId, actor_has_admin_permission: true, amount: 0.29, quota_role_id: roleId } });
+        expect(add.statusCode).toBe(200);
+        expect(add.json()).toMatchObject({ amount_adjusted: 0.29, new_total: 0.29, quota_role_id: roleId });
+        const clamped = await app.inject({ method: 'POST', url: `/quota/adjust-quota-points/${guildId}/${manualUserId}`,
+            payload: { actor_user_id: raiderId, actor_has_admin_permission: true, amount: -1, quota_role_id: roleId } });
+        expect(clamped.statusCode).toBe(200);
+        expect(clamped.json()).toMatchObject({ amount_adjusted: -0.29, new_total: 0, quota_role_id: roleId });
+        const repeated = await app.inject({ method: 'POST', url: `/quota/adjust-quota-points/${guildId}/${manualUserId}`,
+            payload: { actor_user_id: raiderId, actor_has_admin_permission: true, amount: 0.1, quota_role_id: roleId } });
+        expect(repeated.statusCode).toBe(200);
+        expect(repeated.json()).toMatchObject({ amount_adjusted: 0.1, new_total: 0.1, quota_role_id: roleId });
+        const event = await database.pool!.query(
+            `SELECT action_type, dungeon_key, points::text, quota_points::text, quota_role_id::text
+             FROM quota_event
+             WHERE action_type = 'manual_quota_adjustment' AND actor_user_id = $1::bigint
+             ORDER BY id`,
+            [manualUserId]
+        );
+        expect(event.rows).toEqual([
+            { action_type: 'manual_quota_adjustment', dungeon_key: null,
+                points: '0.00', quota_points: '1.00', quota_role_id: otherRoleId },
+            { action_type: 'manual_quota_adjustment', dungeon_key: null,
+                points: '0.00', quota_points: '0.29', quota_role_id: roleId },
+            { action_type: 'manual_quota_adjustment', dungeon_key: null,
+                points: '0.00', quota_points: '-0.29', quota_role_id: roleId },
+            { action_type: 'manual_quota_adjustment', dungeon_key: null,
+                points: '0.00', quota_points: '0.10', quota_role_id: roleId },
+        ]);
+        expect((await database.pool!.query('SELECT count(*)::int AS count FROM dungeon_activity_event')).rows[0].count).toBe(activityBefore);
     });
 });

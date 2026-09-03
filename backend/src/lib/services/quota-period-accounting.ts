@@ -4,6 +4,20 @@ export interface CalculatedQuotaResult {
     carryOut: number;
 }
 
+const POINTS_SCALE = 100;
+
+function toHundredths(value: number, label: string): number {
+    if (!Number.isFinite(value)) throw new Error(`${label} must be finite`);
+    if (Number(value.toFixed(2)) !== value) throw new Error(`${label} must have at most two decimal places`);
+    const scaled = Math.round(value * POINTS_SCALE);
+    if (!Number.isSafeInteger(scaled)) throw new Error(`${label} is outside the supported range`);
+    return scaled;
+}
+
+function fromHundredths(value: number): number {
+    return value === 0 ? 0 : value / POINTS_SCALE;
+}
+
 /** Pure period accounting. Carry never becomes earned activity. */
 export function calculateQuotaResult(
     earnedPoints: number,
@@ -11,15 +25,19 @@ export function calculateQuotaResult(
     requiredPoints: number,
     rolloverEnabled: boolean
 ): CalculatedQuotaResult {
-    const effectiveTotal = earnedPoints + carryIn;
-    const carryOut = rolloverEnabled
-        ? Math.min(Math.max(effectiveTotal - requiredPoints, 0), requiredPoints)
+    const earnedHundredths = toHundredths(earnedPoints, 'Earned points');
+    const carryInHundredths = toHundredths(carryIn, 'Carry in');
+    const requiredHundredths = toHundredths(requiredPoints, 'Required points');
+    const effectiveHundredths = earnedHundredths + carryInHundredths;
+    if (!Number.isSafeInteger(effectiveHundredths)) throw new Error('Effective quota total is outside the supported range');
+    const carryOutHundredths = rolloverEnabled
+        ? Math.min(Math.max(effectiveHundredths - requiredHundredths, 0), requiredHundredths)
         : 0;
 
     return {
-        effectiveTotal,
-        metQuota: effectiveTotal >= requiredPoints,
-        carryOut,
+        effectiveTotal: fromHundredths(effectiveHundredths),
+        metQuota: effectiveHundredths >= requiredHundredths,
+        carryOut: fromHundredths(carryOutHundredths),
     };
 }
 

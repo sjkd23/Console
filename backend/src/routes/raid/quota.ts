@@ -1,11 +1,12 @@
 // backend/src/routes/quota.ts
 import { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { DecimalPointsSchema } from '../../lib/quota/decimal-points.js';
 import { query } from '../../db/pool.js';
 import { zSnowflake } from '../../lib/constants/constants.js';
 import { Errors } from '../../lib/errors/errors.js';
-import { hasInternalRole, hasRequiredRoleOrHigher, requireSecurity, canManageGuildRoles } from '../../lib/auth/authorization.js';
+import { hasInternalRole, hasRequiredRoleOrHigher, requireSecurity, requireOfficer, canManageGuildRoles } from '../../lib/auth/authorization.js';
 import { ensureGuildExists, ensureMemberExists, ensureRaiderExists } from '../../lib/database/database-helpers.js';
 import { createLogger } from '../../lib/logging/logger.js';
 import { 
@@ -1255,10 +1256,9 @@ export default async function quotaRoutes(app: FastifyInstance) {
             actor_user_id: zSnowflake,
             actor_roles: z.array(zSnowflake).optional(),
             actor_has_admin_permission: z.boolean().optional(),
-            amount: z.number().refine(
-                (val) => Number.isFinite(val) && Math.round(val * 100) === val * 100,
-                { message: 'Amount must have at most 2 decimal places' }
-            ),
+            amount: z.number().finite().transform(String)
+                .pipe(z.string().regex(/^-?\d{1,8}(?:\.\d{1,2})?$/, 'Amount must have at most 2 decimal places'))
+                .transform(Number).refine(value => value !== 0, 'Amount cannot be zero'),
             quota_role_id: zSnowflake, // REQUIRED: Which quota role these points belong to
         });
 
@@ -1272,16 +1272,10 @@ export default async function quotaRoutes(app: FastifyInstance) {
         const { guild_id, user_id } = p.data;
         const { actor_user_id, actor_roles, actor_has_admin_permission, amount, quota_role_id } = b.data;
 
-        // Authorization: must have admin permission or administrator role
-        let authorized = false;
-        if (actor_has_admin_permission) {
-            authorized = true;
-        } else {
-            authorized = await canManageGuildRoles(guild_id, actor_user_id, actor_roles);
-        }
-
-        if (!authorized) {
-            return Errors.notAuthorized(reply);
+        try {
+            if (!actor_has_admin_permission) await requireOfficer(guild_id, actor_user_id, actor_roles);
+        } catch {
+            return Errors.notAuthorized(reply, 'Officer role or higher is required');
         }
 
         // Ensure guild and member exist
@@ -1294,50 +1288,45 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         try {
-            // Get current total to prevent negative values
-            const currentStats = await query<{ total_quota_points: string }>(
-                `SELECT COALESCE(SUM(quota_points), 0) as total_quota_points
-                 FROM quota_event
-                 WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
-                [guild_id, user_id]
-            );
-
-            const currentTotal = currentStats.rowCount && currentStats.rowCount > 0 
-                ? Number(currentStats.rows[0].total_quota_points)
-                : 0;
-
-            // Calculate new total and adjust if it would be negative
-            const newTotal = currentTotal + amount;
-            const adjustedAmount = newTotal < 0 ? -currentTotal : amount;
-
-            // Insert a quota event with the adjusted amount
-            const result = await query<{ id: number; quota_points: number }>(
-                `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, quota_points, points, quota_role_id)
-                 VALUES ($1::bigint, $2::bigint, 'run_completed', $3, $4, 0, $5::bigint)
-                 RETURNING id, quota_points`,
-                [guild_id, user_id, `manual_adjust:${Date.now()}:${user_id}`, adjustedAmount, quota_role_id]
-            );
-
-            if (!result.rowCount || result.rowCount === 0) {
-                return Errors.internal(reply, 'Failed to adjust quota points');
-            }
-
-            // Get updated total for the user
-            const updatedStats = await query<{ total_quota_points: string }>(
-                `SELECT COALESCE(SUM(quota_points), 0) as total_quota_points
-                 FROM quota_event
-                 WHERE guild_id = $1::bigint AND actor_user_id = $2::bigint`,
-                [guild_id, user_id]
-            );
-
-            const totalQuotaPoints = updatedStats.rowCount && updatedStats.rowCount > 0 
-                ? Number(updatedStats.rows[0].total_quota_points)
-                : 0;
+            const result = await withTransaction(async client => {
+                const role = await client.query(
+                    `SELECT 1 FROM quota_role_config
+                     WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint
+                     FOR SHARE`,
+                    [guild_id, quota_role_id]
+                );
+                if (role.rowCount !== 1) throw new Error('Selected role has no quota configuration');
+                await client.query('SELECT id FROM member WHERE id = $1::bigint FOR UPDATE', [user_id]);
+                const inserted = await client.query<{ quota_points: string }>(
+                    `WITH current_total AS (
+                         SELECT COALESCE(SUM(quota_points), 0) AS total
+                         FROM quota_event
+                         WHERE guild_id = $1::bigint
+                           AND actor_user_id = $2::bigint
+                           AND quota_role_id = $5::bigint
+                     )
+                     INSERT INTO quota_event
+                         (guild_id, actor_user_id, action_type, subject_id, quota_points, points, quota_role_id)
+                     SELECT $1::bigint, $2::bigint, 'manual_quota_adjustment', $3,
+                            GREATEST($4::numeric, -current_total.total), 0, $5::bigint
+                     FROM current_total
+                     RETURNING quota_points::text`,
+                    [guild_id, user_id, `manual_adjust:${randomUUID()}`, amount, quota_role_id]
+                );
+                const total = await client.query<{ total: string }>(
+                    `SELECT COALESCE(SUM(quota_points), 0)::text AS total FROM quota_event
+                     WHERE guild_id = $1::bigint
+                       AND actor_user_id = $2::bigint
+                       AND quota_role_id = $3::bigint`,
+                    [guild_id, user_id, quota_role_id]
+                );
+                return { adjusted: Number(inserted.rows[0].quota_points), total: Number(total.rows[0].total) };
+            });
 
             return reply.send({
                 success: true,
-                amount_adjusted: result.rows[0].quota_points,
-                new_total: totalQuotaPoints,
+                amount_adjusted: result.adjusted,
+                new_total: result.total,
                 quota_role_id,
             });
         } catch (err) {

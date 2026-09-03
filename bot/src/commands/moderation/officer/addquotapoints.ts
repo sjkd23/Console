@@ -24,12 +24,18 @@ export const addquotapoints: SlashCommand = {
     data: new SlashCommandBuilder()
         .setName('addquotapoints')
         .setDescription('Manually adjust quota points for a member (Officer+)')
-        .addIntegerOption(option =>
+        .addNumberOption(option =>
             option
                 .setName('amount')
                 .setDescription(`Amount to add (max: ${CAPS.POINTS_QUOTA}, use negative to subtract)`)
+                .setMinValue(-CAPS.POINTS_QUOTA)
+                .setMaxValue(CAPS.POINTS_QUOTA)
                 .setRequired(true)
         )
+        .addRoleOption(option => option
+            .setName('quota_role')
+            .setDescription('Quota role whose accounting should receive this correction')
+            .setRequired(true))
         .addUserOption(option =>
             option
                 .setName('member')
@@ -42,7 +48,8 @@ export const addquotapoints: SlashCommand = {
         if (!guild) return;
 
         // Get options
-        let amount = interaction.options.getInteger('amount', true);
+        let amount = interaction.options.getNumber('amount', true);
+        const quotaRole = interaction.options.getRole('quota_role', true);
         const targetUser = interaction.options.getUser('member') || interaction.user;
 
         // Validate and cap amount
@@ -83,21 +90,25 @@ export const addquotapoints: SlashCommand = {
                 {
                     actor_user_id: interaction.user.id,
                     actor_roles: actorRoles,
+                    actor_has_admin_permission: invokerMember.permissions.has(PermissionFlagsBits.Administrator),
                     amount,
+                    quota_role_id: quotaRole.id,
                 }
             );
 
             // Build success embed
-            const actionText = amount > 0 ? 'Added' : 'Deducted';
-            const actionEmoji = amount > 0 ? '➕' : '➖';
+            const adjustedAmount = result.amount_adjusted;
+            const actionText = adjustedAmount > 0 ? 'Added' : adjustedAmount < 0 ? 'Deducted' : 'Unchanged';
+            const actionEmoji = adjustedAmount > 0 ? '➕' : adjustedAmount < 0 ? '➖' : 'ℹ️';
             
             const embed = new EmbedBuilder()
                 .setTitle(`${actionEmoji} Quota Points ${actionText}`)
-                .setColor(amount > 0 ? 0x00ff00 : 0xff9900)
+                .setColor(adjustedAmount > 0 ? 0x00ff00 : adjustedAmount < 0 ? 0xff9900 : 0x808080)
                 .addFields(
                     { name: 'Member', value: `<@${targetUser.id}>`, inline: true },
-                    { name: 'Amount Adjusted', value: `${amount > 0 ? '+' : ''}${amount}`, inline: true },
+                    { name: 'Amount Adjusted', value: `${adjustedAmount > 0 ? '+' : ''}${adjustedAmount}`, inline: true },
                     { name: 'New Total', value: `${result.new_total}`, inline: true },
+                    { name: 'Quota Role', value: `<@&${quotaRole.id}>`, inline: true },
                     { name: 'Adjusted By', value: `<@${interaction.user.id}>`, inline: true }
                 )
                 .setTimestamp();
@@ -118,7 +129,7 @@ export const addquotapoints: SlashCommand = {
                 'Manual Adjustment',
                 interaction.user.id,
                 targetUser.id,
-                amount
+                adjustedAmount
             );
             await logCommandExecution(interaction.client, interaction, { success: true });
         } catch (err) {

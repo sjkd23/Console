@@ -19,6 +19,14 @@ import {
 } from '../../../lib/utilities/run-message-helpers.js';
 import { shouldStartRunKeyLogging } from '../../../lib/utilities/run-key-logging.js';
 import { fetchOrganizerStartContext } from '../../../lib/utilities/organizer-start-context.js';
+import {
+    EndRunResponseSchema,
+    type OrganizerMinuteSettlement,
+} from '../../../lib/utilities/organizer-minute-settlement-contract.js';
+import {
+    buildMinuteSettlementMessage,
+    sendMinuteRecordDm,
+} from '../../../lib/ui/organizer-minute-settlement.js';
 
 const logger = createLogger('RunStatus');
 
@@ -88,6 +96,7 @@ async function handleStatusInternal(
     }
     const guildId = btn.guildId!;
     const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
+    let minuteSettlement: OrganizerMinuteSettlement | null = null;
 
     // 1) Update backend status (PATCH for live/ended, DELETE for cancelled) with actorId
     //    Backend will verify that btn.user.id === run.organizer_id OR has organizer role
@@ -98,7 +107,7 @@ async function handleStatusInternal(
                 actorRoles: getMemberRoleIds(member)
             }, { guildId });
         } else {
-            await patchJSON(`/runs/${runId}`, {
+            const response = await patchJSON<unknown>(`/runs/${runId}`, {
                 actorId: btn.user.id,
                 actorRoles: getMemberRoleIds(member),
                 actorRolePositions: member ? getRolePositions(member) : undefined,
@@ -106,6 +115,31 @@ async function handleStatusInternal(
                 organizerRolePositions: startContext?.organizerRolePositions ?? (organizerMember ? getRolePositions(organizerMember) : undefined),
                 status
             }, { guildId });
+            if (status === 'ended') {
+                minuteSettlement = EndRunResponseSchema.parse(response).organizerMinuteSettlement;
+            }
+        }
+
+        if (status === 'ended' && minuteSettlement) {
+            const selfServiceOffered = btn.user.id === run.organizerId;
+            await sendMinuteRecordDm(
+                btn.client,
+                minuteSettlement,
+                selfServiceOffered ? 'organizer_end' : 'staff_end'
+            );
+            if (selfServiceOffered) {
+                try {
+                    await btn.followUp({
+                        ...buildMinuteSettlementMessage(minuteSettlement),
+                        flags: MessageFlags.Ephemeral,
+                    });
+                } catch (error) {
+                    logger.warn('Could not show organizer minute logging prompt after End committed', {
+                        runId, guildId, organizerId: run.organizerId,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                }
+            }
         }
 
         // Auto-update quota panels for the organizer after run ends

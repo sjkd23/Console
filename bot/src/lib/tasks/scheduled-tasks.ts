@@ -27,6 +27,8 @@ import {
     buildRunLifecycleMessageContent,
     buildRunMessageContentEdit,
 } from '../utilities/run-message-helpers.js';
+import { EndRunResponseSchema } from '../utilities/organizer-minute-settlement-contract.js';
+import { sendMinuteRecordDm } from '../ui/organizer-minute-settlement.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -109,13 +111,16 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                 : null;
 
             // End the run via the API
-            await patchJSON(`/runs/${run.id}`, {
+            const endResponse = EndRunResponseSchema.parse(await patchJSON<unknown>(`/runs/${run.id}`, {
                 actorId: client.user!.id, // Bot acts as the ender
                 status: 'ended',
                 isAutoEnd: true, // Flag to bypass authorization and allow any->ended transition
                 organizerRoles: organizerMember ? getMemberRoleIds(organizerMember) : undefined,
                 organizerRolePositions: organizerMember ? getRolePositions(organizerMember) : undefined,
-            }, { guildId: run.guild_id });
+            }, { guildId: run.guild_id }));
+            if (endResponse.organizerMinuteSettlement) {
+                await sendMinuteRecordDm(client, endResponse.organizerMinuteSettlement, 'automatic_end');
+            }
             const normalizedRun = await getRunDetails(run.id, run.guild_id).catch(() => null);
 
             // Get the guild for Discord-side cleanup tasks (optional)

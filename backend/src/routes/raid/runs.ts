@@ -646,6 +646,7 @@ export default async function runsRoutes(app: FastifyInstance) {
                     },
                     'Run ended and quota pipeline processed'
                 );
+                return reply.send({ ok: true, status, organizerMinuteSettlement: endResult.organizerMinuteSettlement });
             } catch (err) {
                 if (err instanceof RunLifecycleError) {
                     return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });

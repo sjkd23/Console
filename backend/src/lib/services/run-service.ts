@@ -30,6 +30,7 @@ import {
 import { normalizeRunId } from '../runs/run-id.js';
 import { isMinuteOrganizerQuotaRun, resolveMinuteQuotaRole } from '../runs/minute-quota.js';
 import type { PoolClient } from 'pg';
+import { ensureOrganizerMinuteSettlement, type OrganizerMinuteSettlement } from './organizer-minute-settlement-service.js';
 
 const logger = createLogger('RunService');
 
@@ -176,6 +177,7 @@ export async function cancelRunWithTransaction(input: { runId: number; guildId: 
 export interface EndRunResult {
     organizerQuotaPoints: number;
     raiderPointsAwarded: number;
+    organizerMinuteSettlement: OrganizerMinuteSettlement | null;
 }
 
 export interface RecordKeyPopInput extends EndRunInput {
@@ -381,7 +383,13 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
     const result = await withTransaction(async (client) => {
         const current = await lockRunForFinalization(client, input.runId, input.guildId);
         // Preserve first terminal outcome, including historical ended rows with unknown outcome.
-        if (current.status === 'ended') return { organizerQuotaPoints: 0, raiderPointsAwarded: 0 };
+        if (current.status === 'ended') {
+            return {
+                organizerQuotaPoints: 0,
+                raiderPointsAwarded: 0,
+                organizerMinuteSettlement: await ensureOrganizerMinuteSettlement(client, input.runId, input.guildId),
+            };
+        }
         if (current.status !== 'live' && !input.isAutoEnd) {
             throw new RunLifecycleError('INVALID_STATUS_TRANSITION', 'Only a live run can be ended manually.');
         }
@@ -462,9 +470,11 @@ export async function endRunWithTransaction(input: EndRunInput): Promise<EndRunR
                 'Awarded points to all joined raiders (no dungeon entries)');
         }
 
+        const organizerMinuteSettlement = await ensureOrganizerMinuteSettlement(client, input.runId, input.guildId);
         return {
             organizerQuotaPoints,
             raiderPointsAwarded,
+            organizerMinuteSettlement,
         };
     });
 

@@ -38,6 +38,7 @@ describe('canonical activity readers', () => {
         mocks.query
             .mockResolvedValueOnce({ rows: [{ total: '125' }], rowCount: 1 })
             .mockResolvedValueOnce({ rows: [{ total: '40' }], rowCount: 1 })
+            .mockResolvedValueOnce({ rows: [{ total: '237' }], rowCount: 1 })
             .mockResolvedValueOnce({ rows: [{ count: '2' }], rowCount: 1 })
             .mockResolvedValueOnce({ rows: [{ total: '4' }], rowCount: 1 })
             .mockResolvedValueOnce({ rows: [{ dungeon_key: 'NEST', count: '4' }], rowCount: 1 });
@@ -51,6 +52,7 @@ describe('canonical activity readers', () => {
             total_points: 125,
             total_quota_points: 40,
             total_runs_organized: 3,
+            non_exalt_run_minutes: 237,
             total_verifications: 2,
             total_keys_popped: 4,
             dungeons: [{ dungeon_key: 'NEST', completed: 7, organized: 3, keys_popped: 4 }],
