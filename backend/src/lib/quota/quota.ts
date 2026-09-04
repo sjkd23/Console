@@ -868,8 +868,7 @@ export async function logQuotaEvent(
         const res = await query<{ id: number; points: number; quota_points: number }>(
             `INSERT INTO quota_event (guild_id, actor_user_id, action_type, subject_id, dungeon_key, points, quota_points, quota_role_id)
              VALUES ($1::bigint, $2::bigint, $3, $4, $5, $6, $7, $8::bigint)
-             ON CONFLICT (guild_id, subject_id) WHERE action_type = 'run_completed' AND subject_id IS NOT NULL
-             DO NOTHING
+             ON CONFLICT DO NOTHING
              RETURNING id, points, quota_points`,
             [guildId, actorUserId, actionType, subjectId || null, dungeonKey || null, effectivePoints, effectiveQuotaPoints, quotaRoleId || null]
         );

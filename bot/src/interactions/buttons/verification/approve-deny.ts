@@ -26,8 +26,7 @@ import {
     logVerificationEvent,
 } from '../../../lib/verification/verification.js';
 import { hasInternalRole } from '../../../lib/permissions/permissions.js';
-import { awardModerationPointsWithUpdate } from '../../../lib/utilities/http.js';
-import { getMemberRoleIds } from '../../../lib/permissions/permissions.js';
+import { awardManualVerificationCredit } from '../../../lib/verification/manual-verification-credit.js';
 import { withButtonLock, getVerificationLockKey } from '../../../lib/utilities/button-mutex.js';
 
 const DENIAL_REASON_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -439,16 +438,10 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
 
         // Award moderation points if configured
         try {
-            const actorRoles = getMemberRoleIds(actorMember);
-            const moderationPointsResult = await awardModerationPointsWithUpdate(
+            const moderationPointsResult = await awardManualVerificationCredit(
                 interaction.client,
-                guildId,
-                interaction.user.id,
-                {
-                    actor_user_id: interaction.user.id,
-                    actor_roles: actorRoles,
-                    command_type: 'verify',
-                }
+                session,
+                actorMember
             );
             
             if (moderationPointsResult.points_awarded > 0) {
@@ -699,6 +692,22 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 ephemeral: true,
             });
 
+            // Handling a manual verification earns the same configured credit for either decision.
+            try {
+                const moderationPointsResult = await awardManualVerificationCredit(
+                    interaction.client,
+                    session,
+                    member
+                );
+
+                if (moderationPointsResult.points_awarded > 0) {
+                    console.log(`[VerificationDeny] Awarded ${moderationPointsResult.points_awarded} moderation points to ${interaction.user.id}`);
+                }
+            } catch (modPointsErr) {
+                // Non-critical error - log but don't fail the denial
+                console.error('[VerificationDeny] Failed to award moderation points:', modPointsErr);
+            }
+
             // Log denial
             await logVerificationEvent(
                 interaction.guild!,
@@ -777,6 +786,22 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                     content: `⏱️ **Timeout**\n\nNo reason provided. <@${userId}> has been notified.`,
                     ephemeral: true,
                 });
+
+                // A timeout denial is still a completed manual verification decision.
+                try {
+                    const moderationPointsResult = await awardManualVerificationCredit(
+                        interaction.client,
+                        session,
+                        member
+                    );
+
+                    if (moderationPointsResult.points_awarded > 0) {
+                        console.log(`[VerificationDeny] Awarded ${moderationPointsResult.points_awarded} moderation points to ${interaction.user.id}`);
+                    }
+                } catch (modPointsErr) {
+                    // Non-critical error - log but don't fail the denial
+                    console.error('[VerificationDeny] Failed to award moderation points:', modPointsErr);
+                }
 
                 // Clean up session immediately after timeout denial
                 try {

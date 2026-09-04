@@ -1511,7 +1511,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
      * Award moderation points to a user for moderation activities
      * This is called automatically when staff perform moderation actions
      * 
-     * Body: { actor_user_id, actor_roles?, actor_role_positions?, command_type? }
+     * Body: { actor_user_id, actor_roles?, actor_role_positions?, command_type?, subject_id? }
      * command_type: 'verify' | 'warn' | 'suspend' | 'modmail_reply' | 'editname' | 'addnote'
      * actor_role_positions: Record<roleId, position> - Discord role positions for failsafe
      * Returns: { points_awarded: number, quota_role_id?: string }
@@ -1527,6 +1527,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             actor_roles: z.array(zSnowflake).optional(),
             actor_role_positions: z.record(z.string(), z.number()).optional(),
             command_type: z.enum(['verify', 'warn', 'suspend', 'modmail_reply', 'editname', 'addnote']).optional(),
+            subject_id: z.string().trim().min(1).max(255).optional(),
         });
 
         const p = Params.safeParse(req.params);
@@ -1537,10 +1538,11 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, user_id } = p.data;
-        const { actor_user_id, actor_roles, actor_role_positions, command_type } = b.data;
+        const { actor_user_id, actor_roles, actor_role_positions, command_type, subject_id } = b.data;
 
         // Default to 'verify' for backward compatibility
         const cmdType = command_type || 'verify';
+        const quotaSubjectId = subject_id || `${cmdType}:${Date.now()}:${user_id}`;
 
         // Authorization: actor must have security role or higher
         try {
@@ -1606,7 +1608,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                     guild_id,
                     user_id,
                     'verify_member',
-                    `${cmdType}:${Date.now()}:${user_id}`,
+                    quotaSubjectId,
                     undefined,
                     0,
                     undefined
@@ -1666,7 +1668,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 guild_id,
                 user_id,
                 'verify_member',
-                `${cmdType}:${Date.now()}:${user_id}`, // Unique subject_id per action
+                quotaSubjectId,
                 undefined, // No dungeon key for moderation actions
                 pointsToAward,
                 winningConfig.discord_role_id // quota_role_id

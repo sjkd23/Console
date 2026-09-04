@@ -9,7 +9,14 @@ ENV CI=true
 # Copy only package files first for better caching
 COPY package*.json ./
 
-# We'll run `npm ci` at container start to keep dev cycle simple
+RUN npm ci --no-audit --no-fund \
+    && sha256sum package.json package-lock.json \
+      | sha256sum \
+      | cut -d ' ' -f 1 > node_modules/.package-manifests.sha256
+
+COPY docker-entrypoint.dev.sh /usr/local/bin/dev-entrypoint
+RUN chmod +x /usr/local/bin/dev-entrypoint
+
 # Copy the rest for typechecking/build tooling (volumes will override /app/src in dev)
 COPY tsconfig.json ./
 COPY src ./src

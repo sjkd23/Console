@@ -1088,6 +1088,7 @@ export async function awardModerationPoints(
         actor_user_id: string;
         actor_roles?: string[];
         command_type?: 'verify' | 'warn' | 'suspend' | 'modmail_reply' | 'editname' | 'addnote';
+        subject_id?: string;
     }
 ): Promise<{
     points_awarded: number;
@@ -1119,6 +1120,7 @@ export async function awardModerationPointsWithUpdate(
         actor_user_id: string;
         actor_roles?: string[];
         command_type?: 'verify' | 'warn' | 'suspend' | 'modmail_reply' | 'editname' | 'addnote';
+        subject_id?: string;
     }
 ): Promise<{
     points_awarded: number;

@@ -34,12 +34,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: >
-      sh -c "
-        npm ci &&
-        npm run migrate &&
-        npm run dev
-      "
+    command: [ "dev-entrypoint", "sh", "-c", "npm run migrate && exec npm run dev" ]
     ports:
       - "4000:4000"
 
@@ -59,11 +54,7 @@ services:
     depends_on:
       backend:
         condition: service_started
-    command: >
-      sh -c "
-        npm ci &&
-        npm run dev
-      "
+    command: [ "dev-entrypoint", "npm", "run", "dev" ]
 
 volumes:
   pgdata:
