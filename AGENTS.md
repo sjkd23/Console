@@ -90,8 +90,8 @@ await query(`SELECT * FROM users WHERE id = ${userId}`); // SQL Injection risk
 
 1.  **Migrations:** `npm run migrate` in `backend/`.
 2.  **Commands:** `npm run register-commands` in `bot/` if you change names/options.
-3.  **Docker:** `docker-compose up` runs everything.
-4.  **Logs:** Check `docker-compose logs -f backend` if the API fails.
+3.  **Docker:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` runs the local development stack. Plain `docker compose up -d` is the production deployment path.
+4.  **Logs:** Check `docker compose logs -f backend` if the API fails.
 
 ---
 

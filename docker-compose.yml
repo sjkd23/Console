@@ -18,45 +18,39 @@ services:
       retries: 15
 
   backend:
+    image: rotmg-raid-backend:production
     build:
       context: ./backend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     container_name: rotmg_backend
     env_file:
       - ./backend/.env
     environment:
       # Overwrite DATABASE_URL inside container to reach the db service
       DATABASE_URL: postgres://postgres:postgres@db:5432/rotmg_raids
+      NODE_ENV: production
       PORT: 4000
-    volumes:
-      - ./backend:/app
-      - backend_node_modules:/app/node_modules
     depends_on:
       db:
         condition: service_healthy
-    command: [ "dev-entrypoint", "sh", "-c", "npm run migrate && exec npm run dev" ]
     ports:
       - "4000:4000"
 
   bot:
+    image: rotmg-raid-bot:production
     build:
       context: ./bot
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     container_name: rotmg_bot
     env_file:
       - ./bot/.env
     environment:
       # Ensure bot reaches backend by service name
       BACKEND_URL: http://backend:4000/v1
-    volumes:
-      - ./bot:/app
-      - bot_node_modules:/app/node_modules
+      NODE_ENV: production
     depends_on:
       backend:
         condition: service_started
-    command: [ "dev-entrypoint", "npm", "run", "dev" ]
 
 volumes:
   pgdata:
-  backend_node_modules:
-  bot_node_modules:

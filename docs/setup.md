@@ -83,9 +83,9 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
 
    > **Critical:** The `BACKEND_API_KEY` must match in both files.
 
-3. **Start services:**
+3. **Start production services:**
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
    This will:
@@ -96,9 +96,22 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
 
 4. **Verify running:**
    ```bash
-   docker-compose logs -f
+   docker compose logs -f
    ```
    Look for "Bot is ready!" and "Fastify listening on..."
+
+### Docker Local Development
+
+The default Compose file is the production deployment. Add the development
+overlay when working locally:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+The overlay adds source bind mounts and named dependency volumes, reconciles
+dependencies only when package manifests change, skips install-time audit and
+funding requests, and runs both services under `tsx watch`.
 
 ### Option B: Manual Setup
 
