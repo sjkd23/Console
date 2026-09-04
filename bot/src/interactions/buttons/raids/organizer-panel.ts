@@ -22,6 +22,30 @@ import { formatKeyLabel, getDungeonEnteredEmojiIdentifier, getDungeonKeyEmoji, g
 import { logButtonClick } from '../../../lib/logging/raid-logger.js';
 import { registerOrganizerPanel, RunOrganizerPanelHandle } from '../../../lib/state/organizer-panel-tracker.js';
 import { isO3RealmClosedStage } from '../../../lib/utilities/run-message-helpers.js';
+import {
+    formatKeyOfferUsers,
+    KeyReactionUsersResponseSchema,
+    type KeyOffersByType,
+} from '../../../lib/utilities/key-quantity.js';
+
+export function buildOrganizerKeyDescription(
+    headcountOffers: KeyOffersByType,
+    raidOffers: KeyOffersByType
+): string {
+    let description = '';
+    const appendOffers = (title: string, offers: KeyOffersByType): void => {
+        if (Object.keys(offers).length === 0) return;
+        description += `\n\n**${title}:**`;
+        for (const [keyType, users] of Object.entries(offers)) {
+            const keyLabel = formatKeyLabel(keyType);
+            const keyEmoji = getEmojiDisplayForKeyType(keyType);
+            description += `\n${keyEmoji} **${keyLabel}**: ${formatKeyOfferUsers(users)}`;
+        }
+    };
+    appendOffers('Headcount Keys', headcountOffers);
+    appendOffers('Raid Keys', raidOffers);
+    return description;
+}
 
 /**
  * Build the organizer panel content (embed and components) for a run.
@@ -51,18 +75,15 @@ export async function buildRunOrganizerPanelContent(
     const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
 
     // Fetch key reaction users
-    let headcountKeys: Record<string, string[]> = {};
-    let raidKeys: Record<string, string[]> = {};
-    const keyUsersResponse = await getJSON<{ 
-        headcountKeys: Record<string, string[]>; 
-        raidKeys: Record<string, string[]>;
-        keyUsers: Record<string, string[]>;
-    }>(
-        `/runs/${runId}/key-reaction-users`,
-        { guildId }
-    ).catch(() => ({ headcountKeys: {}, raidKeys: {}, keyUsers: {} }));
-    headcountKeys = keyUsersResponse.headcountKeys;
-    raidKeys = keyUsersResponse.raidKeys;
+    let headcountOffers: KeyOffersByType = {};
+    let raidOffers: KeyOffersByType = {};
+    const keyUsersResponse = await getJSON<unknown>(`/runs/${runId}/key-reaction-users`, { guildId })
+        .then(value => KeyReactionUsersResponseSchema.parse(value))
+        .catch(() => null);
+    if (keyUsersResponse) {
+        headcountOffers = keyUsersResponse.headcountOffers;
+        raidOffers = keyUsersResponse.raidOffers;
+    }
 
     // Fetch raider count
     let joinCount = 0;
@@ -96,29 +117,9 @@ export async function buildRunOrganizerPanelContent(
     }
     description += 'Manage the raid with the controls below.';
 
-    // Show Headcount Keys
-    if (Object.keys(headcountKeys).length > 0) {
-        description += '\n\n**Headcount Keys:**';
-        for (const [keyType, userIds] of Object.entries(headcountKeys)) {
-            const keyLabel = formatKeyLabel(keyType);
-            const keyEmoji = getEmojiDisplayForKeyType(keyType);
-            const mentions = userIds.map(id => `<@${id}>`).join(', ');
-            description += `\n${keyEmoji} **${keyLabel}** (${userIds.length}): ${mentions}`;
-        }
-    }
+    description += buildOrganizerKeyDescription(headcountOffers, raidOffers);
 
-    // Show Raid Keys
-    if (Object.keys(raidKeys).length > 0) {
-        description += '\n\n**Raid Keys:**';
-        for (const [keyType, userIds] of Object.entries(raidKeys)) {
-            const keyLabel = formatKeyLabel(keyType);
-            const keyEmoji = getEmojiDisplayForKeyType(keyType);
-            const mentions = userIds.map(id => `<@${id}>`).join(', ');
-            description += `\n${keyEmoji} **${keyLabel}** (${userIds.length}): ${mentions}`;
-        }
-    }
-
-    panelEmbed.setDescription(description);
+    panelEmbed.setDescription(description.length <= 4096 ? description : `${description.slice(0, 4093)}...`);
 
     // Build control buttons based on run status
     let controls: ActionRowBuilder<ButtonBuilder>[];

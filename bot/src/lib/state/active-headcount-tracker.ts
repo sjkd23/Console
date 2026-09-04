@@ -251,5 +251,6 @@ export function cleanupStaleHeadcounts(): void {
     }
 }
 
-// Run cleanup every hour
-setInterval(cleanupStaleHeadcounts, 60 * 60 * 1000);
+// Run cleanup every hour without keeping short-lived scripts/tests alive.
+const cleanupInterval = setInterval(cleanupStaleHeadcounts, 60 * 60 * 1000);
+cleanupInterval.unref();

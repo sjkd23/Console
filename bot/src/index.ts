@@ -30,12 +30,16 @@ import { handleRealmScore } from './interactions/buttons/raids/realm-score.js';
 import { handleRealmClosed, handleMiniboss, handleThirdRoom } from './interactions/buttons/raids/o3-progression.js';
 import { handleSetParty, handleSetLocation, handleSetChainAmount, handleSetPartyLocation } from './interactions/buttons/raids/party-location.js';
 import { handleScreenshotButton } from './interactions/buttons/raids/screenshot-submit.js';
-import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
+import { handleKeyReaction, handleRunKeyQuantitySubmit, handleRunKeyWithdrawal } from './interactions/buttons/raids/key-reaction.js';
 import { handlePingRaiders } from './interactions/buttons/raids/ping-raiders.js';
 import { handleLockJoin } from './interactions/buttons/raids/lock-join.js';
 import { handleHeadcountInterest } from './interactions/buttons/raids/headcount-interest.js';
 import { parseHeadcountInterestCustomId } from './lib/utilities/headcount-interest-validation.js';
-import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.js';
+import {
+    handleHeadcountKey,
+    handleHeadcountKeyQuantitySubmit,
+    handleHeadcountKeyWithdrawal,
+} from './interactions/buttons/raids/headcount-key.js';
 import { handleHeadcountOrganizerPanel, handleHeadcountOrganizerPanelConfirm, handleHeadcountOrganizerPanelDeny } from './interactions/buttons/raids/headcount-organizer-panel.js';
 import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.js';
 import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-convert.js';
@@ -103,6 +107,7 @@ import { BackendError } from './lib/utilities/http.js';
 import { applyButtonRateLimit } from './lib/utilities/rate-limit-middleware.js';
 import { safeHandleInteraction } from './lib/utilities/safe-handle-interaction.js';
 import { createLogger } from './lib/logging/logger.js';
+import { parseKeyQuantityAction, resolveKeyQuantityIntent } from './lib/utilities/key-quantity.js';
 
 const logger = createLogger('Bot');
 
@@ -244,6 +249,21 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.isButton()) {
+            if (interaction.customId.startsWith('keyqty:withdraw:')) {
+                if (!await applyButtonRateLimit(interaction, 'run:key:reaction')) return;
+                const action = parseKeyQuantityAction(interaction.customId);
+                const intent = action ? resolveKeyQuantityIntent(action.token) : null;
+                if (!action || action.action !== 'withdraw' || !intent) {
+                    await interaction.reply({ content: '❌ This key withdrawal action expired. Open the key button again.', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                if (intent.context === 'run') {
+                    await safeHandleInteraction(interaction, () => handleRunKeyWithdrawal(interaction, intent), { ephemeral: true });
+                } else {
+                    await safeHandleInteraction(interaction, () => handleHeadcountKeyWithdrawal(interaction, intent), { ephemeral: true });
+                }
+                return;
+            }
             if (interaction.customId.startsWith('minute:')) {
                 const [, minuteAction, runIdText, revisionText] = interaction.customId.split(':');
                 const runId = Number(runIdText);
@@ -677,6 +697,20 @@ client.on('interactionCreate', async (interaction) => {
 
         // Handle modal submissions
         if (interaction.isModalSubmit()) {
+            if (interaction.customId.startsWith('keyqty:submit:')) {
+                const action = parseKeyQuantityAction(interaction.customId);
+                const intent = action ? resolveKeyQuantityIntent(action.token) : null;
+                if (!action || action.action !== 'submit' || !intent) {
+                    await interaction.reply({ content: '❌ This key quantity modal expired. Click the key button again.', flags: MessageFlags.Ephemeral });
+                    return;
+                }
+                if (intent.context === 'run') {
+                    await safeHandleInteraction(interaction, () => handleRunKeyQuantitySubmit(interaction, intent), { ephemeral: true });
+                } else {
+                    await safeHandleInteraction(interaction, () => handleHeadcountKeyQuantitySubmit(interaction, intent), { ephemeral: true });
+                }
+                return;
+            }
             if (interaction.customId.startsWith('minute:submit:')) {
                 const [, , runIdText, revisionText] = interaction.customId.split(':');
                 const runId = Number(runIdText);

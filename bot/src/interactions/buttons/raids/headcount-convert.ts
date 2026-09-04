@@ -27,6 +27,8 @@ import { registerOrganizerPanel } from '../../../lib/state/organizer-panel-track
 import { createRunRole, deleteRunRole } from '../../../lib/utilities/run-role-manager.js';
 import { createLogger } from '../../../lib/logging/logger.js';
 import { buildRunOrganizerPanelContent } from './organizer-panel.js';
+import { updateRunKeysField } from './key-reaction.js';
+import type { KeyOffersByType } from '../../../lib/utilities/key-quantity.js';
 import { buildRunButtons, buildRunEmbed } from '../../../lib/utilities/run-panel-builder.js';
 import { autoJoinOrganizerToRun } from '../../../lib/utilities/auto-join-helpers.js';
 import { resolveDungeonRolePingIds } from '../../../lib/utilities/dungeon-role-pings.js';
@@ -240,12 +242,20 @@ async function convertHeadcountToRun(
         if (role) rolePingIds.push(role.id);
         const channel = guild.channels.cache.get(publicMsg.channelId);
         if (!channel?.isTextBased()) throw new Error('Could not find channel to post run panel.');
+        const transferredByType: KeyOffersByType = {};
+        for (const offer of transferredOffers) {
+            (transferredByType[offer.keyType] ??= []).push({ userId: offer.userId, quantity: offer.quantity });
+        }
+        const runEmbed = updateRunKeysField(
+            buildRunEmbed({ dungeonData: dungeons, runKind: created.runKind, organizerId, status: 'starting' }),
+            transferredByType
+        );
         const newRunMessage = await channel.send({
             content: buildRunMessageContent({
                 selectedDungeons: created.selectedDungeons,
                 additionalPingRoleIds: rolePingIds,
             }),
-            embeds: [buildRunEmbed({ dungeonData: dungeons, runKind: created.runKind, organizerId, status: 'starting' })],
+            embeds: [runEmbed],
             components: buildRunButtons({ runId: created.runId, dungeonData: dungeons, runKind: created.runKind }),
         });
         try {

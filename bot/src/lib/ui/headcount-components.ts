@@ -21,7 +21,7 @@ export function buildHeadcountInterestSummary(
     return dungeonCodes.map(dungeonCode => {
         const dungeonName = dungeonByCode[dungeonCode]?.dungeonName || dungeonCode;
         const interestedUsers = interestsByDungeon.get(dungeonCode) ?? new Set<string>();
-        return `${dungeonName}: **${interestedUsers.size}**`;
+        return `**${dungeonName}:** ${interestedUsers.size} interested`;
     }).join('\n');
 }
 

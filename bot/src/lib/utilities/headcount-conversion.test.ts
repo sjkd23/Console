@@ -75,25 +75,25 @@ describe('headcount to run selection policy', () => {
 
     it('transfers only selected-dungeon offers and deduplicates shared user/mapKey offers', () => {
         const offers = new Map([
-            ['NEST', new Map([['INC', new Set(['user-1'])]])],
-            ['FUNGAL_CAVERN', new Map([['INC', new Set(['user-1', 'user-2'])]])],
-            ['SNAKE_PIT', new Map([['SNAKE_KEY', new Set(['user-3'])]])],
+            ['NEST', new Map([['INC', new Map([['user-1', 2]])]])],
+            ['FUNGAL_CAVERN', new Map([['INC', new Map([['user-1', 5], ['user-2', 3]])]])],
+            ['SNAKE_PIT', new Map([['SNAKE_KEY', new Map([['user-3', 4]])]])],
         ]);
 
         assert.deepEqual(collectSelectedDungeonKeyOffers(offers, ['NEST', 'FUNGAL_CAVERN']), [
-            { userId: 'user-1', keyType: 'INC' },
-            { userId: 'user-2', keyType: 'INC' },
+            { userId: 'user-1', keyType: 'INC', quantity: 5 },
+            { userId: 'user-2', keyType: 'INC', quantity: 3 },
         ]);
     });
 
     it('does not transfer a legacy fake Realm key offer', () => {
         const offers = new Map([
-            ['REALM_DUNGEON', new Map([['REALM_DUNGEON_KEY', new Set(['user-1'])]])],
-            ['SNAKE_PIT', new Map([['SNAKE_KEY', new Set(['user-2'])]])],
+            ['REALM_DUNGEON', new Map([['REALM_DUNGEON_KEY', new Map([['user-1', 1]])]])],
+            ['SNAKE_PIT', new Map([['SNAKE_KEY', new Map([['user-2', 2]])]])],
         ]);
 
         assert.deepEqual(collectSelectedDungeonKeyOffers(offers, ['REALM_DUNGEON', 'SNAKE_PIT']), [
-            { userId: 'user-2', keyType: 'SNAKE_KEY' },
+            { userId: 'user-2', keyType: 'SNAKE_KEY', quantity: 2 },
         ]);
     });
 

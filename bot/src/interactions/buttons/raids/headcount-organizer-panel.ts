@@ -22,6 +22,7 @@ import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js'
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
 import { buildHeadcountInterestSummary } from '../../../lib/ui/headcount-components.js';
+import { formatKeyOfferUsers } from '../../../lib/utilities/key-quantity.js';
 import {
     registerHeadcountPanel,
     refreshRegisteredHeadcountPanel,
@@ -81,7 +82,7 @@ function getOrganizerPanelDungeonCodes(publicMsg: Message): string[] {
  * 
  * @returns Object with embed and components to display
  */
-function buildHeadcountOrganizerPanelContent(
+export function buildHeadcountOrganizerPanelContent(
     publicMsg: Message,
     embed: EmbedBuilder,
     dungeonCodes: string[]
@@ -120,11 +121,11 @@ function buildHeadcountOrganizerPanelContent(
             
             if (dungeonKeyMap && dungeonKeyMap.size > 0) {
                 // Show each key type separately
-                for (const [mapKey, userIds] of dungeonKeyMap.entries()) {
-                    const count = userIds.size;
+                for (const [mapKey, userQuantities] of dungeonKeyMap.entries()) {
+                    const userCount = userQuantities.size;
                     
                     // Only show keys that have a count > 0
-                    if (count > 0) {
+                    if (userCount > 0) {
                         hasAnyKeys = true;
                         const keyEmoji = getEmojiDisplayForKeyType(mapKey);
                         const keyTypeName = formatKeyTypeForDisplay(mapKey);
@@ -133,8 +134,8 @@ function buildHeadcountOrganizerPanelContent(
                         // For single-key dungeons, show "Dungeon"
                         const label = dungeonHasMultipleKeyTypes ? keyTypeName : dungeonName;
                         
-                        const mentions = Array.from(userIds).map(id => `<@${id}>`).join(', ');
-                        description += `\n${keyEmoji} **${label}** (${count}): ${mentions}`;
+                        const users = [...userQuantities].map(([userId, quantity]) => ({ userId, quantity }));
+                        description += `\n${keyEmoji} **${label}**: ${formatKeyOfferUsers(users)}`;
                     }
                 }
             }
@@ -148,7 +149,7 @@ function buildHeadcountOrganizerPanelContent(
 
     description += '\n\n**Actions:**\n• Click **End** to close this headcount\n• Click **Convert to Run** to turn a dungeon into a run panel';
 
-    panelEmbed.setDescription(description);
+    panelEmbed.setDescription(description.length <= 4096 ? description : `${description.slice(0, 4093)}...`);
 
     // Build control buttons
     const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(

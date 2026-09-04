@@ -21,8 +21,53 @@ import { checkEarlyLocNotification } from '../../lib/services/early-loc-service.
 import { RunSelectionError, type RunKind } from '../../lib/runs/run-taxonomy.js';
 import { normalizeRunId } from '../../lib/runs/run-id.js';
 import { ORGANIZER_MINUTE_QUOTA_SQL, OrganizerMinuteQuotaSchema, MINUTE_ORGANIZER_SINGLE_DUNGEON_KEYS } from '../../lib/runs/minute-quota.js';
+import { isKeyTypeForSelectedDungeons, KeyQuantitySchema } from '../../lib/runs/key-offers.js';
 
 const logger = createLogger('Runs');
+
+interface KeyOfferRow {
+    key_type: string;
+    user_id: string;
+    quantity: number;
+    source: 'headcount' | 'run';
+}
+
+interface KeyOfferUser {
+    userId: string;
+    quantity: number;
+}
+
+function groupKeyOffers(rows: readonly KeyOfferRow[]): {
+    keyCounts: Record<string, number>;
+    keyOffers: Record<string, KeyOfferUser[]>;
+} {
+    const keyCounts: Record<string, number> = {};
+    const keyOffers: Record<string, KeyOfferUser[]> = {};
+    for (const row of rows) {
+        keyCounts[row.key_type] = (keyCounts[row.key_type] ?? 0) + row.quantity;
+        (keyOffers[row.key_type] ??= []).push({ userId: row.user_id, quantity: row.quantity });
+    }
+    return { keyCounts, keyOffers };
+}
+
+async function loadKeyOffers(runId: number, source?: 'headcount' | 'run'): Promise<KeyOfferRow[]> {
+    const result = source
+        ? await query<KeyOfferRow>(
+            `SELECT key_type, user_id, quantity, source
+             FROM key_reaction
+             WHERE run_id = $1::bigint AND source = $2
+             ORDER BY key_type, user_id`,
+            [runId, source]
+        )
+        : await query<KeyOfferRow>(
+            `SELECT key_type, user_id, quantity, source
+             FROM key_reaction
+             WHERE run_id = $1::bigint
+             ORDER BY source, key_type, user_id`,
+            [runId]
+        );
+    return result.rows;
+}
 
 /**
  * Enforce guild scoping: if the request has a guild context, ensure the run belongs to that guild.
@@ -1600,21 +1645,13 @@ export default async function runsRoutes(app: FastifyInstance) {
         return reply.send({ ok: true, chainAmount });
     });
 
-    /**
-     * POST /runs/:id/key-reactions
-     * Body: { userId: Snowflake, keyType: string }
-     * Toggles a user's key reaction for a run.
-     * If the user has already reacted with this key, it removes it.
-     * If the user hasn't reacted with this key, it adds it.
-     * Returns { keyCounts: Record<string, number>, added: boolean }.
-     * 
-     * Implementation note: Uses atomic DELETE/INSERT to avoid race conditions.
-     */
+    /** Upsert one current 1-10 quantity for a run/user/key. */
     app.post('/runs/:id/key-reactions', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
         const Body = z.object({
             userId: zSnowflake,
             keyType: z.string().trim().min(1).max(50),
+            quantity: KeyQuantitySchema.optional().default(1),
         });
 
         const p = Params.safeParse(req.params);
@@ -1623,7 +1660,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.validation(reply);
         }
         const runId = Number(p.data.id);
-        const { userId, keyType } = b.data;
+        const { userId, keyType, quantity } = b.data;
 
         // Block edits for closed runs + load guild_id
         const statusRes = await query<{
@@ -1631,8 +1668,11 @@ export default async function runsRoutes(app: FastifyInstance) {
             guild_id: string;
             run_kind: RunKind;
             o3_stage: string | null;
+            selected_dungeon_keys: string[];
         }>(
-            `SELECT status, guild_id, run_kind, o3_stage FROM run WHERE id = $1::bigint`,
+            `SELECT status, guild_id, run_kind, o3_stage,
+                    ARRAY(SELECT dungeon_key FROM run_dungeon_selection WHERE run_id = run.id) AS selected_dungeon_keys
+             FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (statusRes.rowCount === 0) {
@@ -1652,71 +1692,86 @@ export default async function runsRoutes(app: FastifyInstance) {
             return Errors.runClosed(reply);
         }
 
-        // Ensure member exists
-        await ensureMemberExists(userId);
-
-        // Atomically toggle: Try DELETE first, then INSERT if nothing was deleted
-        // This avoids race conditions from separate SELECT + DELETE/INSERT
-        let added = false;
-
-        try {
-            // Step 1: Try to delete the existing key reaction (only from 'run' source)
-            // This prevents deleting headcount keys when toggling run keys
-            const deleteRes = await query(
-                `DELETE FROM key_reaction
-                 WHERE run_id = $1::bigint AND user_id = $2::bigint AND key_type = $3 AND source = 'run'
-                 RETURNING key_type`,
-                [runId, userId, keyType]
-            );
-
-            if (deleteRes.rowCount && deleteRes.rowCount > 0) {
-                // Successfully deleted - user had the key, now removed
-                added = false;
-            } else {
-                // Nothing deleted - user didn't have the key, add it now with 'run' source
-                // Use INSERT with ON CONFLICT DO NOTHING for extra safety (handles concurrent inserts)
-                await query(
-                    `INSERT INTO key_reaction (run_id, user_id, key_type, source)
-                     VALUES ($1::bigint, $2::bigint, $3, 'run')
-                     ON CONFLICT (run_id, user_id, key_type, source) DO NOTHING`,
-                    [runId, userId, keyType]
-                );
-                added = true;
-            }
-        } catch (err: any) {
-            // Handle any unexpected constraint violations gracefully
-            // (Should not happen with ON CONFLICT, but defensive programming)
-            if (err.code === '23505') {
-                // Unique violation - treat as idempotent add (key already exists)
-                logger.warn({ runId, userId, keyType, err: err.message }, 
-                    'Key reaction unique constraint violation - treating as duplicate');
-                added = true;
-            } else {
-                throw err;
-            }
+        if (!isKeyTypeForSelectedDungeons(keyType, run.selected_dungeon_keys)) {
+            return Errors.validation(reply, 'That key is not available for this run');
         }
 
-        // Get updated key counts (only from 'run' source for public display)
-        const keyRes = await query<{ key_type: string; count: string }>(
-            `SELECT key_type, COUNT(*)::text AS count
-             FROM key_reaction
-             WHERE run_id = $1::bigint AND source = 'run'
-             GROUP BY key_type`,
+        await ensureMemberExists(userId);
+        const upsert = await query(
+            `WITH active_run AS (
+                SELECT id
+                FROM run
+                WHERE id = $1::bigint
+                  AND status IN ('open', 'live')
+                  AND NOT (run_kind = 'oryx_3' AND o3_stage IS NOT NULL)
+                FOR UPDATE
+             )
+             INSERT INTO key_reaction (run_id, user_id, key_type, source, quantity)
+             SELECT id, $2::bigint, $3, 'run', $4 FROM active_run
+             ON CONFLICT (run_id, user_id, key_type)
+             DO UPDATE SET quantity = EXCLUDED.quantity, source = EXCLUDED.source
+             RETURNING quantity`,
+            [runId, userId, keyType, quantity]
+        );
+        if (upsert.rowCount === 0) return Errors.runClosed(reply);
+
+        return reply.send({ ...groupKeyOffers(await loadKeyOffers(runId)), quantity, added: true });
+    });
+
+    /** Withdraw the current run/user/key offer. */
+    app.delete('/runs/:id/key-reactions', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({ userId: zSnowflake, keyType: z.string().trim().min(1).max(50) });
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) return Errors.validation(reply);
+        const runId = Number(p.data.id);
+
+        const runRes = await query<{
+            guild_id: string;
+            status: string;
+            run_kind: RunKind;
+            o3_stage: string | null;
+            selected_dungeon_keys: string[];
+        }>(
+            `SELECT guild_id, status, run_kind, o3_stage,
+                    ARRAY(SELECT dungeon_key FROM run_dungeon_selection WHERE run_id = run.id) AS selected_dungeon_keys
+             FROM run WHERE id = $1::bigint`,
             [runId]
         );
-
-        const keyCounts: Record<string, number> = {};
-        for (const row of keyRes.rows) {
-            keyCounts[row.key_type] = Number(row.count);
+        if (runRes.rowCount === 0) return Errors.runNotFound(reply, runId);
+        const run = runRes.rows[0];
+        if (!enforceGuildScope(req, reply, run, runId)) return;
+        if (!['open', 'live'].includes(run.status) || (run.run_kind === 'oryx_3' && run.o3_stage !== null)) {
+            return Errors.runClosed(reply);
+        }
+        if (!isKeyTypeForSelectedDungeons(b.data.keyType, run.selected_dungeon_keys)) {
+            return Errors.validation(reply, 'That key is not available for this run');
         }
 
-        return reply.send({ keyCounts, added });
+        const removed = await query(
+            `WITH active_run AS (
+                SELECT id
+                FROM run
+                WHERE id = $1::bigint
+                  AND status IN ('open', 'live')
+                  AND NOT (run_kind = 'oryx_3' AND o3_stage IS NOT NULL)
+                FOR UPDATE
+             )
+             DELETE FROM key_reaction reaction
+             USING active_run
+             WHERE reaction.run_id = active_run.id
+               AND reaction.user_id = $2::bigint
+               AND reaction.key_type = $3
+             RETURNING reaction.key_type`,
+            [runId, b.data.userId, b.data.keyType]
+        );
+        return reply.send({ ...groupKeyOffers(await loadKeyOffers(runId)), removed: (removed.rowCount ?? 0) > 0 });
     });
 
     /**
      * GET /runs/:id/key-reactions
-     * Get key counts for a run.
-     * Returns { keyCounts: Record<string, number> }.
+     * Get total quantities and individual offers for a run.
      */
     app.get('/runs/:id/key-reactions', async (req, reply) => {
         const Params = z.object({ id: z.string().regex(/^\d+$/) });
@@ -1738,27 +1793,13 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        // Get key counts (only from 'run' source for public display)
-        const keyRes = await query<{ key_type: string; count: string }>(
-            `SELECT key_type, COUNT(*)::text AS count
-             FROM key_reaction
-             WHERE run_id = $1::bigint AND source = 'run'
-             GROUP BY key_type`,
-            [runId]
-        );
-
-        const keyCounts: Record<string, number> = {};
-        for (const row of keyRes.rows) {
-            keyCounts[row.key_type] = Number(row.count);
-        }
-
-        return reply.send({ keyCounts });
+        return reply.send(groupKeyOffers(await loadKeyOffers(runId)));
     });
 
     /**
      * POST /runs/:id/keys/bulk
      * Bulk import key reactions (used when converting headcount to run).
-     * Body: { keys: Array<{ userId: string, keyType: string }>, source?: 'headcount' | 'run' }
+     * Body: { keys: Array<{ userId: string, keyType: string, quantity?: number }>, source?: 'headcount' | 'run' }
      * Returns: { imported: number }
      */
     app.post('/runs/:id/keys/bulk', async (req, reply) => {
@@ -1766,7 +1807,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         const Body = z.object({
             keys: z.array(z.object({
                 userId: zSnowflake,
-                keyType: z.string()
+                keyType: z.string().trim().min(1).max(50),
+                quantity: KeyQuantitySchema.optional().default(1),
             })),
             source: z.enum(['headcount', 'run']).optional().default('headcount')
         });
@@ -1782,8 +1824,15 @@ export default async function runsRoutes(app: FastifyInstance) {
         const { keys, source } = b.data;
 
         // Load run to check guild_id and authorization
-        const runRes = await query<{ guild_id: string; organizer_id: string; status: string }>(
-            `SELECT guild_id, organizer_id, status FROM run WHERE id = $1::bigint`,
+        const runRes = await query<{
+            guild_id: string;
+            organizer_id: string;
+            status: string;
+            selected_dungeon_keys: string[];
+        }>(
+            `SELECT guild_id, organizer_id, status,
+                    ARRAY(SELECT dungeon_key FROM run_dungeon_selection WHERE run_id = run.id) AS selected_dungeon_keys
+             FROM run WHERE id = $1::bigint`,
             [runId]
         );
         if (runRes.rowCount === 0) {
@@ -1804,6 +1853,10 @@ export default async function runsRoutes(app: FastifyInstance) {
             });
         }
 
+        if (keys.some(key => !isKeyTypeForSelectedDungeons(key.keyType, run.selected_dungeon_keys))) {
+            return Errors.validation(reply, 'One or more keys are not available for this run');
+        }
+
         // Ensure all user members exist
         for (const key of keys) {
             await ensureMemberExists(key.userId);
@@ -1814,11 +1867,12 @@ export default async function runsRoutes(app: FastifyInstance) {
         for (const key of keys) {
             try {
                 const insertRes = await query(
-                    `INSERT INTO key_reaction (run_id, user_id, key_type, source)
-                     VALUES ($1::bigint, $2::bigint, $3, $4)
-                     ON CONFLICT (run_id, user_id, key_type, source) DO NOTHING
+                    `INSERT INTO key_reaction (run_id, user_id, key_type, source, quantity)
+                     VALUES ($1::bigint, $2::bigint, $3, $4, $5)
+                     ON CONFLICT (run_id, user_id, key_type)
+                     DO UPDATE SET quantity = EXCLUDED.quantity, source = EXCLUDED.source
                      RETURNING key_type`,
-                    [runId, key.userId, key.keyType, source]
+                    [runId, key.userId, key.keyType, source, key.quantity]
                 );
                 
                 if (insertRes.rowCount && insertRes.rowCount > 0) {
@@ -1843,7 +1897,8 @@ export default async function runsRoutes(app: FastifyInstance) {
      * Returns { 
      *   headcountKeys: Record<string, string[]>,
      *   raidKeys: Record<string, string[]>,
-     *   keyUsers: Record<string, string[]> // Legacy combined view
+     *   keyUsers: Record<string, string[]> // Legacy combined view,
+     *   headcountOffers/raidOffers: Record<string, Array<{ userId, quantity }>>
      * }
      */
     app.get('/runs/:id/key-reaction-users', async (req, reply) => {
@@ -1866,21 +1921,16 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Enforce guild scoping
         if (!enforceGuildScope(req, reply, run, runId)) return;
 
-        // Get all key reactions with user IDs and source
-        const keyRes = await query<{ key_type: string; user_id: string; source: string }>(
-            `SELECT key_type, user_id, source
-             FROM key_reaction
-             WHERE run_id = $1::bigint
-             ORDER BY source, key_type, user_id`,
-            [runId]
-        );
+        const rows = await loadKeyOffers(runId);
 
         // Group users by key type and source
         const headcountKeys: Record<string, string[]> = {};
         const raidKeys: Record<string, string[]> = {};
-        const keyUsers: Record<string, string[]> = {}; // Legacy combined view
+        const keyUsers: Record<string, string[]> = {};
+        const headcountOffers: Record<string, KeyOfferUser[]> = {};
+        const raidOffers: Record<string, KeyOfferUser[]> = {};
         
-        for (const row of keyRes.rows) {
+        for (const row of rows) {
             // Add to legacy combined view
             if (!keyUsers[row.key_type]) {
                 keyUsers[row.key_type] = [];
@@ -1893,15 +1943,17 @@ export default async function runsRoutes(app: FastifyInstance) {
                     headcountKeys[row.key_type] = [];
                 }
                 headcountKeys[row.key_type].push(row.user_id);
+                (headcountOffers[row.key_type] ??= []).push({ userId: row.user_id, quantity: row.quantity });
             } else {
                 if (!raidKeys[row.key_type]) {
                     raidKeys[row.key_type] = [];
                 }
                 raidKeys[row.key_type].push(row.user_id);
+                (raidOffers[row.key_type] ??= []).push({ userId: row.user_id, quantity: row.quantity });
             }
         }
 
-        return reply.send({ headcountKeys, raidKeys, keyUsers });
+        return reply.send({ headcountKeys, raidKeys, keyUsers, headcountOffers, raidOffers });
     });
 
     /**
@@ -1938,8 +1990,8 @@ export default async function runsRoutes(app: FastifyInstance) {
         const organizerIgn = (organizerRes.rowCount && organizerRes.rowCount > 0) ? organizerRes.rows[0].ign : null;
 
         // Get all key reactions from 'run' source (not headcount keys)
-        const keyRes = await query<{ user_id: string; key_type: string }>(
-            `SELECT user_id, key_type
+        const keyRes = await query<{ user_id: string; key_type: string; quantity: number }>(
+            `SELECT user_id, key_type, quantity
              FROM key_reaction
              WHERE run_id = $1::bigint AND source = 'run'
              ORDER BY user_id, key_type`,
@@ -1948,7 +2000,8 @@ export default async function runsRoutes(app: FastifyInstance) {
 
         const keyReactors = keyRes.rows.map(row => ({
             user_id: row.user_id,
-            key_type: row.key_type
+            key_type: row.key_type,
+            quantity: row.quantity,
         }));
 
         return reply.send({ keyReactors, organizerIgn });

@@ -11,6 +11,7 @@ export type HeadcountConversionEndReason = 'confirmed' | 'cancelled' | 'timeout'
 export interface TransferredKeyOffer {
     userId: string;
     keyType: string;
+    quantity: number;
 }
 
 export interface HeadcountConversionFreshness {
@@ -135,16 +136,18 @@ export function getHeadcountConversionEndState(reason: HeadcountConversionEndRea
 }
 
 export function collectSelectedDungeonKeyOffers(
-    keyOffers: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>,
+    keyOffers: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<string, number>>>,
     selectedDungeonCodes: readonly string[]
 ): TransferredKeyOffer[] {
     const uniqueOffers = new Map<string, TransferredKeyOffer>();
     for (const dungeonCode of selectedDungeonCodes) {
         // Realm Clearing has no physical key, including in legacy headcount state.
         if (isRealmClearingDungeon(dungeonCode)) continue;
-        for (const [mapKey, userIds] of keyOffers.get(dungeonCode) ?? []) {
-            for (const userId of userIds) {
-                uniqueOffers.set(`${userId}:${mapKey}`, { userId, keyType: mapKey });
+        for (const [mapKey, userQuantities] of keyOffers.get(dungeonCode) ?? []) {
+            for (const [userId, quantity] of userQuantities) {
+                // Shared keys can appear under multiple selected dungeons. One current
+                // context/user/key quantity is transferred, with the later occurrence winning.
+                uniqueOffers.set(`${userId}:${mapKey}`, { userId, keyType: mapKey, quantity });
             }
         }
     }
