@@ -30,8 +30,9 @@ type RoleKey = z.infer<typeof zRoleKey>;
 /**
  * Internal channel keys (must match channel_catalog entries)
  */
-const CHANNEL_KEYS = [
+export const CHANNEL_KEYS = [
     'raid',
+    'active_runs',
     'veri_log',
     'manual_verification',
     'getverified',

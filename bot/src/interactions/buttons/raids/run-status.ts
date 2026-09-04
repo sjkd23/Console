@@ -26,6 +26,7 @@ import {
     buildMinuteSettlementMessage,
     sendMinuteRecordDm,
 } from '../../../lib/ui/organizer-minute-settlement.js';
+import { syncActiveRunsMirror } from '../../../lib/utilities/active-runs-mirror.js';
 
 const logger = createLogger('RunStatus');
 
@@ -258,6 +259,8 @@ async function handleStatusInternal(
         await btn.editReply({ content: `Error: ${msg}`, components: [] });
         return;
     }
+
+    await syncActiveRunsMirror(btn.client, guildId, runId);
 
     // 2) Find the public run message (channelId + postMessageId from backend)
     if (!run.channelId || !run.postMessageId) {

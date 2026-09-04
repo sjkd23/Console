@@ -42,6 +42,7 @@ import {
     retireConvertedHeadcountMessage,
     validateHeadcountConversionFreshness,
 } from '../../../lib/utilities/headcount-conversion.js';
+import { syncActiveRunsMirror } from '../../../lib/utilities/active-runs-mirror.js';
 
 const logger = createLogger('HeadcountConvert');
 
@@ -264,6 +265,7 @@ async function convertHeadcountToRun(
             await newRunMessage.delete().catch(() => undefined);
             throw error;
         }
+        await syncActiveRunsMirror(interaction.client, guildId, created.runId);
         published = true;
 
         const retirement = await retireConvertedHeadcountMessage(currentPublicMsg);

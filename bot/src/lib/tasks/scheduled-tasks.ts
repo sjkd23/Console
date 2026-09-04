@@ -29,6 +29,7 @@ import {
 } from '../utilities/run-message-helpers.js';
 import { EndRunResponseSchema } from '../utilities/organizer-minute-settlement-contract.js';
 import { sendMinuteRecordDm } from '../ui/organizer-minute-settlement.js';
+import { reconcileAllActiveRuns, syncActiveRunsMirror } from '../utilities/active-runs-mirror.js';
 
 const logger = createLogger('ScheduledTasks');
 
@@ -122,6 +123,7 @@ async function checkExpiredRuns(client: Client): Promise<void> {
                 await sendMinuteRecordDm(client, endResponse.organizerMinuteSettlement, 'automatic_end');
             }
             const normalizedRun = await getRunDetails(run.id, run.guild_id).catch(() => null);
+            await syncActiveRunsMirror(client, run.guild_id, run.id);
 
             // Get the guild for Discord-side cleanup tasks (optional)
             if (!guild) {
@@ -810,6 +812,11 @@ export function startScheduledTasks(client: Client): () => void {
             name: 'Expired Runs',
             intervalMinutes: 5,
             handler: checkExpiredRuns
+        },
+        {
+            name: 'Active Runs Mirrors',
+            intervalMinutes: 5,
+            handler: reconcileAllActiveRuns
         },
         {
             name: 'Expired Headcounts',

@@ -9,6 +9,7 @@ import {
     isO3RealmClosedStage,
 } from './run-message-helpers.js';
 import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
+import { syncActiveRunsMirror } from './active-runs-mirror.js';
 
 const logger = createLogger('RunPublicPanelUpdater');
 
@@ -97,6 +98,7 @@ export async function updateRunPublicPanelContent(
 ): Promise<void> {
     try {
         const run = await getRunDetails(runId, guildId);
+        await syncActiveRunsMirror(client, guildId, runId);
 
         if (run.status === 'ended') {
             return;

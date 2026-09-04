@@ -48,6 +48,7 @@ let statusLogCalls = 0;
 let threadEndTimeCalls = 0;
 let clearedPanelCalls = 0;
 let reactionCleanupCalls = 0;
+let activeMirrorSyncCalls = 0;
 
 class TestBackendError extends Error {
     code?: string;
@@ -153,6 +154,10 @@ mock.module('../../../lib/utilities/run-panel-builder.js', {
     namedExports: { transitionRunEmbed: () => ({ title: 'Run Ended' }) },
 });
 
+mock.module('../../../lib/utilities/active-runs-mirror.js', {
+    namedExports: { syncActiveRunsMirror: async () => { activeMirrorSyncCalls += 1; } },
+});
+
 mock.module('../../../lib/utilities/dungeon-role-pings.js', {
     namedExports: { resolveDungeonRolePingIds: async () => [] },
 });
@@ -231,6 +236,7 @@ function resetCaptures(): void {
     threadEndTimeCalls = 0;
     clearedPanelCalls = 0;
     reactionCleanupCalls = 0;
+    activeMirrorSyncCalls = 0;
 }
 
 function createEndInteraction() {
@@ -306,6 +312,7 @@ describe('normal run End interaction', () => {
             assert.equal(threadEndTimeCalls, 1);
             assert.equal(clearedPanelCalls, 1);
             assert.equal(reactionCleanupCalls, 1);
+            assert.equal(activeMirrorSyncCalls, 1);
             assert.equal(editReplies.length, 1);
             assertNoKeyLoggingPayload([...editReplies, ...followUps, ...publicEdits]);
             const closurePayload = JSON.stringify(editReplies[0]);

@@ -221,6 +221,8 @@ export const RunDetailsSchema = z.object({
     id: z.number().int().positive(),
     channelId: z.string().nullable(),
     postMessageId: z.string().nullable(),
+    activeRunsChannelId: z.string().nullable().default(null),
+    activeRunsMessageId: z.string().nullable().default(null),
     dungeonKey: z.string().min(1),
     dungeonLabel: z.string().min(1),
     runKind: z.enum(RUN_KINDS),
@@ -259,6 +261,30 @@ export function getRunDisplayLabel(
 export async function getRunDetails(runId: number | string, guildId?: string): Promise<RunDetails> {
     const response = await getJSON<unknown>(`/runs/${runId}`, guildId ? { guildId } : undefined);
     return RunDetailsSchema.parse(response);
+}
+
+export async function setActiveRunsMessage(
+    runId: number | string,
+    guildId: string,
+    message: { channelId: string; messageId: string } | null
+): Promise<{ ok: true }> {
+    const response = await postJSON<unknown>(`/runs/${runId}/active-runs-message`, {
+        channelId: message?.channelId ?? null,
+        messageId: message?.messageId ?? null,
+    }, { guildId });
+    return z.object({ ok: z.literal(true) }).parse(response);
+}
+
+export async function getActiveRunsSync(guildId?: string): Promise<{
+    runs: Array<{ id: number; guildId: string }>;
+}> {
+    const response = await getJSON<unknown>('/runs/active-runs-sync', guildId ? { guildId } : undefined);
+    return z.object({
+        runs: z.array(z.object({
+            id: z.number().int().positive(),
+            guildId: z.string().min(1),
+        })),
+    }).parse(response);
 }
 
 const CreateRunResponseSchema = z.object({

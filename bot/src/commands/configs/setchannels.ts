@@ -12,9 +12,11 @@ import type { SlashCommand } from '../_types.js';
 import { setGuildChannels, BackendError } from '../../lib/utilities/http.js';
 import { hasInternalRole, getMemberRoleIds } from '../../lib/permissions/permissions.js';
 import { logCommandExecution, logConfigChange } from '../../lib/logging/bot-logger.js';
+import { reconcileGuildActiveRuns } from '../../lib/utilities/active-runs-mirror.js';
 
-const CHANNEL_OPTIONS = [
+export const CHANNEL_OPTIONS = [
     { key: 'raid', label: 'Raid', description: 'Main channel for raid announcements and coordination' },
+    { key: 'active_runs', label: 'Active Runs', description: 'Clean list of Starting Soon and LIVE raids' },
     { key: 'veri_log', label: 'Verification Log', description: 'Log channel for verification events' },
     { key: 'manual_verification', label: 'Manual Verification', description: 'Channel for manual verification requests' },
     { key: 'getverified', label: 'Get Verified', description: 'Channel where users initiate verification' },
@@ -37,6 +39,7 @@ export const setchannels: SlashCommand = {
         .setName('setchannels')
         .setDescription('Configure internal channel mappings for this server (Administrator)')
         .addChannelOption(o => o.setName('raid').setDescription('Raid channel').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption(o => o.setName('active_runs').setDescription('Active Runs channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('veri_log').setDescription('Verification log channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('manual_verification').setDescription('Manual verification channel').addChannelTypes(ChannelType.GuildText))
         .addChannelOption(o => o.setName('getverified').setDescription('Get verified channel').addChannelTypes(ChannelType.GuildText))
@@ -141,6 +144,9 @@ export const setchannels: SlashCommand = {
                 }
                 await logConfigChange(interaction.client, interaction.guildId!, 'Channel Mappings', interaction.user.id, changes);
                 await logCommandExecution(interaction.client, interaction, { success: true });
+                if (Object.hasOwn(updates, 'active_runs')) {
+                    await reconcileGuildActiveRuns(interaction.client, interaction.guildId!);
+                }
             } catch (err) {
                 let msg = '❌ Failed to update channels. Please try again later.';
                 if (err instanceof BackendError) {

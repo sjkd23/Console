@@ -95,6 +95,8 @@ describe('run ID HTTP contract', () => {
                 guild_id: guildId,
                 channel_id: channelId,
                 post_message_id: null,
+                active_runs_channel_id: '100000000000000005',
+                active_runs_message_id: '100000000000000006',
                 dungeon_key: 'ICE_CITADEL',
                 dungeon_label: 'Ice Citadel',
                 run_kind: 'single',
@@ -132,8 +134,76 @@ describe('run ID HTTP contract', () => {
         });
 
         expect(response.statusCode).toBe(200);
-        expect(response.json()).toMatchObject({ id: 675 });
+        expect(response.json()).toMatchObject({
+            id: 675,
+            activeRunsChannelId: '100000000000000005',
+            activeRunsMessageId: '100000000000000006',
+        });
         expect(typeof response.json().id).toBe('number');
+    });
+
+    it('persists the Active Runs mirror channel and message IDs', async () => {
+        testState.query
+            .mockResolvedValueOnce({ rowCount: 1, rows: [{ guild_id: guildId }] })
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+        const response = await app.inject({
+            method: 'POST',
+            url: '/runs/675/active-runs-message',
+            payload: {
+                channelId: '100000000000000005',
+                messageId: '100000000000000006',
+            },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ ok: true });
+        expect(testState.query).toHaveBeenLastCalledWith(
+            expect.stringContaining('active_runs_message_id = $3::bigint'),
+            [675, '100000000000000005', '100000000000000006']
+        );
+    });
+
+    it('clears stale Active Runs mirror state with paired null values', async () => {
+        testState.query
+            .mockResolvedValueOnce({ rowCount: 1, rows: [{ guild_id: guildId }] })
+            .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+        const response = await app.inject({
+            method: 'POST',
+            url: '/runs/675/active-runs-message',
+            payload: { channelId: null, messageId: null },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(testState.query).toHaveBeenLastCalledWith(
+            expect.stringContaining('active_runs_channel_id = $2::bigint'),
+            [675, null, null]
+        );
+    });
+
+    it('lists active runs and terminal runs that still have mirror state for recovery', async () => {
+        testState.query.mockResolvedValueOnce({
+            rowCount: 2,
+            rows: [
+                { id: '680', guild_id: guildId },
+                { id: '681', guild_id: guildId },
+            ],
+        });
+
+        const response = await app.inject({ method: 'GET', url: '/runs/active-runs-sync' });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({
+            runs: [
+                { id: 680, guildId },
+                { id: 681, guildId },
+            ],
+        });
+        expect(testState.query).toHaveBeenCalledWith(
+            expect.stringContaining("status IN ('open', 'live')"),
+            [guildId]
+        );
     });
 
     it('normalizes run IDs in active and expired run list responses', async () => {

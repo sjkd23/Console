@@ -11,6 +11,7 @@ import { addRunReactions } from './run-reactions.js';
 import { sendEarlyLocNotification } from './early-loc-notifier.js';
 import { logRaidCreation } from '../logging/raid-logger.js';
 import { createLogger } from '../logging/logger.js';
+import { syncActiveRunsMirror } from './active-runs-mirror.js';
 
 const logger = createLogger('RunPublication');
 
@@ -64,6 +65,7 @@ export async function publishCreatedRun(options: {
         await sent.delete().catch(() => undefined);
         throw error;
     }
+    await syncActiveRunsMirror(options.guild.client, options.guild.id, options.created.runId);
     return sent;
 }
 

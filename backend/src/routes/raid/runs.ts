@@ -226,6 +226,41 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * GET /runs/active-runs-sync
+     * Returns active runs plus any terminal runs that still have a persisted mirror.
+     * The bot uses this to reconcile mirrors on startup and after channel changes.
+     */
+    app.get('/runs/active-runs-sync', async (req, reply) => {
+        const callerGuildId = req.guildContext?.guildId;
+        const values: string[] = [];
+        const guildFilter = callerGuildId ? 'AND guild_id = $1::bigint' : '';
+        if (callerGuildId) values.push(callerGuildId);
+
+        const res = await query<{
+            id: string | number;
+            guild_id: string;
+        }>(
+            `SELECT id, guild_id
+             FROM run
+             WHERE (
+                    status IN ('open', 'live')
+                    OR active_runs_channel_id IS NOT NULL
+                    OR active_runs_message_id IS NOT NULL
+             )
+             ${guildFilter}
+             ORDER BY created_at ASC`,
+            values
+        );
+
+        return reply.send({
+            runs: res.rows.map(run => ({
+                id: normalizeRunId(run.id),
+                guildId: run.guild_id,
+            })),
+        });
+    });
+
+    /**
      * POST /runs
      * Create a new run record (status=open) and upsert guild/member.
      */
@@ -794,6 +829,40 @@ export default async function runsRoutes(app: FastifyInstance) {
         return reply.send({ ok: true });
     });
 
+    /** Persist or clear the Discord message used by the configured Active Runs channel. */
+    app.post('/runs/:id/active-runs-message', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({
+            channelId: zSnowflake.nullable(),
+            messageId: zSnowflake.nullable(),
+        }).refine(
+            value => (value.channelId === null) === (value.messageId === null),
+            'channelId and messageId must both be set or both be null'
+        );
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+        const current = await query<{ guild_id: string }>(
+            `SELECT guild_id FROM run WHERE id = $1::bigint`,
+            [runId]
+        );
+        if (current.rowCount !== 1) return Errors.runNotFound(reply, runId);
+        if (!enforceGuildScope(req, reply, current.rows[0], runId)) return;
+
+        await query(
+            `UPDATE run
+             SET active_runs_channel_id = $2::bigint,
+                 active_runs_message_id = $3::bigint
+             WHERE id = $1::bigint`,
+            [runId, b.data.channelId, b.data.messageId]
+        );
+
+        return reply.send({ ok: true });
+    });
+
     /**
      * POST /runs/:id/ping-message
      * Update the ping message id for a run (for tracking the latest ping to delete it when sending a new one).
@@ -969,6 +1038,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             guild_id: string;
             channel_id: string | null;
             post_message_id: string | null;
+            active_runs_channel_id: string | null;
+            active_runs_message_id: string | null;
             dungeon_key: string;
             dungeon_label: string;
             run_kind: RunKind;
@@ -995,7 +1066,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             join_locked: boolean;
             chained_from_run_id: string | number | null;
         }>(
-                `SELECT id, guild_id, channel_id, post_message_id, dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
+                `SELECT id, guild_id, channel_id, post_message_id, active_runs_channel_id, active_runs_message_id,
+                    dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
                     started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
                     key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked, finalization_kind,
                     chained_from_run_id,
@@ -1025,6 +1097,8 @@ export default async function runsRoutes(app: FastifyInstance) {
             id: normalizeRunId(r.id),
             channelId: r.channel_id,
             postMessageId: r.post_message_id,
+            activeRunsChannelId: r.active_runs_channel_id,
+            activeRunsMessageId: r.active_runs_message_id,
             dungeonKey: r.dungeon_key,
             dungeonLabel: r.dungeon_label,
             runKind: r.run_kind,
