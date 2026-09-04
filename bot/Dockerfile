@@ -6,8 +6,11 @@ COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
-RUN npm run build
+RUN npm run check:esm-imports \
+    && npm run build \
+    && npm run check:production-runtime
 
 FROM node:20-alpine AS production
 

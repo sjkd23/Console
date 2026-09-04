@@ -1,4 +1,4 @@
-import { DungeonInfo } from "./dungeon-types";
+import type { DungeonInfo } from "./dungeon-types.js";
 
 export const DUNGEON_DATA: readonly DungeonInfo[] = [
     {

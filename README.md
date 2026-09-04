@@ -74,7 +74,7 @@ before starting the compiled API, and the bot runs its compiled entry point.
 Register slash commands after the initial setup or after changing command names or options:
 
 ```bash
-docker compose run --rm bot node dist/register-commands.js
+docker compose run --rm bot npm run register
 ```
 
 ### Local Development with Docker
@@ -88,6 +88,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 Package manifest changes are reconciled automatically at container startup.
 Use `--build` after changing a Dockerfile or a development entrypoint.
+
+Register commands from the development image with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm bot npm run register:dev
+```
 
 ### Manual Development
 
@@ -103,7 +109,7 @@ npm run dev
 ```bash
 cd bot
 npm ci
-npm run register
+npm run register:dev
 npm run dev
 ```
 

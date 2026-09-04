@@ -1,5 +1,5 @@
-import { DUNGEON_DATA } from './DungeonData';
-import type { DungeonInfo } from './dungeon-types';
+import { DUNGEON_DATA } from './DungeonData.js';
+import type { DungeonInfo } from './dungeon-types.js';
 import { getDungeonSelectionClass } from './dungeon-taxonomy.js';
 
 type DIdx = DungeonInfo & {

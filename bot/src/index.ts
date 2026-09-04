@@ -1,6 +1,7 @@
 // src/index.ts
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 config({ path: resolve(process.cwd(), '.env') });
 
 import { botConfig } from './config.js';
@@ -824,4 +825,11 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 
-await client.login(botConfig.SECRET_KEY);
+export async function startBot(): Promise<void> {
+    await client.login(botConfig.SECRET_KEY);
+}
+
+const invokedPath = process.argv[1];
+if (invokedPath && import.meta.url === pathToFileURL(resolve(invokedPath)).href) {
+    await startBot();
+}

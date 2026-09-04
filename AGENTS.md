@@ -89,7 +89,7 @@ await query(`SELECT * FROM users WHERE id = ${userId}`); // SQL Injection risk
 ## 5. Development Workflow
 
 1.  **Migrations:** `npm run migrate` in `backend/`.
-2.  **Commands:** `npm run register-commands` in `bot/` if you change names/options.
+2.  **Commands:** `npm run register:dev` in `bot/` if you change names/options. Production uses the compiled `npm run register` entrypoint.
 3.  **Docker:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` runs the local development stack. Plain `docker compose up -d` is the production deployment path.
 4.  **Logs:** Check `docker compose logs -f backend` if the API fails.
 
