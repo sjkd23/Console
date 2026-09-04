@@ -17,7 +17,7 @@ import { deleteRunRole } from '../utilities/run-role-manager.js';
 import { getMemberRoleIds } from '../permissions/permissions.js';
 import { updateQuotaPanelsForUser, updateAllQuotaPanels } from '../ui/quota-panel.js';
 import { getAllActiveHeadcounts, isHeadcountExpired, unregisterHeadcount } from '../state/active-headcount-tracker.js';
-import { clearParticipants } from '../state/headcount-state.js';
+import { clearHeadcountState } from '../state/headcount-state.js';
 import { clearKeyOffers } from '../../interactions/buttons/raids/headcount-key.js';
 import { clearHeadcountPanels } from '../state/headcount-panel-tracker.js';
 import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
@@ -283,7 +283,7 @@ async function checkExpiredHeadcounts(client: Client): Promise<void> {
             if (!guild) {
                 unregisterHeadcount(headcount.guildId, headcount.organizerId);
                 clearKeyOffers(headcount.messageId);
-                clearParticipants(headcount.messageId);
+                clearHeadcountState(headcount.messageId);
                 clearHeadcountPanels(headcount.messageId);
 
                 logger.warn('Expired headcount auto-cleaned without Discord update (guild not cached)', {
@@ -299,7 +299,7 @@ async function checkExpiredHeadcounts(client: Client): Promise<void> {
             if (!channel || !channel.isTextBased()) {
                 unregisterHeadcount(headcount.guildId, headcount.organizerId);
                 clearKeyOffers(headcount.messageId);
-                clearParticipants(headcount.messageId);
+                clearHeadcountState(headcount.messageId);
                 clearHeadcountPanels(headcount.messageId);
 
                 logger.warn('Expired headcount auto-cleaned without Discord update (channel unavailable)', {
@@ -340,7 +340,7 @@ async function checkExpiredHeadcounts(client: Client): Promise<void> {
 
             unregisterHeadcount(headcount.guildId, headcount.organizerId);
             clearKeyOffers(headcount.messageId);
-            clearParticipants(headcount.messageId);
+            clearHeadcountState(headcount.messageId);
             clearHeadcountPanels(headcount.messageId);
 
             logger.info('Auto-ended headcount', {

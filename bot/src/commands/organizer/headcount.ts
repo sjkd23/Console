@@ -2,21 +2,17 @@
 import {
     SlashCommandBuilder,
     ChatInputCommandInteraction,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
     EmbedBuilder,
-    MessageFlags
+    MessageFlags,
+    type Guild,
 } from 'discord.js';
 import type { SlashCommand } from '../_types.js';
 import { ensureGuildContext } from '../../lib/utilities/interaction-helpers.js';
 import { formatErrorMessage } from '../../lib/errors/error-handler.js';
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
-import { getDungeonKeyEmojiIdentifier, getDungeonKeyEmoji } from '../../lib/utilities/key-emoji-helpers.js';
 import { logRaidCreation } from '../../lib/logging/raid-logger.js';
 import { registerHeadcount } from '../../lib/state/active-headcount-tracker.js';
 import { createLogger } from '../../lib/logging/logger.js';
-import { getReactionInfo } from '../../constants/emojis/MappedAfkCheckReactions.js';
 import {
     checkOrganizerActiveActivities,
     buildActiveRunErrorForHeadcount,
@@ -31,31 +27,10 @@ import { collectDungeonSelection } from '../../lib/ui/dungeon-selection-panel.js
 import { resolveDungeonRolePingIds } from '../../lib/utilities/dungeon-role-pings.js';
 import { setDungeonCodes } from '../../lib/state/headcount-state.js';
 import { validateHeadcountDungeons } from '../../constants/dungeons/dungeon-taxonomy.js';
-import { getPhysicalDungeonKeyOffers } from '../../lib/utilities/dungeon-key-offers.js';
+import { buildHeadcountActionRows } from '../../lib/ui/headcount-components.js';
 
 const logger = createLogger('Headcount');
-
-/**
- * Get emoji identifier for a key reaction (by mapKey)
- */
-function getKeyReactionEmojiIdentifier(mapKey: string): string | undefined {
-    const reactionInfo = getReactionInfo(mapKey);
-    return reactionInfo?.emojiInfo?.identifier;
-}
-
-/**
- * Format key button label for display
- */
-function formatKeyButtonLabel(mapKey: string): string {
-    const specialCases: Record<string, string> = {
-        'WC_INC': 'Inc',
-        'SHIELD_RUNE': 'Shield',
-        'SWORD_RUNE': 'Sword',
-        'HELM_RUNE': 'Helm',
-    };
-    
-    return specialCases[mapKey] || 'Key';
-}
+const HEADCOUNT_INTEREST_PROMPT = 'Click the dungeon(s) you would be interested in joining!';
 
 export const headcount: SlashCommand = {
     requiredRole: 'organizer',
@@ -112,7 +87,7 @@ export const headcount: SlashCommand = {
  */
 async function createHeadcountPanel(
     interaction: ChatInputCommandInteraction,
-    guild: any,
+    guild: Guild,
     selectedDungeons: DungeonInfo[]
 ): Promise<void> {
     try {
@@ -129,6 +104,7 @@ async function createHeadcountPanel(
                 .setDescription(`Organizer: <@${interaction.user.id}>`)
                 // Interested count hidden from public panel - shown in organizer panel only
                 // .addFields({ name: 'Interested', value: '0', inline: false })
+                .setFooter({ text: HEADCOUNT_INTEREST_PROMPT })
                 .setTimestamp(new Date());
             
             // Add color and thumbnail if available
@@ -161,126 +137,12 @@ async function createHeadcountPanel(
                 //     { name: 'Interested', value: '0', inline: true },
                 //     { name: 'Total Keys', value: '0', inline: true }
                 // )
+                .setFooter({ text: HEADCOUNT_INTEREST_PROMPT })
                 .setTimestamp(new Date());
         }
 
-        // Create action buttons
-        const joinButton = new ButtonBuilder()
-            .setCustomId(`headcount:join:${Date.now()}`)
-            .setLabel('Join')
-            .setStyle(ButtonStyle.Success);
-
-        const orgButton = new ButtonBuilder()
-            .setCustomId(`headcount:org:${Date.now()}`)
-            .setLabel('Organizer Panel')
-            .setStyle(ButtonStyle.Secondary);
-
-        // Build button rows based on single vs multi-dungeon
-        const buttonRows: ActionRowBuilder<ButtonBuilder>[] = [];
-        
-        if (isSingleDungeon) {
-            // Single dungeon: Smart layout based on number of keys
-            const timestamp = Date.now();
-            const keyButtons: ButtonBuilder[] = [];
-            
-            // Create buttons only for real physical key offers (supports Oryx 3's multiple keys).
-            for (const { reaction: keyReaction } of getPhysicalDungeonKeyOffers([dungeon])) {
-                const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
-                const keyLabel = formatKeyButtonLabel(keyReaction.mapKey);
-
-                const keyButton = new ButtonBuilder()
-                    .setCustomId(`headcount:key:${timestamp}:${dungeon.codeName}:${keyReaction.mapKey}`)
-                    .setLabel(keyLabel)
-                    .setStyle(ButtonStyle.Secondary);
-
-                if (keyEmojiId) {
-                    keyButton.setEmoji(keyEmojiId);
-                }
-
-                keyButtons.push(keyButton);
-            }
-            
-            // Layout logic: Max 5 buttons per row
-            // Row 1: Join + up to 3 keys + Organizer Panel (if total <= 5)
-            // Otherwise: Row 1: Join + some keys, Row 2: remaining keys + Organizer Panel
-            const totalButtons = 2 + keyButtons.length; // Join + keys + Organizer Panel
-            
-            if (totalButtons <= 5) {
-                // All buttons fit in one row: Join, keys, Organizer Panel
-                const mainRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    joinButton,
-                    ...keyButtons,
-                    orgButton
-                );
-                buttonRows.push(mainRow);
-            } else {
-                // Need multiple rows
-                // Row 1: Join + first keys (fill to 5 buttons)
-                const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(joinButton);
-                let row1Space = 4; // 5 total - 1 (join button)
-                const row1Keys = keyButtons.slice(0, row1Space);
-                row1.addComponents(...row1Keys);
-                buttonRows.push(row1);
-                
-                // Row 2: Remaining keys + Organizer Panel
-                const remainingKeys = keyButtons.slice(row1Space);
-                const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    ...remainingKeys,
-                    orgButton
-                );
-                buttonRows.push(row2);
-            }
-        } else {
-            // Multiple dungeons: Join and Organizer Panel on first row
-            const mainRow = new ActionRowBuilder<ButtonBuilder>().addComponents(joinButton, orgButton);
-            buttonRows.push(mainRow);
-            
-            // Collect all key buttons from all selected dungeons
-            const keyButtons: ButtonBuilder[] = [];
-            const timestamp = Date.now();
-            
-            for (const { dungeon: selectedDungeon, reaction: keyReaction } of getPhysicalDungeonKeyOffers(selectedDungeons)) {
-                const keyEmojiId = getKeyReactionEmojiIdentifier(keyReaction.mapKey);
-
-                // Format label based on whether dungeon has multiple key types
-                let label: string;
-                if (selectedDungeon.keyReactions.length === 1) {
-                    // Single key: show dungeon name
-                    label = selectedDungeon.dungeonName.length > 15
-                        ? selectedDungeon.dungeonName.substring(0, 13) + '...'
-                        : selectedDungeon.dungeonName;
-                } else {
-                    // Multiple keys: show just the key type name
-                    label = formatKeyButtonLabel(keyReaction.mapKey);
-                }
-
-                const keyButton = new ButtonBuilder()
-                    .setCustomId(`headcount:key:${timestamp}:${selectedDungeon.codeName}:${keyReaction.mapKey}`)
-                    .setLabel(label)
-                    .setStyle(ButtonStyle.Secondary);
-
-                // Add emoji if available
-                if (keyEmojiId) {
-                    keyButton.setEmoji(keyEmojiId);
-                }
-
-                keyButtons.push(keyButton);
-            }
-
-            // Smart button layout: max 5 buttons per row, up to 4 additional rows
-            // Total max: 5 buttons (main row) + 20 buttons (4 additional rows) = 25 total
-            let currentRow: ButtonBuilder[] = [];
-            
-            for (let i = 0; i < keyButtons.length; i++) {
-                currentRow.push(keyButtons[i]);
-                
-                // Create new row when we have 5 buttons or at the end
-                if (currentRow.length === 5 || i === keyButtons.length - 1) {
-                    buttonRows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...currentRow));
-                    currentRow = [];
-                }
-            }
-        }
+        const panelToken = Date.now().toString();
+        const buttonRows = buildHeadcountActionRows(selectedDungeons, panelToken);
 
         // Get the configured raid channel using helper
         const raidChannel = await fetchConfiguredRaidChannel(guild, interaction);
@@ -338,7 +200,10 @@ async function createHeadcountPanel(
                 sent,
                 interaction.user.id,
                 interaction.user.username,
-                selectedDungeons.map(d => d.dungeonName),
+                selectedDungeons.map(d => ({
+                    codeName: d.codeName,
+                    dungeonName: d.dungeonName,
+                })),
                 sent.id // Use message ID as panel timestamp
             ).catch(err => {
                 logger.error('Failed to auto-join organizer to headcount', {

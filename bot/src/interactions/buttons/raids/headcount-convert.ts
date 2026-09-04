@@ -5,7 +5,7 @@ import {
     MessageFlags,
     type Message,
 } from 'discord.js';
-import { clearParticipants, getDungeonCodes, getOrganizerId } from '../../../lib/state/headcount-state.js';
+import { clearHeadcountState, getDungeonCodes, getOrganizerId } from '../../../lib/state/headcount-state.js';
 import { clearKeyOffers, getKeyOffers } from './headcount-key.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import type { DungeonInfo } from '../../../constants/dungeons/dungeon-types.js';
@@ -59,7 +59,7 @@ async function handleHeadcountConvertInternal(btn: ButtonInteraction, publicMess
     if (!publicMsg) {
         const result = unregisterHeadcountByMessageId(btn.guild.id, publicMessageId);
         clearKeyOffers(publicMessageId);
-        clearParticipants(publicMessageId);
+        clearHeadcountState(publicMessageId);
         clearHeadcountPanels(publicMessageId);
         logger.warn('Headcount public message missing during convert; cleaned local state', { result, publicMessageId });
         await btn.reply({ content: 'Could not find headcount panel message.', flags: MessageFlags.Ephemeral });
@@ -264,7 +264,7 @@ async function convertHeadcountToRun(
             });
         } else {
             clearKeyOffers(publicMsg.id);
-            clearParticipants(publicMsg.id);
+            clearHeadcountState(publicMsg.id);
             clearHeadcountPanels(publicMsg.id);
             unregisterHeadcount(guildId, organizerId);
         }

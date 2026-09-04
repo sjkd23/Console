@@ -4,6 +4,17 @@ import { getDefaultAutoEndMinutes } from '../../config/raid-config.js';
 const logger = createLogger('ActiveHeadcountTracker');
 const HEADCOUNT_AUTO_END_MINUTES = getDefaultAutoEndMinutes();
 
+export interface ActiveHeadcount {
+    guildId: string;
+    organizerId: string;
+    messageId: string;
+    channelId: string;
+    createdAt: Date;
+    autoEndAt: Date;
+    dungeons: string[];
+    dungeonCodes: string[];
+}
+
 /**
  * In-memory tracking of active headcounts
  * Key: `${guildId}:${organizerId}`
@@ -121,6 +132,28 @@ export function getActiveHeadcount(
 } | null {
     const key = `${guildId}:${organizerId}`;
     return activeHeadcounts.get(key) || null;
+}
+
+/** Find an active headcount from the public Discord message that owns its buttons. */
+export function getActiveHeadcountByMessageId(
+    guildId: string,
+    messageId: string
+): ActiveHeadcount | null {
+    for (const [key, headcount] of activeHeadcounts.entries()) {
+        const separatorIndex = key.indexOf(':');
+        if (separatorIndex === -1) continue;
+
+        const entryGuildId = key.substring(0, separatorIndex);
+        if (entryGuildId !== guildId || headcount.messageId !== messageId) continue;
+
+        return {
+            guildId,
+            organizerId: key.substring(separatorIndex + 1),
+            ...headcount,
+        };
+    }
+
+    return null;
 }
 
 /**

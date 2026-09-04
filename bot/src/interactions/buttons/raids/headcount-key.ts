@@ -4,14 +4,11 @@
  */
 
 import { ButtonInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { setEmbedField } from '../../../lib/ui/embed-builders.js';
 import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
-import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { logKeyReaction } from '../../../lib/logging/raid-logger.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
 import { getActiveHeadcountPanels } from '../../../lib/state/headcount-panel-tracker.js';
 import { showHeadcountPanel, updateHeadcountOrganizerPanel } from './headcount-organizer-panel.js';
-import { getOrganizerId, getParticipants } from '../../../lib/state/headcount-state.js';
 
 /**
  * In-memory storage for key offers per headcount panel.

@@ -1,5 +1,5 @@
 /**
- * Helper module to access and manage headcount state stored in headcount-join and headcount-key handlers.
+ * Helper module to access and manage ephemeral headcount state.
  * This avoids circular dependencies by providing a clean interface to read headcount data.
  */
 
@@ -9,53 +9,58 @@ import { EmbedBuilder } from 'discord.js';
  * Headcount state interface
  */
 export interface HeadcountState {
-    participants: Set<string>;
+    interestedUsersByDungeon: Map<string, Set<string>>;
     keyOffersByDungeon: Map<string, Set<string>>;
     dungeonCodes: string[];
     organizerId: string;
 }
-
 /**
- * In-memory storage for headcount participants.
- * Map structure: messageId -> Set<userId>
- * This prevents participant names from appearing on the public panel.
+ * In-memory storage for dungeon-specific interest.
+ * Map structure: messageId -> dungeonCode -> Set<userId>
  */
-const participantsStore = new Map<string, Set<string>>();
+const interestsStore = new Map<string, Map<string, Set<string>>>();
 const dungeonCodesStore = new Map<string, string[]>();
 
 /**
- * Get participants for a specific headcount panel.
- * Now uses in-memory storage instead of parsing the embed description.
+ * Get interested users for one dungeon in a headcount.
  */
-export function getParticipants(embed: EmbedBuilder, messageId?: string): Set<string> {
-    if (messageId) {
-        // Use in-memory store if messageId is provided
-        let participants = participantsStore.get(messageId);
-        if (!participants) {
-            participants = new Set<string>();
-            participantsStore.set(messageId, participants);
-        }
-        return participants;
+export function getInterestedUsers(messageId: string, dungeonCode: string): Set<string> {
+    let interestsByDungeon = interestsStore.get(messageId);
+    if (!interestsByDungeon) {
+        interestsByDungeon = new Map<string, Set<string>>();
+        interestsStore.set(messageId, interestsByDungeon);
     }
-    
-    // Fallback: try to extract from embed description for backwards compatibility
-    const data = embed.toJSON();
-    const description = data.description || '';
-    
-    const match = description.match(/\*\*Joined:\*\*\s*([^\n]*)/);
-    if (!match || !match[1].trim()) return new Set();
-    
-    // Extract user IDs from mentions like <@123456789>
-    const mentions = match[1].matchAll(/<@(\d+)>/g);
-    return new Set(Array.from(mentions, m => m[1]));
+
+    let interestedUsers = interestsByDungeon.get(dungeonCode);
+    if (!interestedUsers) {
+        interestedUsers = new Set<string>();
+        interestsByDungeon.set(dungeonCode, interestedUsers);
+    }
+
+    return interestedUsers;
+}
+
+export function getInterestsByDungeon(messageId: string): ReadonlyMap<string, ReadonlySet<string>> {
+    return interestsStore.get(messageId) ?? new Map<string, Set<string>>();
+}
+
+export function toggleDungeonInterest(
+    messageId: string,
+    dungeonCode: string,
+    userId: string
+): { interested: boolean; count: number } {
+    const interestedUsers = getInterestedUsers(messageId, dungeonCode);
+    const interested = !interestedUsers.delete(userId);
+    if (interested) interestedUsers.add(userId);
+    return { interested, count: interestedUsers.size };
 }
 
 /**
- * Clear participants for a specific headcount panel.
+ * Clear all interest and selected-dungeon state for a headcount panel.
  * Used when ending or converting a headcount.
  */
-export function clearParticipants(messageId: string): void {
-    participantsStore.delete(messageId);
+export function clearHeadcountState(messageId: string): void {
+    interestsStore.delete(messageId);
     dungeonCodesStore.delete(messageId);
 }
 
@@ -93,23 +98,4 @@ export function resolveHeadcountDungeonCodes(
     return dungeonCodesStore.has(messageId)
         ? [...(dungeonCodesStore.get(messageId) ?? [])]
         : [...legacyComponentCodes];
-}
-
-/**
- * Update the embed description to remove the list of participants.
- * Participants should only be visible in the organizer panel, not on the public embed.
- * The public embed only shows the count in the "Interested" or "Participants" field.
- * 
- * Note: This function now only cleans up any legacy "Joined:" sections.
- * Participants are stored in memory via getParticipants() instead.
- */
-export function updateParticipantsList(embed: EmbedBuilder, participants: Set<string>): EmbedBuilder {
-    const data = embed.toJSON();
-    let description = data.description || '';
-    
-    // Remove existing "Joined:" section if present
-    // This ensures participant names are never shown on the public panel
-    description = description.replace(/\n\n\*\*Joined:\*\*\s*[^\n]*/, '');
-    
-    return new EmbedBuilder(data).setDescription(description);
 }

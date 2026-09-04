@@ -9,7 +9,7 @@ import { assignRunRole } from './run-role-manager.js';
 import { updateRunParticipation } from './run-embed-helpers.js';
 import { logRaidJoin } from '../logging/raid-logger.js';
 import { createLogger } from '../logging/logger.js';
-import { getParticipants, updateParticipantsList } from '../state/headcount-state.js';
+import { getInterestedUsers } from '../state/headcount-state.js';
 import { getAllOrganizerPanelsForRun } from '../state/organizer-panel-tracker.js';
 import { getActiveHeadcountPanels } from '../state/headcount-panel-tracker.js';
 import { updateRunOrganizerPanel } from '../../interactions/buttons/raids/organizer-panel.js';
@@ -127,7 +127,7 @@ export async function autoJoinOrganizerToRun(
 
 /**
  * Automatically add the organizer to their headcount upon creation.
- * This simulates clicking the join button - adds to participants set, updates embed.
+ * Preserve the existing organizer auto-interest behavior for every selected dungeon.
  */
 export async function autoJoinOrganizerToHeadcount(
     client: Client,
@@ -135,7 +135,7 @@ export async function autoJoinOrganizerToHeadcount(
     headcountMessage: Message,
     organizerId: string,
     organizerUsername: string,
-    dungeonNames: string[],
+    dungeons: ReadonlyArray<{ codeName: string; dungeonName: string }>,
     panelTimestamp: string
 ): Promise<void> {
     try {
@@ -149,31 +149,30 @@ export async function autoJoinOrganizerToHeadcount(
         }
 
         const embed = EmbedBuilder.from(embeds[0]);
-        const participants = getParticipants(embed, headcountMessage.id);
 
-        // Add organizer to participants
-        participants.add(organizerId);
-
-        // Update embed
-        const updatedEmbed = updateParticipantsList(embed, participants);
-        await headcountMessage.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
+        for (const dungeon of dungeons) {
+            getInterestedUsers(headcountMessage.id, dungeon.codeName).add(organizerId);
+        }
 
         // Log to raid-log thread
         try {
-            await logRaidJoin(
-                client,
-                {
-                    guildId: guild.id,
+            for (const dungeon of dungeons) {
+                const interestedUsers = getInterestedUsers(headcountMessage.id, dungeon.codeName);
+                await logRaidJoin(
+                    client,
+                    {
+                        guildId: guild.id,
+                        organizerId,
+                        organizerUsername,
+                        dungeonName: dungeon.dungeonName,
+                        type: 'headcount',
+                        panelTimestamp
+                    },
                     organizerId,
-                    organizerUsername,
-                    dungeonName: dungeonNames.join(', '),
-                    type: 'headcount',
-                    panelTimestamp
-                },
-                organizerId,
-                'joined',
-                participants.size
-            );
+                    'joined',
+                    interestedUsers.size
+                );
+            }
         } catch (e) {
             logger.error('Failed to log headcount auto-join to raid-log', {
                 guildId: guild.id,
@@ -186,26 +185,12 @@ export async function autoJoinOrganizerToHeadcount(
         // This ensures the participant count updates in real-time when the organizer joins
         const activePanels = getActiveHeadcountPanels(headcountMessage.id);
         if (activePanels.length > 0) {
-            // Extract dungeon codes from the button components
-            const dungeonCodes: string[] = [];
-            for (const row of headcountMessage.components) {
-                if ('components' in row) {
-                    for (const component of row.components) {
-                        if ('customId' in component && component.customId?.startsWith('headcount:key:')) {
-                            const parts = component.customId.split(':');
-                            const dungeonCode = parts[3];
-                            if (dungeonCode && !dungeonCodes.includes(dungeonCode)) {
-                                dungeonCodes.push(dungeonCode);
-                            }
-                        }
-                    }
-                }
-            }
+            const dungeonCodes = dungeons.map(dungeon => dungeon.codeName);
             
             // Update all registered panel handles
             for (const handle of activePanels) {
                 try {
-                    await updateHeadcountOrganizerPanel(handle, headcountMessage, updatedEmbed, dungeonCodes);
+                    await updateHeadcountOrganizerPanel(handle, headcountMessage, embed, dungeonCodes);
                 } catch (err) {
                     // Panel might be closed or expired - this is expected behavior
                     logger.debug('Failed to auto-refresh headcount organizer panel after auto-join', {
@@ -221,7 +206,7 @@ export async function autoJoinOrganizerToHeadcount(
             guildId: guild.id,
             messageId: headcountMessage.id,
             organizerId,
-            participantCount: participants.size
+            dungeonCount: dungeons.length
         });
     } catch (err) {
         logger.error('Failed to auto-join organizer to headcount', {

@@ -8,7 +8,7 @@ import {
     EmbedBuilder,
     ChannelType
 } from 'discord.js';
-import { getOrganizerId, clearParticipants } from '../../../lib/state/headcount-state.js';
+import { clearHeadcountState, getOrganizerId } from '../../../lib/state/headcount-state.js';
 import { clearKeyOffers } from './headcount-key.js';
 import { logRunStatusChange, clearLogThreadCache, updateThreadStarterWithEndTime } from '../../../lib/logging/raid-logger.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
@@ -49,7 +49,7 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
         if (btn.guild) {
             const result = unregisterHeadcountByMessageId(btn.guild.id, publicMessageId);
             clearKeyOffers(publicMessageId);
-            clearParticipants(publicMessageId);
+            clearHeadcountState(publicMessageId);
             clearHeadcountPanels(publicMessageId);
             logger.warn('Headcount public message missing during end; cleaned local state', {
                 guildId: btn.guild.id,
@@ -174,7 +174,7 @@ async function handleHeadcountEndInternal(btn: ButtonInteraction, publicMessageI
 
     // Clear key offers and participants from memory
     clearKeyOffers(publicMsg.id);
-    clearParticipants(publicMsg.id);
+    clearHeadcountState(publicMsg.id);
     clearHeadcountPanels(publicMsg.id);
 
     // Close the organizer panel

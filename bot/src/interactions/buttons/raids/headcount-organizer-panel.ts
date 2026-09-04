@@ -12,7 +12,7 @@ import {
     ModalSubmitInteraction
 } from 'discord.js';
 import {
-    getParticipants,
+    getInterestsByDungeon,
     getOrganizerId,
     resolveHeadcountDungeonCodes,
 } from '../../../lib/state/headcount-state.js';
@@ -21,6 +21,7 @@ import { dungeonByCode } from '../../../constants/dungeons/dungeon-helpers.js';
 import { getDungeonKeyEmoji } from '../../../lib/utilities/key-emoji-helpers.js';
 import { checkOrganizerAccess } from '../../../lib/permissions/interaction-permissions.js';
 import { getReactionInfo } from '../../../constants/emojis/MappedAfkCheckReactions.js';
+import { buildHeadcountInterestSummary } from '../../../lib/ui/headcount-components.js';
 import {
     registerHeadcountPanel,
     refreshRegisteredHeadcountPanel,
@@ -86,7 +87,7 @@ function buildHeadcountOrganizerPanelContent(
     dungeonCodes: string[]
 ): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
     // Get headcount state
-    const participants = getParticipants(embed, publicMsg.id);
+    const interestsByDungeon = getInterestsByDungeon(publicMsg.id);
     const keyOffers = getKeyOffers(publicMsg.id);
 
     // Build organizer panel embed
@@ -95,8 +96,12 @@ function buildHeadcountOrganizerPanelContent(
         .setColor(0x5865F2)
         .setTimestamp(new Date());
 
-    // Build description with participant count and key offers
-    let description = `**Participants:** ${participants.size}\n\n**Keys:**\n`;
+    // Build description with per-dungeon interest and key offers.
+    let description = '**Interested:**\n';
+
+    description += buildHeadcountInterestSummary(dungeonCodes, interestsByDungeon);
+
+    description += '\n\n**Keys:**\n';
 
     if (dungeonCodes.length === 0) {
         description += '_No dungeons found_';

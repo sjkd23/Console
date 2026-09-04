@@ -33,7 +33,8 @@ import { handleScreenshotButton } from './interactions/buttons/raids/screenshot-
 import { handleKeyReaction } from './interactions/buttons/raids/key-reaction.js';
 import { handlePingRaiders } from './interactions/buttons/raids/ping-raiders.js';
 import { handleLockJoin } from './interactions/buttons/raids/lock-join.js';
-import { handleHeadcountJoin } from './interactions/buttons/raids/headcount-join.js';
+import { handleHeadcountInterest } from './interactions/buttons/raids/headcount-interest.js';
+import { parseHeadcountInterestCustomId } from './lib/utilities/headcount-interest-validation.js';
 import { handleHeadcountKey } from './interactions/buttons/raids/headcount-key.js';
 import { handleHeadcountOrganizerPanel, handleHeadcountOrganizerPanelConfirm, handleHeadcountOrganizerPanelDeny } from './interactions/buttons/raids/headcount-organizer-panel.js';
 import { handleHeadcountEnd } from './interactions/buttons/raids/headcount-end.js';
@@ -441,10 +442,25 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             // Handle headcount buttons
-            if (interaction.customId.startsWith('headcount:join:')) {
+            if (interaction.customId.startsWith('headcount:interest:')) {
                 if (!await applyButtonRateLimit(interaction, 'run:participation')) return;
-                const panelTimestamp = interaction.customId.split(':')[2];
-                await safeHandleInteraction(interaction, () => handleHeadcountJoin(interaction, panelTimestamp), { ephemeral: true });
+                const customId = parseHeadcountInterestCustomId(interaction.customId);
+                if (!customId) {
+                    await interaction.reply({
+                        content: '❌ Invalid headcount interest action.',
+                        flags: MessageFlags.Ephemeral,
+                    });
+                    return;
+                }
+                await safeHandleInteraction(
+                    interaction,
+                    () => handleHeadcountInterest(
+                        interaction,
+                        customId.panelTimestamp,
+                        customId.dungeonCode
+                    ),
+                    { ephemeral: true }
+                );
                 return;
             }
             if (interaction.customId.startsWith('headcount:key:')) {
