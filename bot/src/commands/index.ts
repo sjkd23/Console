@@ -50,6 +50,7 @@ import { modmailreply } from './moderation/security/modmailreply.js';
 import { modmailblacklist } from './moderation/officer/modmailblacklist.js';
 import { modmailunblacklist } from './moderation/officer/modmailunblacklist.js';
 import { logminutes } from './moderation/moderator/logminutes.js';
+import { setdungeonimage } from './configs/setdungeonimage.js';
 
 /**
  * Helper to apply both permission checks and rate limiting to a command.
@@ -118,6 +119,7 @@ export const commands: SlashCommand[] = [
     withMiddleware(modmailblacklist),
     withMiddleware(modmailunblacklist),
     withMiddleware(logminutes),
+    withMiddleware(setdungeonimage),
 ];
 
 export function toJSON() {

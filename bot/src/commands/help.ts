@@ -289,6 +289,12 @@ function getCommandHelp(commandName: string): CommandHelp | null {
             usage: '/configrolepings',
             examples: ['/configrolepings - Opens role ping configuration'],
         },
+        setdungeonimage: {
+            name: 'setdungeonimage',
+            description: 'Set the image posted after a single-dungeon raid panel.',
+            usage: '/setdungeonimage dungeon:<name> image:<attachment>',
+            examples: ['/setdungeonimage dungeon:Snake Pit image:<attachment>'],
+        },
         syncteam: {
             name: 'syncteam',
             description: 'Sync the Team role for all members with staff roles. Ensures Team role is assigned to all staff.',

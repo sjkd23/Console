@@ -15,6 +15,7 @@ import commandLogRoutes from './routes/admin/command-log.js';
 import modmailRoutes from './routes/moderation/modmail.js';
 import customRoleVerificationRoutes from './routes/system/custom-role-verification.js';
 import organizerMinuteSettlementRoutes from './routes/raid/organizer-minute-settlements.js';
+import dungeonImageRoutes from './routes/admin/dungeon-images.js';
 
 const app = Fastify({ logger: true });
 
@@ -32,6 +33,7 @@ await app.register(verificationRoutes, { prefix: '/v1' });
 await app.register(commandLogRoutes, { prefix: '/v1' });
 await app.register(modmailRoutes, { prefix: '/v1' });
 await app.register(customRoleVerificationRoutes, { prefix: '/v1' });
+await app.register(dungeonImageRoutes, { prefix: '/v1' });
 
 app.listen({ port: backendConfig.PORT, host: '0.0.0.0' })
     .then(addr => app.log.info(`Backend listening on ${addr}`))

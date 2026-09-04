@@ -1,8 +1,8 @@
-import type { Client, Guild, GuildTextBasedChannel, Message } from 'discord.js';
+import { AttachmentBuilder, type Client, type Guild, type GuildTextBasedChannel, type Message } from 'discord.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import type { CreateRunResponse } from './http.js';
-import { postJSON } from './http.js';
+import { getDungeonImage, postJSON } from './http.js';
 import { buildRunButtons, buildRunEmbed } from './run-panel-builder.js';
 import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
 import { buildRunLifecycleMessageContent } from './run-message-helpers.js';
@@ -21,6 +21,40 @@ export function resolveCreatedRunDungeons(created: CreateRunResponse): DungeonIn
         if (!dungeon) throw new Error(`Missing bot metadata for dungeon ${selection.dungeonKey}.`);
         return { ...dungeon, dungeonName: selection.dungeonLabel };
     });
+}
+
+export function isDungeonImageEligible(created: CreateRunResponse): boolean {
+    return created.selectedDungeons.length === 1
+        && (created.runKind === 'single' || created.runKind === 'oryx_3')
+        && created.selectedDungeons[0].dungeonKey !== 'REALM_DUNGEON';
+}
+
+async function publishConfiguredDungeonImage(options: {
+    guild: Guild;
+    raidChannel: GuildTextBasedChannel;
+    created: CreateRunResponse;
+}): Promise<void> {
+    if (!isDungeonImageEligible(options.created)) return;
+
+    const dungeonKey = options.created.selectedDungeons[0].dungeonKey;
+    try {
+        const image = await getDungeonImage(options.guild.id, dungeonKey);
+        if (!image) return;
+
+        await options.raidChannel.send({
+            files: [new AttachmentBuilder(Buffer.from(image.image_base64, 'base64'), {
+                name: image.filename,
+            })],
+            allowedMentions: { parse: [] },
+        });
+    } catch (error) {
+        logger.error('Failed to publish configured dungeon image', {
+            error,
+            guildId: options.guild.id,
+            dungeonKey,
+            runId: options.created.runId,
+        });
+    }
 }
 
 export async function publishCreatedRun(options: {
@@ -65,6 +99,7 @@ export async function publishCreatedRun(options: {
         await sent.delete().catch(() => undefined);
         throw error;
     }
+    await publishConfiguredDungeonImage(options);
     await syncActiveRunsMirror(options.guild.client, options.guild.id, options.created.runId);
     return sent;
 }

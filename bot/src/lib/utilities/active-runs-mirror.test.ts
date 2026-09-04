@@ -88,6 +88,7 @@ describe('Active Runs mirror rendering', () => {
             raidPanelUrl: 'https://discord.com/channels/1/2/3',
         });
         assert.equal(Object.hasOwn(payload, 'content'), false);
+        assert.equal(Object.hasOwn(payload, 'files'), false);
         assert.deepEqual(payload.allowedMentions, { parse: [] });
         assert.ok(!JSON.stringify(payload).includes('@here'));
         assert.ok(!JSON.stringify(payload).includes('<@&'));

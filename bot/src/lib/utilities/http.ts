@@ -747,6 +747,56 @@ export async function setDungeonRolePing(
     return makeRequest('PUT', `/guilds/${guildId}/dungeon-role-pings`, payload);
 }
 
+const DungeonImageSchema = z.object({
+    dungeon_key: z.string().min(1),
+    image_base64: z.string().min(1).refine(value => {
+        const decoded = Buffer.from(value, 'base64');
+        return decoded.length > 0 && decoded.toString('base64') === value;
+    }),
+    content_type: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+    filename: z.string().min(1).max(255),
+    updated_at: z.string().min(1),
+});
+
+export type DungeonImage = z.infer<typeof DungeonImageSchema>;
+
+const DungeonImageResponseSchema = z.object({
+    image: DungeonImageSchema.nullable(),
+});
+
+/** Store or replace a guild's durable image for one dungeon. */
+export async function setDungeonImage(
+    guildId: string,
+    dungeonKey: string,
+    payload: {
+        actor_user_id: string;
+        actor_roles?: string[];
+        actor_has_admin_permission?: boolean;
+        image_base64: string;
+        content_type: 'image/png' | 'image/jpeg' | 'image/webp';
+        filename: string;
+    }
+): Promise<DungeonImage> {
+    const response = await makeRequest<unknown>(
+        'PUT',
+        `/guilds/${guildId}/dungeon-images/${encodeURIComponent(dungeonKey)}`,
+        payload,
+        { guildId }
+    );
+    const parsed = DungeonImageResponseSchema.parse(response);
+    if (!parsed.image) throw new Error('Backend did not return the stored dungeon image.');
+    return parsed.image;
+}
+
+/** Fetch a guild's durable image for one dungeon, if configured. */
+export async function getDungeonImage(guildId: string, dungeonKey: string): Promise<DungeonImage | null> {
+    const response = await getJSON<unknown>(
+        `/guilds/${guildId}/dungeon-images/${encodeURIComponent(dungeonKey)}`,
+        { guildId }
+    );
+    return DungeonImageResponseSchema.parse(response).image;
+}
+
 /** Create a punishment (POST /punishments) */
 export async function createPunishment(payload: {
     actor_user_id: string;

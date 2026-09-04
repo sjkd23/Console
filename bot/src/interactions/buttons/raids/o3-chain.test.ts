@@ -10,6 +10,7 @@ let publishedRunIds: number[] = [];
 let initializedRunIds: number[] = [];
 let organizerPanelRunIds: number[] = [];
 let deletedRoleIds: string[] = [];
+let sequence: string[] = [];
 
 class TestBackendError extends Error {
     code?: string;
@@ -100,6 +101,7 @@ mock.module('../../../lib/utilities/run-publication.js', {
     namedExports: {
         publishCreatedRun: async (options: { created: { runId: number } }) => {
             publishedRunIds.push(options.created.runId);
+            sequence.push('publish');
             return {
                 id: '100000000000000006',
                 channelId: newRun.channelId,
@@ -108,6 +110,7 @@ mock.module('../../../lib/utilities/run-publication.js', {
         },
         initializePublishedRun: (options: { created: { runId: number } }) => {
             initializedRunIds.push(options.created.runId);
+            sequence.push('initialize');
         },
     },
 });
@@ -116,6 +119,7 @@ mock.module('./organizer-panel.js', {
     namedExports: {
         sendRunOrganizerPanelAsFollowUp: async (_btn: unknown, runId: number) => {
             organizerPanelRunIds.push(runId);
+            sequence.push('organizer-panel');
         },
     },
 });
@@ -140,6 +144,7 @@ beforeEach(() => {
     initializedRunIds = [];
     organizerPanelRunIds = [];
     deletedRoleIds = [];
+    sequence = [];
 });
 
 function createInteraction(): { interaction: ButtonInteraction; edits: unknown[] } {
@@ -175,6 +180,7 @@ describe('Start New O3 interaction', () => {
         assert.deepEqual(publishedRunIds, [101]);
         assert.deepEqual(initializedRunIds, [101]);
         assert.deepEqual(organizerPanelRunIds, [101]);
+        assert.ok(sequence.indexOf('publish') < sequence.indexOf('organizer-panel'));
         assert.match(JSON.stringify(edits), /new Oryx 3/i);
         assert.equal(previousRun.status, 'ended');
     });
