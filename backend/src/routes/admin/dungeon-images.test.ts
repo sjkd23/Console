@@ -62,13 +62,23 @@ describe('dungeon image routes', () => {
             filename: 'snake.png',
         };
 
-        expect((await app.inject({
+        const firstUpdate = await app.inject({
             method: 'PUT', url: '/guilds/100000000000000001/dungeon-images/SNAKE_PIT', payload: basePayload,
-        })).statusCode).toBe(200);
-        expect((await app.inject({
+        });
+        expect(firstUpdate.statusCode).toBe(200);
+        expect(firstUpdate.json().previous_image).toBeNull();
+
+        const replacement = await app.inject({
             method: 'PUT', url: '/guilds/100000000000000001/dungeon-images/SNAKE_PIT',
             payload: { ...basePayload, filename: 'replacement.png' },
-        })).statusCode).toBe(200);
+        });
+        expect(replacement.statusCode).toBe(200);
+        expect(replacement.json().previous_image).toEqual({
+            content_type: 'image/png',
+            filename: 'snake.png',
+            size_bytes: 8,
+            updated_at: '2026-09-04T01:00:00.000Z',
+        });
 
         const fetched = await app.inject({
             method: 'GET', url: '/guilds/100000000000000001/dungeon-images/SNAKE_PIT',

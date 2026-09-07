@@ -7,8 +7,24 @@ import {
 import type { SlashCommand } from '../_types.js';
 import { dungeonByCode, searchDungeons } from '../../constants/dungeons/dungeon-helpers.js';
 import { getMemberRoleIds } from '../../lib/permissions/permissions.js';
-import { BackendError, setDungeonImage } from '../../lib/utilities/http.js';
+import {
+    BackendError,
+    type DungeonImageMetadata,
+    setDungeonImage,
+} from '../../lib/utilities/http.js';
 import { downloadDungeonImage, DungeonImageValidationError } from '../../lib/utilities/dungeon-image.js';
+import { logBotEvent } from '../../lib/logging/bot-logger.js';
+import { createLogger } from '../../lib/logging/logger.js';
+
+const logger = createLogger('SetDungeonImage');
+
+function formatImageMetadata(image: DungeonImageMetadata): string {
+    return [
+        `Filename: \`${image.filename.replaceAll('`', '\u02cb')}\``,
+        `Type: \`${image.content_type}\``,
+        `Size: \`${image.size_bytes.toLocaleString('en-US')} bytes\``,
+    ].join('\n');
+}
 
 export const setdungeonimage: SlashCommand = {
     requiredRole: 'moderator',
@@ -58,7 +74,7 @@ export const setdungeonimage: SlashCommand = {
 
         try {
             const upload = await downloadDungeonImage(interaction.options.getAttachment('image', true));
-            await setDungeonImage(interaction.guildId, dungeonKey, {
+            const update = await setDungeonImage(interaction.guildId, dungeonKey, {
                 actor_user_id: interaction.user.id,
                 actor_roles: getMemberRoleIds(member),
                 actor_has_admin_permission: member.permissions.has('Administrator'),
@@ -66,6 +82,61 @@ export const setdungeonimage: SlashCommand = {
                 content_type: upload.contentType,
                 filename: upload.filename,
             });
+
+            const change = update.previousImage ? 'Replaced' : 'Set';
+            const newImage: DungeonImageMetadata = {
+                content_type: update.image.content_type,
+                filename: update.image.filename,
+                size_bytes: upload.data.length,
+                updated_at: update.image.updated_at,
+            };
+            const auditImageFilename = `dungeon-image.${
+                update.image.content_type === 'image/jpeg'
+                    ? 'jpg'
+                    : update.image.content_type.slice('image/'.length)
+            }`;
+            try {
+                await logBotEvent(
+                    interaction.client,
+                    interaction.guildId,
+                    `⚙️ Dungeon Image ${change}`,
+                    `A dungeon raid image was ${change.toLowerCase()} with \`/setdungeonimage\`.`,
+                    {
+                        auditAction: '/setdungeonimage',
+                        color: 0x5865F2,
+                        files: [{ attachment: upload.data, name: auditImageFilename }],
+                        imageUrl: `attachment://${auditImageFilename}`,
+                        fields: [
+                            { name: 'Command', value: '`/setdungeonimage`', inline: true },
+                            { name: 'Change', value: change, inline: true },
+                            { name: 'Dungeon', value: dungeon.dungeonName, inline: false },
+                            {
+                                name: 'Changed By',
+                                value: `<@${interaction.user.id}> (${interaction.user.username}, \`${interaction.user.id}\`)`,
+                                inline: false,
+                            },
+                            {
+                                name: 'Previous Image',
+                                value: update.previousImage
+                                    ? formatImageMetadata(update.previousImage)
+                                    : 'None / Not set',
+                                inline: false,
+                            },
+                            { name: 'New Image', value: formatImageMetadata(newImage), inline: false },
+                        ],
+                    }
+                );
+            } catch (logError) {
+                // The shared bot logger normally absorbs delivery errors. Keep this
+                // guard so an audit failure can never turn a persisted update into
+                // a false command failure.
+                logger.error('Failed to emit dungeon image bot-log audit', {
+                    error: logError,
+                    guildId: interaction.guildId,
+                    dungeonKey,
+                    actorId: interaction.user.id,
+                });
+            }
             await interaction.editReply(`Dungeon image set for ${dungeon.dungeonName}.`);
         } catch (error) {
             if (error instanceof DungeonImageValidationError) {

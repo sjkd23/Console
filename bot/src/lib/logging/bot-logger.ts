@@ -13,6 +13,7 @@ import {
     Guild,
     GuildMember,
 } from 'discord.js';
+import type { AttachmentPayload } from 'discord.js';
 import { getGuildChannels } from '../utilities/http.js';
 import { createLogger } from './logger.js';
 
@@ -208,38 +209,126 @@ export async function logBotEvent(
     eventTitle: string,
     description: string,
     options?: {
+        auditAction?: string;
         color?: number;
         fields?: Array<{ name: string; value: string; inline?: boolean }>;
+        files?: readonly AttachmentPayload[];
+        imageUrl?: string;
     }
-): Promise<void> {
+): Promise<
+    | { status: 'sent'; channelId: string }
+    | {
+        status: 'skipped';
+        reason: 'not_configured' | 'channel_not_found' | 'channel_not_sendable';
+        channelId: string | null;
+    }
+    | {
+        status: 'failed';
+        reason: 'configuration_lookup_failed' | 'channel_fetch_failed' | 'send_failed';
+        channelId: string | null;
+    }
+> {
+    const auditEvent = options?.auditAction ?? eventTitle;
+    const diagnosticsRequested = options?.auditAction !== undefined;
+    let botLogChannelId: string | null = null;
+
     try {
-        // Get the bot-log channel
         const { channels } = await getGuildChannels(guildId);
-        const botLogChannelId = channels.bot_log;
-
-        if (!botLogChannelId) {
-            return; // No bot-log channel configured
-        }
-
-        // Fetch the bot-log channel
-        const botLogChannel = await client.channels.fetch(botLogChannelId);
-        if (!botLogChannel || !botLogChannel.isTextBased() || !(botLogChannel instanceof TextChannel)) {
-            return;
-        }
-
-        const embed = new EmbedBuilder()
-            .setTitle(eventTitle)
-            .setDescription(description)
-            .setColor(options?.color || 0x5865F2)
-            .setTimestamp(new Date());
-
-        if (options?.fields) {
-            embed.addFields(options.fields);
-        }
-
-        await botLogChannel.send({ embeds: [embed] });
+        botLogChannelId = channels.bot_log ?? null;
     } catch (error) {
-        logger.error('Failed to log bot event', { error });
+        logger.error('Failed to resolve bot-log channel for audit event', {
+            guildId,
+            auditEvent,
+            botLogChannelId,
+            reason: 'configuration_lookup_failed',
+            error,
+        });
+        return { status: 'failed', reason: 'configuration_lookup_failed', channelId: null };
+    }
+
+    if (!botLogChannelId) {
+        if (diagnosticsRequested) {
+            logger.warn('Skipped bot-log audit because no channel is configured', {
+                guildId,
+                auditEvent,
+                botLogChannelId,
+                reason: 'not_configured',
+            });
+        }
+        return { status: 'skipped', reason: 'not_configured', channelId: null };
+    }
+
+    let botLogChannel;
+    try {
+        botLogChannel = await client.channels.fetch(botLogChannelId);
+    } catch (error) {
+        logger.error('Failed to fetch configured bot-log channel for audit event', {
+            guildId,
+            auditEvent,
+            botLogChannelId,
+            reason: 'channel_fetch_failed',
+            error,
+        });
+        return { status: 'failed', reason: 'channel_fetch_failed', channelId: botLogChannelId };
+    }
+
+    if (!botLogChannel) {
+        if (diagnosticsRequested) {
+            logger.warn('Skipped bot-log audit because the configured channel was not found', {
+                guildId,
+                auditEvent,
+                botLogChannelId,
+                reason: 'channel_not_found',
+            });
+        }
+        return { status: 'skipped', reason: 'channel_not_found', channelId: botLogChannelId };
+    }
+
+    if (!botLogChannel.isSendable()) {
+        if (diagnosticsRequested) {
+            logger.warn('Skipped bot-log audit because the configured channel is not sendable', {
+                guildId,
+                auditEvent,
+                botLogChannelId,
+                channelType: botLogChannel.type,
+                reason: 'channel_not_sendable',
+            });
+        }
+        return { status: 'skipped', reason: 'channel_not_sendable', channelId: botLogChannelId };
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle(eventTitle)
+        .setDescription(description)
+        .setColor(options?.color || 0x5865F2)
+        .setTimestamp(new Date());
+
+    if (options?.fields) {
+        embed.addFields(options.fields);
+    }
+    if (options?.imageUrl) {
+        embed.setImage(options.imageUrl);
+    }
+
+    try {
+        await botLogChannel.send({ embeds: [embed], files: options?.files });
+        if (diagnosticsRequested) {
+            logger.info('Sent bot-log audit event', {
+                guildId,
+                auditEvent,
+                botLogChannelId,
+            });
+        }
+        return { status: 'sent', channelId: botLogChannelId };
+    } catch (error) {
+        logger.error('Failed to send bot-log audit event', {
+            guildId,
+            auditEvent,
+            botLogChannelId,
+            reason: 'send_failed',
+            error,
+        });
+        return { status: 'failed', reason: 'send_failed', channelId: botLogChannelId };
     }
 }
 

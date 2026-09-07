@@ -3,7 +3,18 @@ import { beforeEach, describe, it, mock } from 'node:test';
 import type { ChatInputCommandInteraction } from 'discord.js';
 
 const stored: unknown[][] = [];
+const botLogEvents: unknown[][] = [];
+const runtimeErrors: unknown[][] = [];
 let downloadFails = false;
+let persistenceFails = false;
+let botLogFails = false;
+let botLogConfigured = true;
+let previousImage: {
+    content_type: 'image/png';
+    filename: string;
+    size_bytes: number;
+    updated_at: string;
+} | null = null;
 
 class TestBackendError extends Error {
     code?: string;
@@ -12,7 +23,20 @@ class TestBackendError extends Error {
 mock.module('../../lib/utilities/http.js', {
     namedExports: {
         BackendError: TestBackendError,
-        setDungeonImage: async (...args: unknown[]) => { stored.push(args); return {}; },
+        setDungeonImage: async (...args: unknown[]) => {
+            if (persistenceFails) throw new Error('database unavailable');
+            stored.push(args);
+            return {
+                image: {
+                    dungeon_key: 'SNAKE_PIT',
+                    image_base64: 'iVBORw0KGgo=',
+                    content_type: 'image/png',
+                    filename: 'snake.png',
+                    updated_at: '2026-09-06T12:00:00.000Z',
+                },
+                previousImage,
+            };
+        },
     },
 });
 mock.module('../../lib/utilities/dungeon-image.js', {
@@ -36,13 +60,38 @@ mock.module('../../lib/permissions/permissions.js', {
         canBotManageMember: async () => ({ canManage: true }),
     },
 });
+mock.module('../../lib/logging/bot-logger.js', {
+    namedExports: {
+        logBotEvent: async (...args: unknown[]) => {
+            if (botLogFails) throw new Error('Missing Access');
+            if (!botLogConfigured) return;
+            botLogEvents.push(args);
+        },
+    },
+});
+mock.module('../../lib/logging/logger.js', {
+    namedExports: {
+        createLogger: () => ({
+            debug: () => undefined,
+            info: () => undefined,
+            warn: () => undefined,
+            error: (...args: unknown[]) => { runtimeErrors.push(args); },
+        }),
+    },
+});
 
 const { setdungeonimage } = await import('./setdungeonimage.js');
 const { withPermissionCheck } = await import('../../lib/permissions/command-middleware.js');
 
 beforeEach(() => {
     stored.length = 0;
+    botLogEvents.length = 0;
+    runtimeErrors.length = 0;
     downloadFails = false;
+    persistenceFails = false;
+    botLogFails = false;
+    botLogConfigured = true;
+    previousImage = null;
 });
 
 function interaction(guildId: string, dungeonKey = 'SNAKE_PIT') {
@@ -58,7 +107,8 @@ function interaction(guildId: string, dungeonKey = 'SNAKE_PIT') {
                 permissions: { has: () => false },
             }) },
         },
-        user: { id: '100000000000000003' },
+        user: { id: '100000000000000003', username: 'Auditor' },
+        client: { channels: { fetch: async () => null } },
         options: {
             getString: () => dungeonKey,
             getAttachment: () => ({ name: 'snake.png' }),
@@ -101,6 +151,76 @@ describe('/setdungeonimage', () => {
             ['100000000000000002', 'SNAKE_PIT'],
         ]);
         assert.match(String(first.edits.at(-1)), /Dungeon image set for Snake Pit/);
+    });
+
+    it('sends one first-time bot-log audit with the command, actor, dungeon, and new image', async () => {
+        const test = interaction('100000000000000001');
+        await setdungeonimage.run(test.value);
+
+        assert.equal(stored.length, 1);
+        assert.equal(botLogEvents.length, 1);
+        const serialized = JSON.stringify(botLogEvents[0]);
+        assert.match(serialized, /setdungeonimage/);
+        assert.match(serialized, /100000000000000003/);
+        assert.match(serialized, /Auditor/);
+        assert.match(serialized, /Snake Pit/);
+        assert.match(serialized, /None \/ Not set/);
+        assert.match(serialized, /snake\.png/);
+        assert.match(serialized, /image\/png/);
+        assert.match(serialized, /8 bytes/);
+        assert.match(serialized, /Dungeon Image Set/);
+    });
+
+    it('records both previous and new image metadata when replacing an image', async () => {
+        previousImage = {
+            content_type: 'image/png',
+            filename: 'old-snake.png',
+            size_bytes: 4096,
+            updated_at: '2026-09-01T12:00:00.000Z',
+        };
+
+        await setdungeonimage.run(interaction('100000000000000001').value);
+
+        assert.equal(botLogEvents.length, 1);
+        const serialized = JSON.stringify(botLogEvents[0]);
+        assert.match(serialized, /Dungeon Image Replaced/);
+        assert.match(serialized, /old-snake\.png/);
+        assert.match(serialized, /4,096 bytes/);
+        assert.match(serialized, /snake\.png/);
+    });
+
+    it('does not send a successful audit when persistence fails', async () => {
+        persistenceFails = true;
+        const test = interaction('100000000000000001');
+
+        await setdungeonimage.run(test.value);
+
+        assert.equal(stored.length, 0);
+        assert.equal(botLogEvents.length, 0);
+        assert.match(String(test.edits.at(-1)), /Failed to set the dungeon image/);
+    });
+
+    it('keeps a persisted update successful when bot-log delivery unexpectedly rejects', async () => {
+        botLogFails = true;
+        const test = interaction('100000000000000001');
+
+        await setdungeonimage.run(test.value);
+
+        assert.equal(stored.length, 1);
+        assert.equal(runtimeErrors.length, 1);
+        assert.match(String(test.edits.at(-1)), /Dungeon image set for Snake Pit/);
+    });
+
+    it('keeps a persisted update successful when bot-logs is unconfigured', async () => {
+        botLogConfigured = false;
+        const test = interaction('100000000000000001');
+
+        await setdungeonimage.run(test.value);
+
+        assert.equal(stored.length, 1);
+        assert.equal(botLogEvents.length, 0);
+        assert.equal(runtimeErrors.length, 0);
+        assert.match(String(test.edits.at(-1)), /Dungeon image set for Snake Pit/);
     });
 
     it('rejects non-canonical and Realm Clearing selections before storage', async () => {

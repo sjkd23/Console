@@ -107,6 +107,12 @@ export default async function dungeonImageRoutes(app: FastifyInstance): Promise<
                 filename: stored.filename,
                 updated_at: stored.updatedAt,
             },
+            previous_image: previous ? {
+                content_type: previous.contentType,
+                filename: previous.filename,
+                size_bytes: previous.data.length,
+                updated_at: previous.updatedAt,
+            } : null,
         });
     });
 }

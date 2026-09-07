@@ -764,6 +764,20 @@ const DungeonImageResponseSchema = z.object({
     image: DungeonImageSchema.nullable(),
 });
 
+const DungeonImageMetadataSchema = z.object({
+    content_type: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+    filename: z.string().min(1).max(255),
+    size_bytes: z.number().int().positive(),
+    updated_at: z.string().min(1),
+});
+
+export type DungeonImageMetadata = z.infer<typeof DungeonImageMetadataSchema>;
+
+const SetDungeonImageResponseSchema = z.object({
+    image: DungeonImageSchema,
+    previous_image: DungeonImageMetadataSchema.nullable(),
+});
+
 /** Store or replace a guild's durable image for one dungeon. */
 export async function setDungeonImage(
     guildId: string,
@@ -776,16 +790,18 @@ export async function setDungeonImage(
         content_type: 'image/png' | 'image/jpeg' | 'image/webp';
         filename: string;
     }
-): Promise<DungeonImage> {
+): Promise<{ image: DungeonImage; previousImage: DungeonImageMetadata | null }> {
     const response = await makeRequest<unknown>(
         'PUT',
         `/guilds/${guildId}/dungeon-images/${encodeURIComponent(dungeonKey)}`,
         payload,
         { guildId }
     );
-    const parsed = DungeonImageResponseSchema.parse(response);
-    if (!parsed.image) throw new Error('Backend did not return the stored dungeon image.');
-    return parsed.image;
+    const parsed = SetDungeonImageResponseSchema.parse(response);
+    return {
+        image: parsed.image,
+        previousImage: parsed.previous_image,
+    };
 }
 
 /** Fetch a guild's durable image for one dungeon, if configured. */

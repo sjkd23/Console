@@ -11,11 +11,12 @@ interface TestRun {
     activeRunsMessageId: string | null;
     dungeonKey: string;
     dungeonLabel: string;
-    runKind: 'single';
+    runKind: 'single' | 'oryx_3';
     selectedDungeons: Array<{ dungeonKey: string; dungeonLabel: string; selectionOrder: number }>;
     organizerId: string;
     party: string;
     location: string;
+    o3Stage: 'closed' | 'miniboss' | 'third_room' | null;
 }
 
 const guildId = '100000000000000001';
@@ -40,6 +41,8 @@ function reset(options: {
     activeRunsMessageId?: string | null;
     configuredChannelId?: string | null;
     mirrorExists?: boolean;
+    runKind?: TestRun['runKind'];
+    o3Stage?: TestRun['o3Stage'];
 } = {}): void {
     run = {
         id: 42,
@@ -50,11 +53,14 @@ function reset(options: {
         activeRunsMessageId: options.activeRunsMessageId ?? null,
         dungeonKey: 'NEST',
         dungeonLabel: 'The Nest',
-        runKind: 'single',
-        selectedDungeons: [{ dungeonKey: 'NEST', dungeonLabel: 'The Nest', selectionOrder: 1 }],
+        runKind: options.runKind ?? 'single',
+        selectedDungeons: options.runKind === 'oryx_3'
+            ? [{ dungeonKey: 'ORYX_3', dungeonLabel: 'Oryx 3', selectionOrder: 1 }]
+            : [{ dungeonKey: 'NEST', dungeonLabel: 'The Nest', selectionOrder: 1 }],
         organizerId,
         party: '2',
         location: 'USWest',
+        o3Stage: options.o3Stage ?? null,
     };
     configuredChannelId = options.configuredChannelId === undefined
         ? activeChannelId
@@ -141,6 +147,36 @@ describe('Active Runs mirror synchronization', () => {
         assert.equal(sends.length, 1);
         assert.equal(edits.length, 1);
         assert.match(JSON.stringify(edits[0]), /LIVE/);
+    });
+
+    it('edits a live Oryx 3 mirror to Closed and removes persisted party and location after realm closure', async () => {
+        reset({
+            status: 'live',
+            runKind: 'oryx_3',
+            activeRunsChannelId: activeChannelId,
+            activeRunsMessageId: mirrorMessageId,
+            mirrorExists: true,
+        });
+
+        await syncActiveRunsMirror(client, guildId, run.id);
+        const livePayload = edits.at(-1) as { embeds?: Array<{ toJSON(): { fields?: Array<{ name: string }> } }> };
+        const liveEdit = JSON.stringify(livePayload);
+        const liveFieldNames = livePayload.embeds?.[0]?.toJSON().fields?.map(field => field.name) ?? [];
+        assert.match(liveEdit, /LIVE/);
+        assert.match(liveEdit, /Party/);
+        assert.match(liveEdit, /Location/);
+        assert.equal(liveFieldNames.includes('Status'), false);
+
+        run.o3Stage = 'closed';
+        await syncActiveRunsMirror(client, guildId, run.id);
+        const closedPayload = edits.at(-1) as { embeds?: Array<{ toJSON(): { fields?: Array<{ name: string }> } }> };
+        const closedEdit = JSON.stringify(closedPayload);
+        const closedFieldNames = closedPayload.embeds?.[0]?.toJSON().fields?.map(field => field.name) ?? [];
+
+        assert.equal(sends.length, 0);
+        assert.match(closedEdit, /Closed/);
+        assert.doesNotMatch(closedEdit, /Party|Location|USWest/);
+        assert.equal(closedFieldNames.includes('Status'), false);
     });
 
     it('recreates a manually deleted mirror without duplicating an existing message', async () => {

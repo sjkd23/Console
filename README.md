@@ -65,7 +65,7 @@ A Discord bot for organizing **Realm of the Mad God** raids. It includes interac
 3. Build and start the production services.
 
    ```bash
-   docker compose up -d
+   docker compose up -d --build
    ```
 
 The default Compose file builds production images. The backend runs migrations

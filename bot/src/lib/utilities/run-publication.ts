@@ -1,4 +1,11 @@
-import { AttachmentBuilder, type Client, type Guild, type GuildTextBasedChannel, type Message } from 'discord.js';
+import {
+    AttachmentBuilder,
+    type Client,
+    type Guild,
+    type GuildTextBasedChannel,
+    type Message,
+    type MessageCreateOptions,
+} from 'discord.js';
 import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 import type { DungeonInfo } from '../../constants/dungeons/dungeon-types.js';
 import type { CreateRunResponse } from './http.js';
@@ -57,40 +64,13 @@ async function publishConfiguredDungeonImage(options: {
     }
 }
 
-export async function publishCreatedRun(options: {
+async function publishRunPanel(options: {
     guild: Guild;
     raidChannel: GuildTextBasedChannel;
-    organizerId: string;
     created: CreateRunResponse;
-    description?: string;
-    party?: string;
-    location?: string;
+    message: MessageCreateOptions;
 }): Promise<Message<true>> {
-    const dungeons = resolveCreatedRunDungeons(options.created);
-    const rolePingIds = await resolveDungeonRolePingIds(
-        options.guild,
-        options.created.selectedDungeons.map(dungeon => dungeon.dungeonKey)
-    );
-    const sent = await options.raidChannel.send({
-        content: buildRunLifecycleMessageContent({
-            selectedDungeons: options.created.selectedDungeons,
-            party: options.party,
-            location: options.location,
-        }, { additionalPingRoleIds: rolePingIds }),
-        embeds: [buildRunEmbed({
-            dungeonData: dungeons,
-            runKind: options.created.runKind,
-            organizerId: options.organizerId,
-            status: 'starting',
-            description: options.description,
-        })],
-        components: buildRunButtons({
-            runId: options.created.runId,
-            dungeonData: dungeons,
-            runKind: options.created.runKind,
-            joinLocked: false,
-        }),
-    });
+    const sent = await options.raidChannel.send(options.message);
     try {
         await postJSON(`/runs/${options.created.runId}/message`, { postMessageId: sent.id }, {
             guildId: options.guild.id,
@@ -102,6 +82,59 @@ export async function publishCreatedRun(options: {
     await publishConfiguredDungeonImage(options);
     await syncActiveRunsMirror(options.guild.client, options.guild.id, options.created.runId);
     return sent;
+}
+
+export async function publishCreatedRun(options: {
+    guild: Guild;
+    raidChannel: GuildTextBasedChannel;
+    created: CreateRunResponse;
+} & ({
+    organizerId: string;
+    description?: string;
+    party?: string;
+    location?: string;
+} | {
+    message: MessageCreateOptions;
+})): Promise<Message<true>> {
+    if ('message' in options) {
+        return publishRunPanel({
+            guild: options.guild,
+            raidChannel: options.raidChannel,
+            created: options.created,
+            message: options.message,
+        });
+    }
+
+    const dungeons = resolveCreatedRunDungeons(options.created);
+    const rolePingIds = await resolveDungeonRolePingIds(
+        options.guild,
+        options.created.selectedDungeons.map(dungeon => dungeon.dungeonKey)
+    );
+    return publishRunPanel({
+        guild: options.guild,
+        raidChannel: options.raidChannel,
+        created: options.created,
+        message: {
+            content: buildRunLifecycleMessageContent({
+                selectedDungeons: options.created.selectedDungeons,
+                party: options.party,
+                location: options.location,
+            }, { additionalPingRoleIds: rolePingIds }),
+            embeds: [buildRunEmbed({
+                dungeonData: dungeons,
+                runKind: options.created.runKind,
+                organizerId: options.organizerId,
+                status: 'starting',
+                description: options.description,
+            })],
+            components: buildRunButtons({
+                runId: options.created.runId,
+                dungeonData: dungeons,
+                runKind: options.created.runKind,
+                joinLocked: false,
+            }),
+        },
+    });
 }
 
 export function initializePublishedRun(options: {

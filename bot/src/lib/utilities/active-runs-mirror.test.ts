@@ -20,6 +20,7 @@ const startingRun = {
     organizerId: '100000000000000001',
     party: '2',
     location: 'USWest',
+    o3Stage: null,
 };
 
 describe('Active Runs configuration', () => {
@@ -33,7 +34,7 @@ describe('Active Runs configuration', () => {
 });
 
 describe('Active Runs mirror rendering', () => {
-    it('shows dungeon, party, location, status, and organizer without a duplicate link field', () => {
+    it('shows dungeon, party, location, and organizer without redundant status or link fields', () => {
         const raidPanelUrl = 'https://discord.com/channels/1/2/3';
         const data = buildActiveRunsEmbed({
             run: startingRun,
@@ -46,7 +47,7 @@ describe('Active Runs mirror rendering', () => {
         assert.equal(fields.get('Dungeon'), 'The Nest');
         assert.equal(fields.get('Party'), '2');
         assert.equal(fields.get('Location'), 'USWest');
-        assert.equal(fields.get('Status'), 'Starting Soon');
+        assert.equal(fields.has('Status'), false);
         assert.equal(fields.get('Organizer'), '<@100000000000000001>');
         assert.equal(fields.has('Raid Panel'), false);
         assert.equal(data.color, dungeon.dungeonColors?.[0]);
@@ -59,9 +60,70 @@ describe('Active Runs mirror rendering', () => {
             dungeons: [dungeon],
             raidPanelUrl: 'https://discord.com/channels/1/2/3',
         }).toJSON();
-        const status = data.fields?.find(field => field.name === 'Status');
         assert.match(data.title ?? '', /LIVE: The Nest/);
-        assert.equal(status?.value, 'LIVE');
+        assert.equal(data.fields?.some(field => field.name === 'Status'), false);
+    });
+
+    it('shows live Oryx 3 location and party while the realm is open', () => {
+        const o3 = dungeonByCode.ORYX_3;
+        if (!o3) throw new Error('ORYX_3 test dungeon metadata is missing.');
+        const data = buildActiveRunsEmbed({
+            run: {
+                ...startingRun,
+                status: 'live',
+                runKind: 'oryx_3',
+                selectedDungeons: [{ dungeonKey: 'ORYX_3', dungeonLabel: 'Oryx 3', selectionOrder: 1 }],
+                party: '3/4',
+                location: 'USWest',
+            },
+            dungeons: [o3],
+            raidPanelUrl: 'https://discord.com/channels/1/2/3',
+        }).toJSON();
+        const fields = new Map((data.fields ?? []).map(field => [field.name, field.value]));
+
+        assert.match(data.title ?? '', /LIVE: Oryx 3/);
+        assert.equal(fields.has('Status'), false);
+        assert.equal(fields.get('Party'), '3/4');
+        assert.equal(fields.get('Location'), 'USWest');
+    });
+
+    it('shows closed Oryx 3 state without persisted live-only location or party fields', () => {
+        const o3 = dungeonByCode.ORYX_3;
+        if (!o3) throw new Error('ORYX_3 test dungeon metadata is missing.');
+        const data = buildActiveRunsEmbed({
+            run: {
+                ...startingRun,
+                status: 'live',
+                runKind: 'oryx_3',
+                selectedDungeons: [{ dungeonKey: 'ORYX_3', dungeonLabel: 'Oryx 3', selectionOrder: 1 }],
+                party: '3/4',
+                location: 'USWest',
+                o3Stage: 'closed',
+            },
+            dungeons: [o3],
+            raidPanelUrl: 'https://discord.com/channels/1/2/3',
+        }).toJSON();
+        const rendered = JSON.stringify(data);
+        const fields = new Map((data.fields ?? []).map(field => [field.name, field.value]));
+
+        assert.match(data.title ?? '', /Closed: Oryx 3/);
+        assert.equal(fields.has('Status'), false);
+        assert.equal(fields.has('Party'), false);
+        assert.equal(fields.has('Location'), false);
+        assert.doesNotMatch(rendered, /3\/4|USWest|Party|Location/);
+    });
+
+    it('does not apply the Oryx 3 privacy rule to unrelated dungeons', () => {
+        const data = buildActiveRunsEmbed({
+            run: { ...startingRun, status: 'live', o3Stage: 'closed' },
+            dungeons: [dungeon],
+            raidPanelUrl: 'https://discord.com/channels/1/2/3',
+        }).toJSON();
+        const fields = new Map((data.fields ?? []).map(field => [field.name, field.value]));
+
+        assert.equal(fields.has('Status'), false);
+        assert.equal(fields.get('Party'), '2');
+        assert.equal(fields.get('Location'), 'USWest');
     });
 
     it('contains only Organizer Panel and Jump to Raid controls', () => {

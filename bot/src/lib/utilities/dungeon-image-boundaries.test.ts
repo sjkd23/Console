@@ -16,4 +16,10 @@ describe('dungeon image publication boundaries', () => {
         const mirrorSource = source('./active-runs-mirror.ts');
         assert.doesNotMatch(mirrorSource, /getDungeonImage|dungeon-images/);
     });
+
+    it('routes headcount-converted run panels through the shared publication path', () => {
+        const conversionSource = source('../../interactions/buttons/raids/headcount-convert.ts');
+        assert.match(conversionSource, /publishCreatedRun/);
+        assert.doesNotMatch(conversionSource, /getDungeonImage|AttachmentBuilder/);
+    });
 });

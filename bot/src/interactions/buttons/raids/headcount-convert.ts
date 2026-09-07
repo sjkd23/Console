@@ -3,6 +3,7 @@ import {
     ChannelType,
     EmbedBuilder,
     MessageFlags,
+    type GuildTextBasedChannel,
     type Message,
 } from 'discord.js';
 import { clearHeadcountState, getDungeonCodes, getOrganizerId } from '../../../lib/state/headcount-state.js';
@@ -35,6 +36,7 @@ import { resolveDungeonRolePingIds } from '../../../lib/utilities/dungeon-role-p
 import { buildRunMessageContent } from '../../../lib/utilities/run-message-helpers.js';
 import { checkOrganizerActiveActivities } from '../../../lib/utilities/organizer-activity-checker.js';
 import { collectHeadcountRunSubset } from '../../../lib/ui/headcount-conversion-selector.js';
+import { publishCreatedRun } from '../../../lib/utilities/run-publication.js';
 import {
     collectSelectedDungeonKeyOffers,
     getHeadcountConversionMode,
@@ -42,7 +44,6 @@ import {
     retireConvertedHeadcountMessage,
     validateHeadcountConversionFreshness,
 } from '../../../lib/utilities/headcount-conversion.js';
-import { syncActiveRunsMirror } from '../../../lib/utilities/active-runs-mirror.js';
 
 const logger = createLogger('HeadcountConvert');
 
@@ -251,21 +252,19 @@ async function convertHeadcountToRun(
             buildRunEmbed({ dungeonData: dungeons, runKind: created.runKind, organizerId, status: 'starting' }),
             transferredByType
         );
-        const newRunMessage = await channel.send({
-            content: buildRunMessageContent({
-                selectedDungeons: created.selectedDungeons,
-                additionalPingRoleIds: rolePingIds,
-            }),
-            embeds: [runEmbed],
-            components: buildRunButtons({ runId: created.runId, dungeonData: dungeons, runKind: created.runKind }),
+        const newRunMessage = await publishCreatedRun({
+            guild,
+            raidChannel: channel as GuildTextBasedChannel,
+            created,
+            message: {
+                content: buildRunMessageContent({
+                    selectedDungeons: created.selectedDungeons,
+                    additionalPingRoleIds: rolePingIds,
+                }),
+                embeds: [runEmbed],
+                components: buildRunButtons({ runId: created.runId, dungeonData: dungeons, runKind: created.runKind }),
+            },
         });
-        try {
-            await postJSON(`/runs/${created.runId}/message`, { postMessageId: newRunMessage.id }, { guildId });
-        } catch (error) {
-            await newRunMessage.delete().catch(() => undefined);
-            throw error;
-        }
-        await syncActiveRunsMirror(interaction.client, guildId, created.runId);
         published = true;
 
         const retirement = await retireConvertedHeadcountMessage(currentPublicMsg);

@@ -9,7 +9,7 @@ import {
 import { sendO3ProgressionPing } from '../../../lib/utilities/o3-progression.js';
 import { refreshOrganizerPanel } from './organizer-panel.js';
 import { createLogger } from '../../../lib/logging/logger.js';
-import { patchJSON } from '../../../lib/utilities/http.js';
+import { getRunDetails, patchJSON } from '../../../lib/utilities/http.js';
 import { updateRunPublicPanelContent } from '../../../lib/utilities/run-public-panel-updater.js';
 
 const logger = createLogger('O3Progression');
@@ -34,6 +34,22 @@ export async function handleRealmClosed(btn: ButtonInteraction, runId: string) {
     try {
         // Persist first so stale or repeated interactions cannot emit progression pings.
         await patchJSON(`/runs/${runId}/o3-stage`, { o3Stage: 'closed' }, { guildId });
+        const persistedRun = await getRunDetails(runId, guildId);
+        if (persistedRun.runKind !== 'oryx_3' || persistedRun.o3Stage !== 'closed') {
+            throw new Error(`Realm Closed persistence verification returned O3 stage ${persistedRun.o3Stage ?? 'null'}`);
+        }
+
+        logger.info('Realm Closed state persisted; refreshing Discord run messages', {
+            runId,
+            guildId,
+            runStatus: persistedRun.status,
+            o3Stage: persistedRun.o3Stage,
+            activeRunsMessageId: persistedRun.activeRunsMessageId,
+        });
+
+        // Refresh immediately from authoritative backend state. This updates both the
+        // normal run message and its existing Active Runs mirror before announcements.
+        await updateRunPublicPanelContent(btn.client, guildId, runId);
 
         // Send the "Realm Closed" ping message
         const pingMessageId = await sendO3ProgressionPing({
@@ -43,8 +59,6 @@ export async function handleRealmClosed(btn: ButtonInteraction, runId: string) {
             client: btn.client,
             includePartyLocation: false
         });
-
-        await updateRunPublicPanelContent(btn.client, guildId, runId);
 
         logger[pingMessageId ? 'info' : 'warn'](
             pingMessageId ? 'Realm Closed message sent' : 'Realm Closed persisted without a progression ping', {

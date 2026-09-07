@@ -85,7 +85,7 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
 
 3. **Start production services:**
    ```bash
-   docker compose up -d
+   docker compose up -d --build
    ```
 
    This will:

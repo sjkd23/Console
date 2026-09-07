@@ -19,6 +19,7 @@ import {
     type RunDetails,
 } from './http.js';
 import { buildRunTitle } from './run-panel-builder.js';
+import { isO3RealmClosedStage } from './run-message-helpers.js';
 
 const logger = createLogger('ActiveRunsMirror');
 const syncsInFlight = new Map<string, Promise<void>>();
@@ -32,6 +33,7 @@ type ActiveRun = Pick<
     | 'organizerId'
     | 'party'
     | 'location'
+    | 'o3Stage'
 >;
 
 export function isActiveRunsStatus(status: RunDetails['status']): boolean {
@@ -56,8 +58,8 @@ export function buildActiveRunsEmbed(options: {
     raidPanelUrl: string;
 }): EmbedBuilder {
     const { run, dungeons } = options;
+    const realmIsClosed = run.runKind === 'oryx_3' && isO3RealmClosedStage(run.o3Stage);
     const status = run.status === 'open' ? 'starting' : 'live';
-    const statusLabel = run.status === 'open' ? 'Starting Soon' : 'LIVE';
     const displayDungeons = dungeons.map((dungeon, index) => ({
         ...dungeon,
         dungeonName: run.selectedDungeons[index]?.dungeonLabel ?? dungeon.dungeonName,
@@ -67,17 +69,24 @@ export function buildActiveRunsEmbed(options: {
         .join(' | ');
     const primaryDungeon = displayDungeons[0];
     const embed = new EmbedBuilder()
-        .setTitle(buildRunTitle(status, displayDungeons, run.runKind))
+        .setTitle(realmIsClosed
+            ? `🔴 Closed: ${dungeonLabel}`
+            : buildRunTitle(status, displayDungeons, run.runKind))
         .setColor(displayDungeons.length === 1 && primaryDungeon.dungeonColors?.length
             ? primaryDungeon.dungeonColors[0]
             : 0x5865F2)
-        .addFields(
-            { name: 'Dungeon', value: dungeonLabel, inline: false },
+        .addFields({ name: 'Dungeon', value: dungeonLabel, inline: false });
+
+    if (!realmIsClosed) {
+        embed.addFields(
             { name: 'Party', value: run.party ?? 'Not set', inline: true },
             { name: 'Location', value: run.location ?? 'Not set', inline: true },
-            { name: 'Status', value: statusLabel, inline: true },
-            { name: 'Organizer', value: `<@${run.organizerId}>`, inline: true },
-        )
+        );
+    }
+
+    embed.addFields(
+        { name: 'Organizer', value: `<@${run.organizerId}>`, inline: true },
+    )
         .setTimestamp(new Date());
 
     if (displayDungeons.length === 1 && primaryDungeon.portalLink?.url) {
@@ -128,6 +137,18 @@ async function clearPersistedMirror(client: Client, guildId: string, run: RunDet
 
 async function performSync(client: Client, guildId: string, runId: number | string): Promise<void> {
     const run = await getRunDetails(runId, guildId);
+    const realmIsClosed = run.runKind === 'oryx_3' && isO3RealmClosedStage(run.o3Stage);
+
+    if (realmIsClosed) {
+        logger.info('Received realm-closed O3 state for Active Runs synchronization', {
+            guildId,
+            runId,
+            runStatus: run.status,
+            o3Stage: run.o3Stage,
+            activeRunsChannelId: run.activeRunsChannelId,
+            activeRunsMessageId: run.activeRunsMessageId,
+        });
+    }
 
     if (!isActiveRunsStatus(run.status)) {
         await clearPersistedMirror(client, guildId, run);
@@ -168,6 +189,10 @@ async function performSync(client: Client, guildId: string, runId: number | stri
         return;
     }
     const payload = buildActiveRunsMirror({ run, dungeons, raidPanelUrl: raidMessage.url });
+    const renderedEmbed = payload.embeds?.[0];
+    const renderedTitle = renderedEmbed instanceof EmbedBuilder
+        ? renderedEmbed.data.title
+        : undefined;
 
     if (run.activeRunsChannelId === configuredChannelId && run.activeRunsMessageId) {
         const existingChannel = await client.channels.fetch(configuredChannelId).catch(() => null);
@@ -175,7 +200,42 @@ async function performSync(client: Client, guildId: string, runId: number | stri
             const existingMessage = await existingChannel.messages.fetch(run.activeRunsMessageId).catch(() => null);
             if (existingMessage) {
                 const editPayload: MessageEditOptions = { content: null, ...payload };
-                await existingMessage.edit(editPayload);
+                if (realmIsClosed) {
+                    logger.info('Editing existing Active Runs mirror for realm-closed O3', {
+                        guildId,
+                        runId,
+                        runStatus: run.status,
+                        o3Stage: run.o3Stage,
+                        activeRunsMessageId: run.activeRunsMessageId,
+                        renderedTitle,
+                    });
+                }
+                try {
+                    await existingMessage.edit(editPayload);
+                } catch (error) {
+                    if (realmIsClosed) {
+                        logger.error('Failed to edit Active Runs mirror for realm-closed O3', {
+                            guildId,
+                            runId,
+                            runStatus: run.status,
+                            o3Stage: run.o3Stage,
+                            activeRunsMessageId: run.activeRunsMessageId,
+                            renderedTitle,
+                            error,
+                        });
+                    }
+                    throw error;
+                }
+                if (realmIsClosed) {
+                    logger.info('Active Runs mirror edit succeeded for realm-closed O3', {
+                        guildId,
+                        runId,
+                        runStatus: run.status,
+                        o3Stage: run.o3Stage,
+                        activeRunsMessageId: run.activeRunsMessageId,
+                        renderedTitle,
+                    });
+                }
                 return;
             }
         }
