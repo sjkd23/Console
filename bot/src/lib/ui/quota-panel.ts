@@ -3,8 +3,9 @@ import {
     EmbedBuilder,
     TextChannel,
     Message,
+    DiscordAPIError,
 } from 'discord.js';
-import { getQuotaLeaderboard, updateQuotaRoleConfig, getJSON, BackendError } from '../utilities/http.js';
+import { getQuotaLeaderboard, getQuotaRoleConfig, updateQuotaRoleConfig, getJSON, BackendError } from '../utilities/http.js';
 import { OperationContext } from '../utilities/operation-context.js';
 import { getRoleMembersWithCache } from '../utilities/member-fetching.js';
 import { createLogger } from '../logging/logger.js';
@@ -15,15 +16,22 @@ import { dungeonByCode } from '../../constants/dungeons/dungeon-helpers.js';
 
 const logger = createLogger('QuotaPanel');
 
-/**
- * Update or create a quota leaderboard panel for a specific role
- * @param client Discord client
- * @param guildId Guild ID
- * @param roleId Role ID
- * @param config Quota configuration
- * @param ctx Operation context for caching API calls (optional, creates new if not provided)
- */
-export async function updateQuotaPanel(
+const panelOperations = new Map<string, Promise<unknown>>();
+
+/** Serialize replacements and refreshes, then reload tracking inside the queue. */
+export async function updateQuotaPanel(...args: Parameters<typeof writeQuotaPanel>): Promise<Message | undefined> {
+    const key = `${args[1]}:${args[2]}`;
+    const previous = panelOperations.get(key) ?? Promise.resolve();
+    const operation = previous.catch(() => undefined).then(() => writeQuotaPanel(...args));
+    panelOperations.set(key, operation);
+    try {
+        return await operation;
+    } finally {
+        if (panelOperations.get(key) === operation) panelOperations.delete(key);
+    }
+}
+
+async function writeQuotaPanel(
     client: Client,
     guildId: string,
     roleId: string,
@@ -34,8 +42,9 @@ export async function updateQuotaPanel(
         reset_at: string;
         panel_message_id: string | null;
     },
-    ctx?: OperationContext
-): Promise<void> {
+    ctx?: OperationContext,
+    sendNew = false
+): Promise<Message | undefined> {
     // Create context if not provided (for backwards compatibility)
     const opCtx = ctx || new OperationContext();
     
@@ -45,18 +54,21 @@ export async function updateQuotaPanel(
         const quotaChannelId = channels.channels['quota'];
         
         if (!quotaChannelId) {
+            if (sendNew) throw new Error('Configure the quota channel first.');
             logger.debug('No quota channel configured', { guildId });
             return;
         }
 
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
+            if (sendNew) throw new Error('Guild is unavailable.');
             logger.warn('Guild not found in cache', { guildId });
             return;
         }
 
         const quotaChannel = await guild.channels.fetch(quotaChannelId);
-        if (!quotaChannel || !quotaChannel.isTextBased()) {
+        if (!quotaChannel || !quotaChannel.isTextBased() || !quotaChannel.isSendable()) {
+            if (sendNew) throw new Error('The configured quota channel is missing or cannot receive messages.');
             logger.warn('Quota channel not found or not text-based', { guildId, quotaChannelId });
             return;
         }
@@ -64,6 +76,7 @@ export async function updateQuotaPanel(
         // Get role and its members
         const role = guild.roles.cache.get(roleId);
         if (!role) {
+            if (sendNew) throw new Error('Quota role no longer exists.');
             logger.warn('Role not found in guild', { guildId, roleId });
             return;
         }
@@ -87,7 +100,7 @@ export async function updateQuotaPanel(
         // Get quota config for base points and dungeon overrides (use cached if available)
         let configResult;
         try {
-            configResult = await opCtx.getQuotaRoleConfig(guildId, roleId);
+            configResult = await getQuotaRoleConfig(guildId, roleId); // Fresh tracking inside the queue.
         } catch (err) {
             // Handle 404 gracefully - role may not have detailed config yet
             if (err instanceof BackendError && err.status === 404) {
@@ -124,27 +137,16 @@ export async function updateQuotaPanel(
             configResult.dungeon_overrides
         );
 
-        // Update or create message
         let message: Message | null = null;
-        
-        if (config.panel_message_id) {
-            logger.debug('Attempting to update existing panel message', { guildId, roleId, messageId: config.panel_message_id });
-        } else {
-            logger.debug('No panel_message_id, will create new panel', { guildId, roleId });
-        }
-        
-        if (config.panel_message_id) {
+        const trackedId = configResult.config?.panel_message_id;
+        if (!sendNew && trackedId) {
             try {
-                message = await (quotaChannel as TextChannel).messages.fetch(config.panel_message_id);
+                message = await quotaChannel.messages.fetch(trackedId);
                 await message.edit({ embeds: [embed] });
-                logger.info('Updated quota panel', { guildId, roleId, roleName: role.name });
             } catch (err) {
-                logger.warn('Failed to fetch panel message, creating new one', { 
-                    guildId, 
-                    roleId, 
-                    messageId: config.panel_message_id,
-                    error: err instanceof Error ? err.message : String(err)
-                });
+                // Preserve established deleted-message recreation, but never replace
+                // tracking on permission, network, or other Discord errors.
+                if (!(err instanceof DiscordAPIError) || err.code !== 10008) throw err;
                 message = null;
             }
         }
@@ -154,16 +156,22 @@ export async function updateQuotaPanel(
             message = await (quotaChannel as TextChannel).send({ embeds: [embed] });
             
             // Update config with new message ID
-            await updateQuotaRoleConfig(guildId, roleId, {
-                actor_user_id: client.user!.id,
-                actor_has_admin_permission: true,
-                panel_message_id: message.id,
-            });
+            try {
+                await updateQuotaRoleConfig(guildId, roleId, {
+                    actor_user_id: client.user!.id,
+                    actor_has_admin_permission: true,
+                    panel_message_id: message.id,
+                });
+            } catch {
+                throw new Error(`Panel sent (${message.url}), but tracking could not be saved. Please retry Send Panel.`);
+            }
             
             logger.info('Created new quota panel', { guildId, roleId, roleName: role.name, messageId: message.id });
         }
 
+        return message ?? undefined;
     } catch (err) {
+        if (sendNew) throw err;
         logger.error('Failed to update quota panel', { guildId, roleId, err });
     }
 }

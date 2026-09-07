@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
     ButtonInteraction,
     ModalBuilder,
@@ -13,7 +14,7 @@ import {
     StringSelectMenuInteraction,
     ComponentType,
 } from 'discord.js';
-import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError, recalculateQuotaPoints, manuallyResetQuotaPeriod } from '../../../lib/utilities/http.js';
+import { getQuotaRoleConfig, updateQuotaRoleConfig, setDungeonOverride, deleteDungeonOverride, deleteQuotaRoleConfig, getGuildChannels, BackendError, recalculateQuotaPoints, manuallyResetQuotaPeriod, finalizeDueQuotaPeriods } from '../../../lib/utilities/http.js';
 import { DUNGEON_DATA } from '../../../constants/dungeons/DungeonData.js';
 import { updateQuotaPanel } from '../../../lib/ui/quota-panel.js';
 import { formatPoints, formatPointAmount } from '../../../lib/utilities/format-helpers.js';
@@ -187,7 +188,7 @@ async function buildDungeonSelectorPanel(guildId: string, roleId: string): Promi
 
 /**
  * Handle quota_config_basic button
- * Opens a modal to set settings for future quota periods.
+ * Opens a modal for quota target and current reset interval.
  */
 export async function handleQuotaConfigBasic(interaction: ButtonInteraction) {
     // Check panel expiry first
@@ -303,7 +304,7 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
         const memberUserIds = quotaRole
             ? (await getRoleMembersWithCache(quotaRole)).memberIds
             : undefined;
-        await updateQuotaRoleConfig(interaction.guildId!, roleId, {
+        const updated = await updateQuotaRoleConfig(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
             required_points: requiredPoints,
@@ -311,12 +312,25 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
             member_user_ids: requiredPoints <= 0 ? memberUserIds : undefined,
         });
 
+        let reconciliationNote = '';
+        if (requiredPoints > 0) {
+            try {
+                const finalized = await finalizeDueQuotaPeriods(interaction.guildId!, roleId, memberUserIds ?? []);
+                for (const period of finalized.periods) await deliverQuotaPeriodLog(interaction.client, period);
+                if (finalized.remaining_due) reconciliationNote = '\nFurther catch-up will continue on the scheduled task.';
+            } catch (error) {
+                logger.error('Config saved but prompt quota catch-up failed', { error });
+                reconciliationNote = '\nConfiguration saved; overdue processing will retry on the scheduled task.';
+            }
+            if (updated.config) await updateQuotaPanel(interaction.client, interaction.guildId!, roleId, updated.config);
+        }
+
         await interaction.editReply(requiredPoints <= 0
             ? '✅ Quota automation is now inactive. Any active partial period was finalized without a successor.'
             : `✅ **Quota configuration updated!**\n\n` +
               `**Next Required Points:** ${formatPoints(requiredPoints)}\n` +
-              `**Next Reset Interval:** ${resetIntervalDays} day${resetIntervalDays === 1 ? '' : 's'}\n\n` +
-              `These changes apply to the next period; a newly activated quota starts now.`
+              `**Reset Interval:** ${resetIntervalDays} day${resetIntervalDays === 1 ? '' : 's'}\n\n` +
+              `The interval resizes the current period from its existing start. Required points apply to the next period; a newly activated quota starts now.${reconciliationNote}`
         );
 
         // Refresh the original /configquota panel using webhook
@@ -1292,3 +1306,33 @@ export async function handleQuotaConfigStop(interaction: ButtonInteraction) {
     }
 }
 
+/** Replace the tracked message without touching quota lifecycle or accounting. */
+export async function handleQuotaSendPanel(interaction: ButtonInteraction): Promise<void> {
+    const expiry = checkPanelExpiry(interaction.customId);
+    if (expiry.expired) return handleExpiredPanel(interaction, expiry);
+    const parsed = z.tuple([z.literal('quota_send_panel'), z.string().regex(/^\d{17,20}$/),
+        z.string().regex(/^\d+$/)]).rest(z.string().regex(/^\d{17,20}$/)).safeParse(interaction.customId.split(':'));
+    if (!parsed.success || !interaction.guildId) {
+        await interaction.reply({ content: 'Invalid interaction data.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    const [, roleId, , ownerId] = parsed.data;
+    if (ownerId && ownerId !== interaction.user.id) {
+        await interaction.reply({ content: 'Only the user who ran the command can use these buttons.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        await interaction.reply({ content: 'Administrator permission required.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+        const { config, active_period } = await getQuotaRoleConfig(interaction.guildId, roleId);
+        if (!config || !active_period) throw new Error('This role has no active quota period.');
+        const message = await updateQuotaPanel(interaction.client, interaction.guildId, roleId, config, undefined, true);
+        await interaction.editReply(`Quota panel sent and is now being tracked. ${message?.url ?? ''}`);
+    } catch (error) {
+        await interaction.editReply(error instanceof Error ? error.message : 'Failed to send quota panel.');
+    }
+}

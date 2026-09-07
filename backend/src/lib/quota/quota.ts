@@ -216,6 +216,19 @@ export async function upsertQuotaRoleConfig(
         member_user_ids?: string[]; // Live roster used only when deactivating quota automation
     }
 ): Promise<QuotaRoleConfig> {
+    // Panel tracking is metadata only: never activate, finalize, or recreate a config.
+    if (config.panel_message_id !== undefined
+        && Object.entries(config).every(([key, value]) => value === undefined || key === 'panel_message_id')) {
+        const updated = await query(
+            `UPDATE quota_role_config SET panel_message_id = $3::bigint, updated_at = NOW()
+             WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
+            [guildId, discordRoleId, config.panel_message_id]
+        );
+        const current = updated.rowCount ? await getQuotaRoleConfig(guildId, discordRoleId) : null;
+        if (!current) throw new Error('Quota configuration no longer exists');
+        return current;
+    }
+
     const fields: string[] = [];
     const values: unknown[] = [guildId, discordRoleId];
     let idx = 3;
@@ -376,6 +389,17 @@ export async function upsertQuotaRoleConfig(
                    verify_points, warn_points, suspend_points, modmail_reply_points, editname_points, addnote_points`,
         values
     );
+
+    if (config.reset_interval_days !== undefined) {
+        // The upsert holds the config lock, matching canonical finalization's lock order.
+        // Resize only the boundary; all snapshots, events, and carry remain untouched.
+        await client.query(
+            `UPDATE quota_period
+             SET ends_at = starts_at + ($3::int * INTERVAL '1 day')
+             WHERE guild_id = $1::bigint AND quota_role_id = $2::bigint AND status = 'active'`,
+            [guildId, discordRoleId, config.reset_interval_days]
+        );
+    }
 
     if (Number(res.rows[0].required_points) > 0) {
         await ensureActiveQuotaPeriod(client, guildId, discordRoleId);

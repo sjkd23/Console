@@ -67,7 +67,7 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
         
         embed.addFields(
             { name: '🎯 Next Required Points', value: formatPoints(config.required_points), inline: true },
-            { name: '⏱️ Next Interval', value: `${config.reset_interval_days} day${config.reset_interval_days === 1 ? '' : 's'}`, inline: true },
+            { name: '⏱️ Reset Interval', value: `${config.reset_interval_days} day${config.reset_interval_days === 1 ? '' : 's'}`, inline: true },
             { name: '🔄 Next Rollover', value: config.rollover_enabled ? 'Enabled' : 'Disabled', inline: true },
             { name: '📆 Period Start', value: `<t:${periodStartTimestamp}:F>\n(<t:${periodStartTimestamp}:R>)`, inline: true },
             { name: '📅 Resets', value: `<t:${resetTimestamp}:F>\n(<t:${resetTimestamp}:R>)`, inline: true },
@@ -201,6 +201,11 @@ export async function buildQuotaConfigPanel(guildId: string, roleId: string, use
     // Second row with Reset Panel, Delete Quota, and Stop buttons
     const buttons2 = new ActionRowBuilder<ButtonBuilder>()
         .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`quota_send_panel:${roleId}:${createdAt}${userIdSuffix}`)
+                .setLabel('Send Panel')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(!activePeriod),
             new ButtonBuilder()
                 .setCustomId(`quota_reset_panel:${roleId}:${createdAt}${userIdSuffix}`)
                 .setLabel('Reset Period')

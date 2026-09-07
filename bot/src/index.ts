@@ -47,6 +47,7 @@ import { handleHeadcountConvert } from './interactions/buttons/raids/headcount-c
 import { handlePartyClose, handlePartyExtend } from './interactions/buttons/raids/party-actions.js';
 import {
     handleQuotaConfigBasic,
+    handleQuotaSendPanel,
     handleQuotaConfigModeration,
     handleQuotaConfigBasePoints,
     handleQuotaConfigDungeons,
@@ -399,6 +400,11 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             // Handle quota config buttons (restrictive rate limiting)
+            if (interaction.customId.startsWith('quota_send_panel:')) {
+                if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
+                await safeHandleInteraction(interaction, () => handleQuotaSendPanel(interaction), { ephemeral: true });
+                return;
+            }
             if (interaction.customId.startsWith('quota_config_basic:')) {
                 if (!await applyButtonRateLimit(interaction, 'quota_config_panel')) return;
                 await safeHandleInteraction(interaction, () => handleQuotaConfigBasic(interaction), { ephemeral: true });
