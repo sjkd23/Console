@@ -1,3 +1,6 @@
+import assert from 'node:assert/strict';
+import { GatewayIntentBits, Partials } from 'discord.js';
+
 process.env.APPLICATION_ID = '100000000000000000';
 process.env.SECRET_KEY = 'module-load-check-do-not-use';
 process.env.DISCORD_GUILD_IDS = '100000000000000001';
@@ -7,6 +10,10 @@ process.env.NODE_ENV = 'production';
 
 const { client } = await import('../index.js');
 await import('../register-commands.js');
+
+assert.ok(client.options.intents.has(GatewayIntentBits.GuildMessages));
+assert.ok(client.options.intents.has(GatewayIntentBits.MessageContent));
+assert.ok(client.options.partials?.includes(Partials.Message));
 
 client.destroy();
 

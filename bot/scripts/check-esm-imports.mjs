@@ -3,7 +3,8 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
-const botRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+// Optional service root also verifies the independently built backend Docker context.
+const botRoot = process.argv[2] ? resolve(process.argv[2]) : dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceRoot = join(botRoot, 'src');
 const runtimeExtensions = new Set(['.js', '.mjs', '.cjs', '.json', '.node']);
 

@@ -1,3 +1,4 @@
+import { createticket, editticket, listtickets, deleteticket } from './configs/tickets.js';
 import { REST, Routes } from 'discord.js';
 import type { SlashCommand } from './_types.js';
 import { withPermissionCheck } from '../lib/permissions/command-middleware.js';
@@ -51,6 +52,7 @@ import { modmailblacklist } from './moderation/officer/modmailblacklist.js';
 import { modmailunblacklist } from './moderation/officer/modmailunblacklist.js';
 import { logminutes } from './moderation/moderator/logminutes.js';
 import { setdungeonimage } from './configs/setdungeonimage.js';
+import { createembed, editembed, listembeds, deleteembed } from './configs/embeds.js';
 
 /**
  * Helper to apply both permission checks and rate limiting to a command.
@@ -120,6 +122,14 @@ export const commands: SlashCommand[] = [
     withMiddleware(modmailunblacklist),
     withMiddleware(logminutes),
     withMiddleware(setdungeonimage),
+    withMiddleware(createticket),
+    withMiddleware(editticket),
+    withMiddleware(listtickets),
+    withMiddleware(deleteticket),
+    withMiddleware(createembed),
+    withMiddleware(editembed),
+    withMiddleware(listembeds),
+    withMiddleware(deleteembed),
 ];
 
 export function toJSON() {

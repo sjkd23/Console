@@ -21,6 +21,8 @@ import type {
     ButtonInteraction,
     ModalSubmitInteraction,
     StringSelectMenuInteraction,
+    ChannelSelectMenuInteraction,
+    RoleSelectMenuInteraction,
     AutocompleteInteraction,
 } from 'discord.js';
 import { MessageFlags } from 'discord.js';
@@ -33,7 +35,9 @@ export type RepliableInteraction =
     | ChatInputCommandInteraction
     | ButtonInteraction
     | ModalSubmitInteraction
-    | StringSelectMenuInteraction;
+    | StringSelectMenuInteraction
+    | ChannelSelectMenuInteraction
+    | RoleSelectMenuInteraction;
 
 export interface SafeHandleOptions {
     /**

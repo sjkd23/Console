@@ -1,3 +1,5 @@
+import { installTicketEvents, handleTicketButton } from './lib/tickets/lifecycle.js';
+import { handleTicketBuilder } from './lib/tickets/builder.js';
 // src/index.ts
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
@@ -139,13 +141,14 @@ const client = new Client({
         GatewayIntentBits.GuildMessages, // Required for message collectors in guild channels
         GatewayIntentBits.GuildEmojisAndStickers, // Required for emoji cache
         GatewayIntentBits.DirectMessages, // Required for DM-based verification
-        GatewayIntentBits.MessageContent, // Required to read message content in DMs
+        GatewayIntentBits.MessageContent, // Required for guild ticket transcripts and DM verification
     ],
-    partials: [Partials.Channel, Partials.GuildMember, Partials.User]
+    partials: [Partials.Channel, Partials.GuildMember, Partials.User, Partials.Message]
 });
 
 // Export client for use in other modules (e.g., party-state.ts)
 export { client };
+installTicketEvents(client);
 
 client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client.user?.tag}`);
@@ -181,6 +184,20 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton() && interaction.customId.startsWith('ticket:')) {
+        await safeHandleInteraction(interaction, () => handleTicketButton(interaction), { ephemeral: true });
+        return;
+    }
+    if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isChannelSelectMenu() || interaction.isRoleSelectMenu() || interaction.isModalSubmit()) && interaction.customId.startsWith('tkb:')) {
+        await safeHandleInteraction(interaction, () => handleTicketBuilder(interaction), { ephemeral: true });
+        return;
+    }
+    if ((interaction.isButton() || interaction.isStringSelectMenu() || interaction.isChannelSelectMenu() || interaction.isModalSubmit())
+        && interaction.customId.startsWith('emb:')) {
+        const { handleEmbedInteraction } = await import('./lib/embeds/builder.js');
+        await safeHandleInteraction(interaction, () => handleEmbedInteraction(interaction), { ephemeral: true });
+        return;
+    }
     // Autocomplete doesn't need the full wrapper (ultra-fast, no deferral)
     if (interaction.isAutocomplete()) {
         try {
