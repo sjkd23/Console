@@ -1,0 +1,721 @@
+
+ RUN  v4.0.9 C:/Programming/rotmg-raid-bot/backend
+
+[18:33:24] [32mINFO[39m: [36mRun ended successfully[39m
+    context: "RunService"
+    runId: 2
+    guildId: "100000000000000001"
+    organizerQuotaPoints: 0
+    raiderPointsAwarded: 0
+    keyPopCount: "persisted"
+    note: "Organizer quota processed at run end"
+[18:33:24] [32mINFO[39m: [36mRun ended successfully[39m
+    context: "RunService"
+    runId: 3
+    guildId: "100000000000000001"
+    organizerQuotaPoints: 0
+    raiderPointsAwarded: 0
+    keyPopCount: "persisted"
+    note: "Organizer quota processed at run end"
+ ❯ src/lib/runs/minute-quota.integration.test.ts (93 tests | 62 failed) 793ms
+     ✓ resizes the current interval atomically without changing snapshots, events, or totals 18ms
+     ✓ keeps a shortened overdue boundary and catches up through canonical finalization 9ms
+     ✓ rolls back config when the boundary update fails and tracking never activates periods 8ms
+     ✓ adds defaults without changing historical run evidence or either ledger 1ms
+     ✓ changes future SQL and API defaults without resetting existing config values or history 13ms
+     ✓ round-trips 0 through the config API and preserves partial updates 6ms
+     ✓ round-trips 0.1 through the config API and preserves partial updates 5ms
+     ✓ round-trips 0.10 through the config API and preserves partial updates 5ms
+     ✓ round-trips 0.29 through the config API and preserves partial updates 5ms
+     ✓ round-trips 0.57 through the config API and preserves partial updates 5ms
+     ✓ round-trips 1.10 through the config API and preserves partial updates 5ms
+     ✓ rejects invalid API rate -0.1 without updating configuration 2ms
+     ✓ rejects invalid API rate NaN without updating configuration 2ms
+     ✓ rejects invalid API rate Infinity without updating configuration 1ms
+     ✓ rejects invalid API rate 0.1abc without updating configuration 1ms
+     ✓ rejects invalid API rate 0.001 without updating configuration 1ms
+     ✓ rejects invalid API rate 100000000 without updating configuration 1ms
+     ✓ database constraint rejects rate -0.1 1ms
+     ✓ database constraint rejects rate NaN 23ms
+     ✓ database constraint rejects rate 100000000 20ms
+     ✓ preserves existing config fields and the panel ID when updating only the new rate 25ms
+     × rejects contradictory snapshot and finalization evidence in the database 6ms
+     ✓ resolves only matching roles by rate, position, then numeric ID, including zero 29ms
+     × snapshots and freezes minute run "SNAKE_PIT" 3ms
+     × snapshots and freezes minute run "ABYSS_OF_DEMONS" 3ms
+     × snapshots and freezes minute run "REALM_DUNGEON" 2ms
+     × snapshots and freezes minute run "SNAKE_PIT" 2ms
+     × snapshots and freezes minute run "REALM_DUNGEON" 3ms
+     × does not snapshot non-minute kind "NEST" 2ms
+     × does not snapshot non-minute kind "NEST" 2ms
+     × does not snapshot non-minute kind "ORYX_3" 2ms
+     × keeps Start, the domain predicate, and SQL reads consistent across authoritative dungeon metadata 2ms
+     × distinguishes no matching role, configured zero, and unavailable context 1ms
+     × rechecks party/location and O3 screenshot under the Start lock 1ms
+     × never substitutes an acting staff role for missing or nonmatching organizer context 4ms
+     ✓ starts historical open runs normally but never retroactively snapshots live or ended runs 14ms
+     × preserves three entries and raider awards without organizer quota at base zero for "SNAKE_PIT" 3ms
+     × preserves three entries and raider awards without organizer quota at base zero for "REALM_DUNGEON" 3ms
+     × preserves three entries and raider awards without organizer quota at base zero for "SNAKE_PIT" 2ms
+     × does not fabricate zero-entry aggregate activity for "REALM_DUNGEON" 2ms
+     × does not fabricate zero-entry aggregate activity for "SNAKE_PIT" 1ms
+     × does not fabricate zero-entry aggregate activity for "NEST" 1ms
+     × retains exact/base organizer routing for ["NEST"] (override true) 2ms
+     × retains exact/base organizer routing for ["NEST"] (override false) 1ms
+     × retains exact/base organizer routing for ["NEST","FUNGAL_CAVERN"] (override true) 2ms
+     × awards additive per-log points using exact/base routing for ["SNAKE_PIT"] (overrides false) 2ms
+     × awards additive per-log points using exact/base routing for ["SNAKE_PIT"] (overrides true) 4ms
+     × awards additive per-log points using exact/base routing for ["REALM_DUNGEON"] (overrides false) 2ms
+     × awards additive per-log points using exact/base routing for ["REALM_DUNGEON"] (overrides true) 4ms
+     × awards additive per-log points using exact/base routing for ["SNAKE_PIT","ABYSS_OF_DEMONS"] (overrides false) 2ms
+     × awards additive per-log points using exact/base routing for ["SNAKE_PIT","ABYSS_OF_DEMONS"] (overrides true) 3ms
+     × awards additive per-log points using exact/base routing for ["REALM_DUNGEON","SNAKE_PIT"] (overrides true) 3ms
+     × awards additive per-log points using exact/base routing for ["NEST"] (overrides true) 3ms
+     × awards additive per-log points using exact/base routing for ["NEST","FUNGAL_CAVERN"] (overrides true) 4ms
+     × does not replace an effective zero with unrelated guild role points for "SNAKE_PIT" 3ms
+     × does not replace an effective zero with unrelated guild role points for "REALM_DUNGEON" 4ms
+     × does not replace an effective zero with unrelated guild role points for "SNAKE_PIT" 4ms
+     × honors a zero single-dungeon override even when its base is positive 4ms
+     × exposes a one-minute 20/min Realm basis without awarding minute quota 3ms
+     × retains successful O3 accounting exactly once with completed outcome 2ms
+     × normal End is completed and stable (automatic=false) 3ms
+     × normal End is completed and stable (automatic=true) 4ms
+     × cancellation/cleanup wins permanently and an open timeout has no payable basis 1ms
+     × rolls back End and its outcome if final raider processing fails 1ms
+     × concurrent Starts serialize, and Start time is after the held lock is released 1ms
+     × Start racing end cannot restore a terminal run 1ms
+     × Start racing cancel cannot restore a terminal run 1ms
+     × preserves the first completed outcome when End and Cancel compete 3ms
+     × preserves the first cancelled outcome when End and Cancel compete 1ms
+     ✓ floors 0 seconds to 0 whole minutes in Postgres 3ms
+     ✓ floors 59 seconds to 0 whole minutes in Postgres 2ms
+     ✓ floors 60 seconds to 1 whole minutes in Postgres 2ms
+     ✓ floors 119 seconds to 1 whole minutes in Postgres 2ms
+     ✓ floors 120 seconds to 2 whole minutes in Postgres 1ms
+     ✓ preserves sub-millisecond precision and exact numeric multiplication 4ms
+     ✓ handles missing/invalid timestamps, long runs, timezone offsets, and overflow explicitly 6ms
+     × exposes the same computed basis on GET /runs without creating settlement/event state 2ms
+     × creates one snapshotted pending minute row for payable ["SNAKE_PIT"] 2ms
+     × creates one snapshotted pending minute row for payable ["REALM_DUNGEON"] 2ms
+     × creates one snapshotted pending minute row for payable ["SNAKE_PIT","MAGIC_WOODS"] 2ms
+     × creates no minute row for single exalt 2ms
+     × creates no minute row for multi exalt 1ms
+     × creates no minute row for O3 1ms
+     × creates no actionable row for zero duration, zero rate, no role, or cancellation 1ms
+     × books the snapshot exactly once at confirmation time without changing activity 2ms
+     × enforces integer-minute bounds, revisions, terminal states, and terminal cancellation 2ms
+     × serializes Confirm and organizer recovery races to one accounting event 2ms
+     × shares receipts and event identity across sequential Confirm and organizer recovery calls 2ms
+     × serializes terminal and revision races on the settlement row 2ms
+     × coordinates confirmation booking with quota-period finalization on the snapshotted role 4ms
+     × keeps actual non-exalt time independent from selected, cancelled, and missing payouts 14ms
+     × allows only the persisted original organizer to recover and derives payout data from the run 2ms
+     ✓ clamps append-only manual corrections within the selected role without activity semantics 10ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 62 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > rejects contradictory snapshot and finalization evidence in the database
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:265:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > snapshots and freezes minute run "SNAKE_PIT"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > snapshots and freezes minute run "ABYSS_OF_DEMONS"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > snapshots and freezes minute run "REALM_DUNGEON"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > snapshots and freezes minute run "SNAKE_PIT"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > snapshots and freezes minute run "REALM_DUNGEON"
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:293:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not snapshot non-minute kind "NEST"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not snapshot non-minute kind "NEST"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not snapshot non-minute kind "ORYX_3"
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:309:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > keeps Start, the domain predicate, and SQL reads consistent across authoritative dungeon metadata
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:319:27
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > distinguishes no matching role, configured zero, and unavailable context
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:335:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > rechecks party/location and O3 screenshot under the Start lock
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:348:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > never substitutes an acting staff role for missing or nonmatching organizer context
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:359:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > preserves three entries and raider awards without organizer quota at base zero for "SNAKE_PIT"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > preserves three entries and raider awards without organizer quota at base zero for "REALM_DUNGEON"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > preserves three entries and raider awards without organizer quota at base zero for "SNAKE_PIT"
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:390:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not fabricate zero-entry aggregate activity for "REALM_DUNGEON"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not fabricate zero-entry aggregate activity for "SNAKE_PIT"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not fabricate zero-entry aggregate activity for "NEST"
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:408:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > retains exact/base organizer routing for ["NEST"] (override true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > retains exact/base organizer routing for ["NEST"] (override false)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > retains exact/base organizer routing for ["NEST","FUNGAL_CAVERN"] (override true)
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:418:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["SNAKE_PIT"] (overrides false)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["SNAKE_PIT"] (overrides true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["REALM_DUNGEON"] (overrides false)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["REALM_DUNGEON"] (overrides true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["SNAKE_PIT","ABYSS_OF_DEMONS"] (overrides false)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["SNAKE_PIT","ABYSS_OF_DEMONS"] (overrides true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["REALM_DUNGEON","SNAKE_PIT"] (overrides true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["NEST"] (overrides true)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > awards additive per-log points using exact/base routing for ["NEST","FUNGAL_CAVERN"] (overrides true)
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:436:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not replace an effective zero with unrelated guild role points for "SNAKE_PIT"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not replace an effective zero with unrelated guild role points for "REALM_DUNGEON"
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > does not replace an effective zero with unrelated guild role points for "SNAKE_PIT"
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:446:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > honors a zero single-dungeon override even when its base is positive
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:455:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > exposes a one-minute 20/min Realm basis without awarding minute quota
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:461:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > retains successful O3 accounting exactly once with completed outcome
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:471:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > normal End is completed and stable (automatic=false)
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > normal End is completed and stable (automatic=true)
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:485:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > cancellation/cleanup wins permanently and an open timeout has no payable basis
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:497:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > rolls back End and its outcome if final raider processing fails
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:509:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > concurrent Starts serialize, and Start time is after the held lock is released
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:529:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > Start racing end cannot restore a terminal run
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > Start racing cancel cannot restore a terminal run
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:544:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > preserves the first completed outcome when End and Cancel compete
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > preserves the first cancelled outcome when End and Cancel compete
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:556:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > exposes the same computed basis on GET /runs without creating settlement/event state
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:611:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates one snapshotted pending minute row for payable ["SNAKE_PIT"]
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates one snapshotted pending minute row for payable ["REALM_DUNGEON"]
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates one snapshotted pending minute row for payable ["SNAKE_PIT","MAGIC_WOODS"]
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:624:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates no minute row for single exalt
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates no minute row for multi exalt
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates no minute row for O3
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:639:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > creates no actionable row for zero duration, zero rate, no role, or cancellation
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ src/lib/runs/minute-quota.integration.test.ts:650:30
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > books the snapshot exactly once at confirmation time without changing activity
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:670:39
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > enforces integer-minute bounds, revisions, terminal states, and terminal cancellation
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:702:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > serializes Confirm and organizer recovery races to one accounting event
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:724:29
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > shares receipts and event identity across sequential Confirm and organizer recovery calls
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:752:30
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[29/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > serializes terminal and revision races on the settlement row
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:783:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[30/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > coordinates confirmation booking with quota-period finalization on the snapshotted role
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:811:27
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[31/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > keeps actual non-exalt time independent from selected, cancelled, and missing payouts
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:847:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[32/62]⎯
+
+ FAIL  src/lib/runs/minute-quota.integration.test.ts > Phase E PostgreSQL lifecycle, configuration, and migration > allows only the persisted original organizer to recover and derives payout data from the run
+error: column "chained_from_run_id" of relation "run" does not exist
+ ❯ node_modules/pg/lib/client.js:545:17
+ ❯ createRunInTransaction src/lib/services/run-service.ts:240:17
+    238|         [input.organizerId, input.organizerUsername]
+    239|     );
+    240|     const res = await client.query<{ id: string | number }>(
+       |                 ^
+    241|         `INSERT INTO run (
+    242|             guild_id, organizer_id, dungeon_key, dungeon_label, channe…
+ ❯ withTransaction src/lib/database/transaction.ts:10:24
+ ❯ Module.createRunWithTransaction src/lib/services/run-service.ts:278:20
+ ❯ create src/lib/runs/minute-quota.integration.test.ts:179:17
+ ❯ payable src/lib/runs/minute-quota.integration.test.ts:204:23
+ ❯ src/lib/runs/minute-quota.integration.test.ts:864:27
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[33/62]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  62 failed | 31 passed (93)
+   Start at  14:33:23
+   Duration  1.41s (transform 248ms, setup 0ms, collect 502ms, tests 793ms, environment 0ms, prepare 5ms)
+

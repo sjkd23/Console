@@ -32,7 +32,7 @@ export const pool = new Pool({
 
 const SLOW_QUERY_THRESHOLD_MS = 100;
 
-export async function query<T extends import('pg').QueryResultRow = any>(text: string, params?: any[]) {
+export async function query<T extends import('pg').QueryResultRow = any>(text: string, params?: any[], options: { redactParams?: boolean } = {}) {
     const queryId = randomUUID().slice(0, 8);
     const start = Date.now();
     
@@ -78,7 +78,7 @@ export async function query<T extends import('pg').QueryResultRow = any>(text: s
             queryId, 
             duration,
             sql: text,
-            params,
+            params: options.redactParams ? '[redacted]' : params,
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined
         }, 'Query failed');

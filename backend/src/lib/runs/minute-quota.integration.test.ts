@@ -89,6 +89,11 @@ integration('Phase E PostgreSQL lifecycle, configuration, and migration', () => 
             };
             await client.query(readFileSync(resolve(directory, '068_manual_quota_adjustments.sql'), 'utf8'));
             await client.query(readFileSync(resolve(directory, '069_organizer_minute_settlements.sql'), 'utf8'));
+            // The historical migration assertions above stay pinned; lifecycle tests below
+            // exercise today's service and therefore need the rest of today's schema.
+            for (const file of readdirSync(directory).filter(file => file.endsWith('.sql') && file >= '070_').sort()) {
+                await client.query(readFileSync(resolve(directory, file), 'utf8'));
+            }
         } finally {
             client.release();
         }
