@@ -4,6 +4,7 @@ import { createLogger } from '../logging/logger.js';
 import { resolveDungeonRolePingIds } from './dungeon-role-pings.js';
 import { buildRunMessageContent } from './run-message-helpers.js';
 import { getDungeonEnteredEmoji } from './key-emoji-helpers.js';
+import { updateO3StatusMessage } from './o3-status-message.js';
 
 const logger = createLogger('RunPing');
 
@@ -213,56 +214,15 @@ export async function sendKeyPoppedPing(
     }
 }
 
-/**
- * Sends a realm score ping message for Oryx 3 runs, mentioning the run role.
- * NO TIMER - this is different from key popped pings.
- * Automatically deletes the previous ping message if one exists.
- * 
- * @param client - Discord client
- * @param runId - Run ID
- * @param guild - Guild where the run is happening
- * @param realmScore - Realm score percentage (1-99)
- * @returns The new ping message ID, or null if failed
- */
+/** Send the initial O3 status with a role ping, then edit it without pinging. */
 export async function sendRealmScorePing(
     client: Client,
     runId: number,
     guild: Guild,
     realmScore: number
 ): Promise<string | null> {
-    try {
-        // Fetch run details
-        const run = await getRunDetails(runId, guild.id);
+    return updateO3StatusMessage(client, guild, runId, run => {
         const displayLabel = run.selectedDungeons.map(dungeon => dungeon.dungeonLabel).join(' | ');
-
-        if (!run.channelId || !run.postMessageId) {
-            logger.warn('Run missing channel or message ID', { runId });
-            return null;
-        }
-
-        // Fetch the channel
-        const channel = await client.channels.fetch(run.channelId).catch(() => null);
-        if (!channel || !channel.isTextBased() || channel.isDMBased()) {
-            logger.warn('Channel not found or invalid', { runId, channelId: run.channelId });
-            return null;
-        }
-
-        const textChannel = channel as GuildTextBasedChannel;
-
-        // Delete the previous ping message if it exists
-        if (run.pingMessageId) {
-            try {
-                const oldPingMessage = await textChannel.messages.fetch(run.pingMessageId).catch(() => null);
-                if (oldPingMessage && oldPingMessage.deletable) {
-                    await oldPingMessage.delete();
-                    logger.debug('Deleted previous ping message', { runId, oldPingMessageId: run.pingMessageId });
-                }
-            } catch (err) {
-                logger.warn('Failed to delete previous ping message', { runId, pingMessageId: run.pingMessageId, error: err });
-                // Continue anyway - this shouldn't block sending a new ping
-            }
-        }
-
         // Build the ping message (NO TIMER - that's the key difference!)
         let content = `**Realm Score: ${realmScore}%**`;
         
@@ -285,24 +245,6 @@ export async function sendRealmScorePing(
         const raidPanelUrl = `https://discord.com/channels/${guild.id}/${run.channelId}/${run.postMessageId}`;
         content += `\n[Jump to Raid Panel](${raidPanelUrl})`;
 
-        // Send the new ping message
-        const pingMessage = await textChannel.send({ content });
-
-        // Store the new ping message ID in the database
-        await postJSON(`/runs/${runId}/ping-message`, { 
-            pingMessageId: pingMessage.id 
-        }, { guildId: guild.id });
-
-        logger.info('Sent realm score ping message', { 
-            runId, 
-            pingMessageId: pingMessage.id,
-            dungeonLabel: displayLabel,
-            realmScore
-        });
-
-        return pingMessage.id;
-    } catch (error) {
-        logger.error('Failed to send realm score ping', { runId, error });
-        return null;
-    }
+        return { content };
+    });
 }

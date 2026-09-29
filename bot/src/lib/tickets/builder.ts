@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, MessageFlags, ModalBuilder, RoleSelectMenuBuilder, TextInputBuilder, TextInputStyle,
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, MessageFlags, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
     type ButtonInteraction, type ChannelSelectMenuInteraction, type ChatInputCommandInteraction, type ModalSubmitInteraction, type RoleSelectMenuInteraction, type StringSelectMenuInteraction } from 'discord.js';
 import { z } from 'zod';
 import { embedActor, embedError } from '../embeds/builder.js';
@@ -6,7 +6,7 @@ import { EmbedConfigSchema, SnowflakeSchema, embedLength, LIMITS } from '../embe
 import { createSession, sessions as embedSessions, SESSION_TTL, editDraft, type EmbedSession } from '../embeds/session.js';
 import { builderMessage, customId, editorModal, EDITORS } from '../embeds/ui.js';
 import { applyEmbedFieldAction, applyEmbedModal } from '../embeds/editing.js';
-import { renderEmbed } from '../embeds/render.js';
+import { renderTicketEmbed } from './render.js';
 import { ConfigInputSchema, TicketNameSchema, type ConfigInput, type TicketConfig } from './contract.js';
 import * as api from './api.js';
 import { noMentions, panelDestination, ticketCategory } from './discord.js';
@@ -32,8 +32,13 @@ export function ticketBuilderMessage(s: TicketSession) {
         components.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(new RoleSelectMenuBuilder().setCustomId(customId(s, 'roles')).setPlaceholder('Additional ticket staff roles (optional)').setMinValues(0).setMaxValues(20).setDefaultRoles(s.draft.staff_role_ids)));
         components.push(buttons(s, [['save-ticket', s.ticketConfig ? 'Save Changes' : 'Save Ticket Type', ButtonStyle.Success], ['publish-ticket', 'Publish / Move', ButtonStyle.Primary, !s.ticketConfig], ['cancel', 'Cancel']]));
     } else {
-        // Reuse saved-embed property selector, field editor, modal IDs and preview renderer.
-        components.push(...(s.mode === 'fields' ? builderMessage(s).components : builderMessage(s).components.slice(0, 1)));
+        // Reuse field controls, but ticket footers are fixed and have no property editor.
+        if (s.mode === 'fields') components.push(...builderMessage(s).components);
+        else components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
+            .setCustomId(customId(s, 'editor')).setPlaceholder('Edit an embed property…')
+            .addOptions(EDITORS.filter(editor => editor !== 'Footer').map(label => ({
+                label: label === 'Timestamp' ? `Timestamp: ${s.config.timestamp ? 'On' : 'Off'}` : label, value: label,
+            })))));
         if (s.mode !== 'fields') components.push(buttons(s, [['fields', 'Fields'], ['general', 'Back to Ticket Settings'], [s.view === 'panel' ? 'opening' : 'panel', s.view === 'panel' ? 'Preview Opening Embed' : 'Preview Panel Embed']]));
         components.push(buttons(s, [['preview-only', s.view === 'panel' ? 'Create Ticket' : 'Close Ticket', s.view === 'panel' ? ButtonStyle.Primary : ButtonStyle.Danger, true]]));
     }
@@ -43,7 +48,7 @@ export function ticketBuilderMessage(s: TicketSession) {
         s.view === 'panel' || s.view === 'opening' ? `Fields: ${s.config.fields.length}/${LIMITS.fields} • Characters: ${embedLength(s.config)}/${LIMITS.total}` : '',
         s.ticketConfig?.panel_message_id ? `Canonical panel: https://discord.com/channels/${s.guildId}/${s.ticketConfig.published_channel_id}/${s.ticketConfig.panel_message_id}` : '',
         'Moderator/admin mappings also receive access. Save first; Publish / Move explicitly publishes or relocates the panel.', s.notice ?? ''].filter(Boolean).join('\n'),
-        embeds: [renderEmbed(s.view === 'opening' ? s.draft.opening_embed : s.draft.panel_embed)], components, allowedMentions: noMentions };
+        embeds: [renderTicketEmbed(s.view === 'opening' ? s.draft.opening_embed : s.draft.panel_embed)], components, allowedMentions: noMentions };
 }
 export async function openTicketBuilder(i: ChatInputCommandInteraction, id?: string, deleting = false): Promise<void> {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -77,6 +82,10 @@ export async function handleTicketBuilder(i: Component): Promise<void> {
         const actor = await embedActor(i);
         if (parsed.data[2] !== s.revision) { await i.deferUpdate(); await i.editReply(ticketBuilderMessage(s)); await feedback('The builder changed. Use its latest controls.'); return; }
         if (!i.guild) throw new Error('Use this in a server.');
+        // Reject controls/modals issued before footer editing was removed, too.
+        if (action === 'modal-Footer' || (i.isStringSelectMenu() && action === 'editor' && i.values[0] === 'Footer')) {
+            throw new Error('Ticket footers are fixed and cannot be customized.');
+        }
         const opensModal = i.isButton() && ['name','add-field','edit-field'].includes(action) || i.isStringSelectMenu() && action === 'editor' && i.values[0] !== 'Timestamp';
         if (opensModal && (i.isButton() || i.isStringSelectMenu())) {
             if (action === 'name') {

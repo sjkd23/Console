@@ -885,6 +885,27 @@ export default async function runsRoutes(app: FastifyInstance) {
     });
 
     /**
+     * POST /runs/:id/o3-status-message
+     * Track the editable O3 status independently of dungeon-entered notifications.
+     */
+    app.post('/runs/:id/o3-status-message', async (req, reply) => {
+        const Params = z.object({ id: z.string().regex(/^\d+$/) });
+        const Body = z.object({ o3StatusMessageId: zSnowflake });
+
+        const p = Params.safeParse(req.params);
+        const b = Body.safeParse(req.body);
+        if (!p.success || !b.success) return Errors.validation(reply);
+
+        const runId = Number(p.data.id);
+        await query(
+            `UPDATE run SET o3_status_message_id = $2::bigint WHERE id = $1::bigint`,
+            [runId, b.data.o3StatusMessageId]
+        );
+
+        return reply.send({ ok: true });
+    });
+
+    /**
      * POST /runs/:id/screenshot
      * Store screenshot URL for a run (required for Oryx 3 before going live).
      * Body: { actorId: Snowflake, actorRoles?: string[], screenshotUrl: string }
@@ -1059,6 +1080,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             description: string | null;
             role_id: string | null;
             ping_message_id: string | null;
+            o3_status_message_id: string | null;
             key_pop_count: number;
             chain_amount: number | null;
             screenshot_url: string | null;
@@ -1068,7 +1090,7 @@ export default async function runsRoutes(app: FastifyInstance) {
         }>(
                 `SELECT id, guild_id, channel_id, post_message_id, active_runs_channel_id, active_runs_message_id,
                     dungeon_key, dungeon_label, run_kind, activity_key, status, organizer_id,
-                    started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id,
+                    started_at, ended_at, created_at, auto_end_minutes, key_window_ends_at, party, location, description, role_id, ping_message_id, o3_status_message_id,
                     key_pop_count, chain_amount, screenshot_url, o3_stage, join_locked, finalization_kind,
                     chained_from_run_id,
                     ${ORGANIZER_MINUTE_QUOTA_SQL} AS organizer_minute_quota,
@@ -1118,6 +1140,7 @@ export default async function runsRoutes(app: FastifyInstance) {
             description: r.description,
             roleId: r.role_id,
             pingMessageId: r.ping_message_id,
+            o3StatusMessageId: r.o3_status_message_id,
             keyPopCount: r.key_pop_count,
             chainAmount: r.chain_amount,
             screenshotUrl: r.screenshot_url,

@@ -87,6 +87,10 @@ export async function pendingTranscript(guild: string, id: string) {
     return r.rows.map(row => EventSchema.parse(row));
 }
 export async function acknowledgeTranscript(guild: string, id: string, key: string, delivered: number) {
-    await query(`UPDATE ticket_transcript_event e SET delivered=$4 FROM ticket t WHERE t.id=e.ticket_id AND t.guild_id=$1 AND t.id=$2
+    // Advance and erase atomically only on the final sequential acknowledgement.
+    // Keep the row/cursor for catch-up deduplication; partial payloads remain intact.
+    await query(`UPDATE ticket_transcript_event e SET delivered=$4,
+        chunks=CASE WHEN $4=jsonb_array_length(e.chunks) THEN '[]'::jsonb ELSE e.chunks END
+        FROM ticket t WHERE t.id=e.ticket_id AND t.guild_id=$1 AND t.id=$2
         AND e.event_key=$3 AND e.delivered=$4-1 AND $4<=jsonb_array_length(e.chunks)`, [guild, id, key, delivered], { redactParams: true });
 }

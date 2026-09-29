@@ -1,8 +1,6 @@
-import { Client, Guild, type GuildTextBasedChannel } from 'discord.js';
-import { getRunDetails, getRunDisplayLabel, postJSON } from './http.js';
-import { createLogger } from '../logging/logger.js';
-
-const logger = createLogger('O3Progression');
+import { Client, Guild } from 'discord.js';
+import { getRunDisplayLabel } from './http.js';
+import { updateO3StatusMessage } from './o3-status-message.js';
 
 /**
  * Shared interface for O3 progression ping messages.
@@ -22,51 +20,15 @@ interface O3ProgressionOptions {
 }
 
 /**
- * Sends an O3 progression ping message, automatically deleting the previous one.
+ * Updates the tracked O3 status message without another role ping.
  * This is the shared implementation for Realm Closed, Miniboss, and Third Room pings.
  * 
- * @returns The new ping message ID, or null if failed
+ * @returns The tracked status message ID, or null if failed
  */
 export async function sendO3ProgressionPing(options: O3ProgressionOptions): Promise<string | null> {
     const { messageText, runId, guild, client, includePartyLocation = true } = options;
 
-    try {
-        // Fetch run details
-        const run = await getRunDetails(runId, guild.id);
-
-        if (run.runKind !== 'oryx_3') {
-            logger.warn('Rejected O3 progression ping for a non-O3 run', { runId, runKind: run.runKind });
-            return null;
-        }
-
-        if (!run.channelId || !run.postMessageId) {
-            logger.warn('Run missing channel or message ID', { runId });
-            return null;
-        }
-
-        // Fetch the channel
-        const channel = await client.channels.fetch(run.channelId).catch(() => null);
-        if (!channel || !channel.isTextBased() || channel.isDMBased()) {
-            logger.warn('Channel not found or invalid', { runId, channelId: run.channelId });
-            return null;
-        }
-
-        const textChannel = channel as GuildTextBasedChannel;
-
-        // Delete the previous ping message if it exists
-        if (run.pingMessageId) {
-            try {
-                const oldPingMessage = await textChannel.messages.fetch(run.pingMessageId).catch(() => null);
-                if (oldPingMessage && oldPingMessage.deletable) {
-                    await oldPingMessage.delete();
-                    logger.debug('Deleted previous ping message', { runId, oldPingMessageId: run.pingMessageId });
-                }
-            } catch (err) {
-                logger.warn('Failed to delete previous ping message', { runId, pingMessageId: run.pingMessageId, error: err });
-                // Continue anyway - this shouldn't block sending a new ping
-            }
-        }
-
+    return updateO3StatusMessage(client, guild, runId, run => {
         // Build the ping message
         let content = `**${messageText}**`;
 
@@ -91,39 +53,12 @@ export async function sendO3ProgressionPing(options: O3ProgressionOptions): Prom
         const raidPanelUrl = `https://discord.com/channels/${guild.id}/${run.channelId}/${run.postMessageId}`;
         content += `\n[Jump to Raid Panel](${raidPanelUrl})`;
 
-        // Send the new ping message
-        const pingMessage = await textChannel.send({
+        return {
             content,
             reply: {
-                messageReference: run.postMessageId,
+                messageReference: run.postMessageId!,
                 failIfNotExists: true
             }
-        });
-
-        // The Discord notification has already succeeded at this point. A tracking-write
-        // failure should not make callers report that the announcement itself failed.
-        try {
-            await postJSON(`/runs/${runId}/ping-message`, {
-                pingMessageId: pingMessage.id
-            }, { guildId: guild.id });
-        } catch (error) {
-            logger.error('Sent O3 progression ping but failed to store its message ID', {
-                runId,
-                pingMessageId: pingMessage.id,
-                error
-            });
-        }
-
-        logger.info('Sent O3 progression ping', {
-            runId,
-            pingMessageId: pingMessage.id,
-            messageText,
-            dungeonLabel: run.dungeonLabel
-        });
-
-        return pingMessage.id;
-    } catch (error) {
-        logger.error('Failed to send O3 progression ping', { runId, messageText, error });
-        return null;
-    }
+        };
+    });
 }

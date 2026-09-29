@@ -241,7 +241,8 @@ export default async function verificationRoutes(app: FastifyInstance) {
                        verification_method, screenshot_url, ticket_message_id,
                        reviewed_by_user_id, denial_reason,
                        created_at, updated_at, expires_at`,
-            values
+            values,
+            { redactParams: updates.denial_reason !== undefined }
         );
 
         if (!res.rowCount || res.rowCount === 0) {

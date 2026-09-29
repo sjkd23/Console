@@ -3,17 +3,11 @@ import {
     ButtonInteraction,
     MessageFlags,
     EmbedBuilder,
-    GuildMember,
-    Message,
-    ComponentType,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
     ActionRowBuilder,
     ModalSubmitInteraction,
-    Collection,
-    TextBasedChannel,
-    ReadonlyCollection,
 } from 'discord.js';
 import {
     getSessionByUserId,
@@ -21,7 +15,6 @@ import {
     applyVerification,
     createSuccessEmbed,
     deleteSession,
-    cancelSessionSafely,
     validateIGN,
     logVerificationEvent,
 } from '../../../lib/verification/verification.js';
@@ -29,7 +22,14 @@ import { hasInternalRole } from '../../../lib/permissions/permissions.js';
 import { awardManualVerificationCredit } from '../../../lib/verification/manual-verification-credit.js';
 import { withButtonLock, getVerificationLockKey } from '../../../lib/utilities/button-mutex.js';
 
-const DENIAL_REASON_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+import { z } from 'zod';
+import { SnowflakeSchema } from '../../../lib/embeds/contract.js';
+
+const ApproveButtonId = z.tuple([z.literal('verification'), z.literal('approve'), SnowflakeSchema]);
+const ApproveModalId = z.tuple([
+    z.literal('verification'), z.enum(['approve_confirm', 'approve_modal']),
+    SnowflakeSchema, SnowflakeSchema, SnowflakeSchema,
+]);
 
 /**
  * Handle "Approve" button on manual verification ticket
@@ -45,17 +45,18 @@ export async function handleVerificationApprove(interaction: ButtonInteraction):
     }
 
     // Extract user ID from button custom ID (need it for lock key)
-    const userId = interaction.customId.split(':')[2];
-    if (!userId) {
+    const parsed = ApproveButtonId.safeParse(interaction.customId.split(':'));
+    if (!parsed.success) {
         await interaction.reply({
             content: '❌ Invalid button data.',
             ephemeral: true,
         });
         return;
     }
+    const userId = parsed.data[2];
 
     // CRITICAL: Wrap in mutex to prevent concurrent approval/denial
-    const executed = await withButtonLock(interaction, getVerificationLockKey('approve', userId), async () => {
+    const executed = await withButtonLock(interaction, getVerificationLockKey('review', userId), async () => {
         await handleVerificationApproveInternal(interaction, userId);
     });
 
@@ -142,6 +143,11 @@ async function handleVerificationApproveInternal(interaction: ButtonInteraction,
             return;
         }
 
+        if (session.guild_id !== interaction.guild!.id || session.ticket_message_id !== interaction.message.id) {
+            await interaction.reply({ content: 'This verification request is stale or belongs to another server.', flags: MessageFlags.Ephemeral });
+            return;
+        }
+
         // Get IGN from session (user provided it during ticket creation)
         const ign = session.rotmg_ign;
 
@@ -153,7 +159,7 @@ async function handleVerificationApproveInternal(interaction: ButtonInteraction,
 
         // Show confirmation modal with IGN pre-filled for verification
         const modal = new ModalBuilder()
-            .setCustomId(`verification:approve_confirm:${userId}`)
+            .setCustomId(`verification:approve_confirm:${userId}:${interaction.user.id}:${interaction.message.id}`)
             .setTitle('Confirm Verification Approval');
 
         const ignInput = new TextInputBuilder()
@@ -184,7 +190,7 @@ async function handleVerificationApproveInternal(interaction: ButtonInteraction,
  */
 async function showIgnInputModal(interaction: ButtonInteraction, userId: string): Promise<void> {
     const modal = new ModalBuilder()
-        .setCustomId(`verification:approve_modal:${userId}`)
+        .setCustomId(`verification:approve_modal:${userId}:${interaction.user.id}:${interaction.message.id}`)
         .setTitle('Approve Verification');
 
     const ignInput = new TextInputBuilder()
@@ -205,6 +211,18 @@ async function showIgnInputModal(interaction: ButtonInteraction, userId: string)
  * Handle modal submission for approval with IGN
  */
 export async function handleVerificationApproveModal(interaction: ModalSubmitInteraction): Promise<void> {
+    const parsed = ApproveModalId.safeParse(interaction.customId.split(':'));
+    if (!parsed.success || parsed.data[3] !== interaction.user.id || parsed.data[4] !== interaction.message?.id) {
+        await interaction.reply({ content: 'This approval form is invalid or belongs to another reviewer.', flags: MessageFlags.Ephemeral });
+        return;
+    }
+    const userId = parsed.data[2];
+    await withButtonLock(interaction, getVerificationLockKey('review', userId), async () => {
+        await handleVerificationApproveModalInternal(interaction);
+    }, { holdUntilSettled: true });
+}
+
+async function handleVerificationApproveModalInternal(interaction: ModalSubmitInteraction): Promise<void> {
     if (!interaction.inGuild() || !interaction.guild) {
         await interaction.reply({
             content: '❌ This modal can only be used in a server.',
@@ -293,6 +311,13 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
                 '❌ **Invalid Status**\n\n' +
                 `This verification request has already been ${session.status}.`
             );
+            return;
+        }
+
+        const reviewer = await interaction.guild.members.fetch(interaction.user.id);
+        if (!await hasInternalRole(reviewer, 'security') || session.guild_id !== interaction.guild.id
+            || session.ticket_message_id !== interaction.message?.id) {
+            await interaction.editReply('This verification request is stale or you are not authorized to review it.');
             return;
         }
 
@@ -475,179 +500,100 @@ export async function handleVerificationApproveModal(interaction: ModalSubmitInt
     }
 }
 
-/**
- * Handle "Deny" button on manual verification ticket
- * Security+ only
- */
-export async function handleVerificationDeny(interaction: ButtonInteraction): Promise<void> {
-    if (!interaction.inGuild() || !interaction.guild) {
-        await interaction.reply({
-            content: '❌ This button can only be used in a server.',
-            flags: MessageFlags.Ephemeral,
-        });
-        return;
-    }
+const DenyButtonId = z.tuple([z.literal('verification'), z.literal('deny'), SnowflakeSchema]);
+const DenyModalId = z.tuple([z.literal('verification'), z.literal('deny_modal'), SnowflakeSchema, SnowflakeSchema, SnowflakeSchema]);
+const DenialReason = z.string().max(2000).transform(value => value.trim());
 
-    // Extract user ID from button custom ID (need it for lock key)
-    const userId = interaction.customId.split(':')[2];
-    if (!userId) {
-        await interaction.reply({
-            content: '❌ Invalid button data.',
-            ephemeral: true,
-        });
-        return;
-    }
-
-    // Defer first since we need to do permission check
-    await interaction.deferReply({ ephemeral: true });
-
-    // CRITICAL: Wrap in mutex to prevent concurrent approval/denial
-    const executed = await withButtonLock(interaction, getVerificationLockKey('deny', userId), async () => {
-        await handleVerificationDenyInternal(interaction, userId);
-    });
-
-    if (!executed) {
-        // Lock was not acquired, user was already notified
-        return;
+/** Retire only a missing/expired request's original UI; never touch a replacement request. */
+async function retireStaleDenialMessage(interaction: ButtonInteraction | ModalSubmitInteraction): Promise<void> {
+    try {
+        const message = interaction.message;
+        if (!message) return;
+        const embed = message.embeds[0] ? EmbedBuilder.from(message.embeds[0]) : new EmbedBuilder();
+        embed.setDescription('❌ Verification Canceled\nThis verification session has been cancelled or expired.');
+        await message.edit({ embeds: [embed], components: [] });
+    } catch {
+        console.error('[VerificationDeny] Failed to retire stale request', { reviewerId: interaction.user.id });
     }
 }
 
-/**
- * Internal handler for verification denial (protected by mutex).
- */
-async function handleVerificationDenyInternal(interaction: ButtonInteraction, userId: string): Promise<void> {
-
+/** Open a reviewer-bound modal; no message content or pending collector state is needed. */
+export async function handleVerificationDeny(interaction: ButtonInteraction): Promise<void> {
     try {
-        // Check if user has security+ role
-        if (!interaction.guild) {
-            await interaction.editReply('❌ This command can only be used in a server.');
+        const parsed = DenyButtonId.safeParse(interaction.customId.split(':'));
+        if (!interaction.guild || !parsed.success) {
+            await interaction.reply({ content: 'Invalid verification button or server.', flags: MessageFlags.Ephemeral });
             return;
         }
-
+        const userId = parsed.data[2];
         const member = await interaction.guild.members.fetch(interaction.user.id);
-        const hasPermission = await hasInternalRole(member, 'security');
-
-        if (!hasPermission) {
-            await interaction.editReply(
-                '❌ **Access Denied**\n\n' +
-                'You need the Security+ role to deny verification requests.'
-            );
+        if (!await hasInternalRole(member, 'security')) {
+            await interaction.reply({ content: 'You need the Security+ role to deny verification requests.', flags: MessageFlags.Ephemeral });
             return;
         }
-
-        // Extract user ID from button custom ID
-        const userId = interaction.customId.split(':')[2];
-
-        if (!userId) {
-            await interaction.editReply('❌ Invalid button data.');
-            return;
-        }
-
-        // Get session
         const session = await getSessionByUserId(userId);
-
-        if (!session) {
-            // Update the ticket message to show cancellation
-            try {
-                const ticketMessage = interaction.message;
-                if (ticketMessage && ticketMessage.embeds.length > 0) {
-                    const originalEmbed = EmbedBuilder.from(ticketMessage.embeds[0]);
-                    
-                    // Add cancellation message to description
-                    const currentDescription = originalEmbed.data.description || '';
-                    originalEmbed.setDescription(
-                        currentDescription + '\n\n' +
-                        '**Status:** ❌ Verification Canceled\n' +
-                        'This verification session has been cancelled or expired.'
-                    );
-                    
-                    await ticketMessage.edit({
-                        embeds: [originalEmbed],
-                        components: [], // Remove buttons
-                    });
-                }
-            } catch (updateErr) {
-                console.error('[VerificationDeny] Failed to update ticket message:', updateErr);
+        if (!session || session.guild_id !== interaction.guild.id || session.ticket_message_id !== interaction.message.id
+            || session.status !== 'pending_review') {
+            if (!session) {
+                await retireStaleDenialMessage(interaction);
             }
-            
-            await interaction.editReply(
-                '❌ **Session Not Found**\n\n' +
-                'Verification session not found. It may have been cancelled or expired.\n' +
-                'The ticket has been updated.'
-            );
+            await interaction.reply({ content: 'This verification request has expired or already been processed.', flags: MessageFlags.Ephemeral });
             return;
         }
-
-        if (session.status !== 'pending_review') {
-            await interaction.editReply(
-                '❌ **Invalid Status**\n\n' +
-                `This verification request has already been ${session.status}.`
-            );
-            return;
-        }
-
-        const guildId = session.guild_id;
-
-        // Ask for denial reason
-        await interaction.editReply(
-            '📝 **Provide Denial Reason**\n\n' +
-            'Please type a message in **this channel** explaining why this verification was denied.\n' +
-            'The user will receive this message.\n\n' +
-            '⏱️ You have 5 minutes to respond.'
-        );
-
-        // Collect reason from staff member
-        const channel = interaction.channel;
-        if (!channel || !channel.isTextBased()) {
-            console.error('[VerificationDeny] Channel is not text-based or null');
-            await cancelSessionSafely(guildId, userId, 'manual verification denial channel unavailable');
-            await interaction.followUp({
-                content: '❌ Could not set up message collector - invalid channel type.',
-                ephemeral: true,
-            });
-            return;
-        }
-
-        // Type guard: ensure channel supports message collection
-        if (!('createMessageCollector' in channel)) {
-            console.error('[VerificationDeny] Channel does not support createMessageCollector');
-            await cancelSessionSafely(guildId, userId, 'manual verification denial collector unavailable');
-            await interaction.followUp({
-                content: '❌ This channel type does not support message collection.',
-                ephemeral: true,
-            });
-            return;
-        }
-
-        console.log(`[VerificationDeny] Creating message collector for user ${interaction.user.id} in channel ${channel.id}`);
-
-        const collector = channel.createMessageCollector({
-            filter: (m: Message) => {
-                console.log(`[VerificationDeny] Message received from ${m.author.id}, expecting ${interaction.user.id}, match: ${m.author.id === interaction.user.id}`);
-                return m.author.id === interaction.user.id && !m.author.bot;
-            },
-            time: DENIAL_REASON_TIMEOUT,
-            max: 1,
+        const modal = new ModalBuilder()
+            .setCustomId(`verification:deny_modal:${userId}:${interaction.user.id}:${interaction.message.id}`)
+            .setTitle('Deny Verification')
+            .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder()
+                .setCustomId('reason').setLabel('Denial reason (sent to the user)')
+                .setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(2000)));
+        await interaction.showModal(modal);
+    } catch {
+        console.error('[VerificationDeny] Could not open modal', { reviewerId: interaction.user.id });
+        if (!interaction.replied && !interaction.deferred) await interaction.reply({
+            content: 'An error occurred while opening the denial form. Please try again.', flags: MessageFlags.Ephemeral,
         });
+    }
+}
 
-        console.log('[VerificationDeny] Message collector created successfully');
-
-        collector.on('collect', async (message: Message) => {
-            console.log(`[VerificationDeny] Collected message from ${message.author.tag}: "${message.content}"`);
-            const reason = message.content.trim();
-
+export async function handleVerificationDenyModal(interaction: ModalSubmitInteraction): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+        const parsed = DenyModalId.safeParse(interaction.customId.split(':'));
+        if (!interaction.guild || !parsed.success || parsed.data[3] !== interaction.user.id
+            || !interaction.message || parsed.data[4] !== interaction.message.id) {
+            await interaction.editReply('This denial form is invalid or belongs to another reviewer.');
+            return;
+        }
+        const [, , userId, , ticketId] = parsed.data;
+        await withButtonLock(interaction, getVerificationLockKey('review', userId), async () => {
+            const member = await interaction.guild!.members.fetch(interaction.user.id);
+            if (!await hasInternalRole(member, 'security')) {
+                await interaction.editReply('You need the Security+ role to deny verification requests.');
+                return;
+            }
+            const session = await getSessionByUserId(userId);
+            if (!session || session.guild_id !== interaction.guild!.id || session.ticket_message_id !== ticketId
+                || session.status !== 'pending_review') {
+                if (!session) {
+                    await retireStaleDenialMessage(interaction);
+                }
+                await interaction.editReply('This verification request has expired or already been processed.');
+                return;
+            }
+            const reason = DenialReason.parse(interaction.fields.getTextInputValue('reason'));
+            const guildId = session.guild_id;
             // Update session with denial
             const deniedSession = await updateSession(guildId, userId, {
                 status: 'denied',
                 reviewed_by_user_id: interaction.user.id,
                 denial_reason: reason || 'No reason provided',
             });
-            
-            // If session was already gone, still notify user about denial
-            if (!deniedSession) {
-                console.log(`[VerificationDeny] Session ${userId} was already cleaned up, but user will still be notified of denial`);
-            }
 
+            if (!deniedSession) {
+                await interaction.editReply('This verification session has expired or already been processed.');
+                return;
+            }
+            console.log('[VerificationDeny] Manual verification denied', { userId, reviewerId: interaction.user.id, ticketId });
             // Send DM to user
             try {
                 const userToNotify = await interaction.client.users.fetch(userId);
@@ -667,7 +613,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
 
                 await dmChannel.send({ embeds: [denialEmbed] });
             } catch (dmErr) {
-                console.error('[VerificationDeny] Could not DM user:', dmErr);
+                console.error('[VerificationDeny] Could not DM user:', { userId, reviewerId: interaction.user.id });
             }
 
             // Update ticket message
@@ -682,14 +628,13 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 .setColor(0xFF0000)
                 .setTimestamp();
 
-            await interaction.message.edit({
+            await interaction.message!.edit({
                 embeds: [ticketEmbed],
                 components: [], // Remove buttons
             });
 
-            await interaction.followUp({
+            await interaction.editReply({
                 content: `✅ **Verification Denied**\n\n<@${userId}> has been notified.`,
-                ephemeral: true,
             });
 
             // Handling a manual verification earns the same configured credit for either decision.
@@ -705,7 +650,7 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 }
             } catch (modPointsErr) {
                 // Non-critical error - log but don't fail the denial
-                console.error('[VerificationDeny] Failed to award moderation points:', modPointsErr);
+                console.error('[VerificationDeny] Failed to award moderation points:', { userId, reviewerId: interaction.user.id });
             }
 
             // Log denial
@@ -714,107 +659,19 @@ async function handleVerificationDenyInternal(interaction: ButtonInteraction, us
                 userId,
                 `**❌ Manual verification denied** by <@${interaction.user.id}>\n` +
                 `**Reason:** ${reason || 'No reason provided'}`,
-                { error: true }
+                { error: true, redactErrorDetails: true }
             );
-
-            // Delete the reason message
-            try {
-                await message.delete();
-            } catch {}
 
             // Clean up session immediately after denial
             try {
                 await deleteSession(guildId, userId);
             } catch (err) {
-                console.error('[VerificationDeny] Failed to delete session:', err);
+                console.error('[VerificationDeny] Failed to delete session:', { userId, reviewerId: interaction.user.id });
             }
-        });
-
-        collector.on('end', async (collected: ReadonlyCollection<string, Message>, reason: string) => {
-            console.log(`[VerificationDeny] Collector ended. Reason: ${reason}, Collected: ${collected.size}`);
-            if (reason === 'time' && collected.size === 0) {
-                // No reason provided within timeout
-                const deniedSession = await updateSession(guildId, userId, {
-                    status: 'denied',
-                    reviewed_by_user_id: interaction.user.id,
-                });
-                
-                // If session was already gone, still notify user about denial
-                if (!deniedSession) {
-                    console.log(`[VerificationDeny] Session ${userId} was already cleaned up (timeout), but user will still be notified of denial`);
-                }
-
-                // Send DM to user without reason
-                try {
-                    const userToNotify = await interaction.client.users.fetch(userId);
-                    const dmChannel = await userToNotify.createDM();
-
-                    const denialEmbed = new EmbedBuilder()
-                        .setTitle('❌ Verification Denied')
-                        .setDescription(
-                            `**Server:** ${interaction.guild!.name}\n\n` +
-                            `Your manual verification request has been denied.\n\n` +
-                            'If you have questions, please contact a staff member.\n' +
-                            'You can submit a new verification request by clicking the "Get Verified" button again.'
-                        )
-                        .setColor(0xFF0000)
-                        .setTimestamp();
-
-                    await dmChannel.send({ embeds: [denialEmbed] });
-                } catch (dmErr) {
-                    console.error('[VerificationDeny] Could not DM user:', dmErr);
-                }
-
-                // Update ticket message
-                const ticketEmbed = new EmbedBuilder()
-                    .setTitle('❌ Verification Denied')
-                    .setDescription(
-                        `**User:** <@${userId}>\n` +
-                        `**IGN:** ${session.rotmg_ign}\n` +
-                        `**Denied by:** <@${interaction.user.id}>\n\n` +
-                        `**Reason:** No reason provided (timeout)`
-                    )
-                    .setColor(0xFF0000)
-                    .setTimestamp();
-
-                await interaction.message.edit({
-                    embeds: [ticketEmbed],
-                    components: [], // Remove buttons
-                });
-
-                await interaction.followUp({
-                    content: `⏱️ **Timeout**\n\nNo reason provided. <@${userId}> has been notified.`,
-                    ephemeral: true,
-                });
-
-                // A timeout denial is still a completed manual verification decision.
-                try {
-                    const moderationPointsResult = await awardManualVerificationCredit(
-                        interaction.client,
-                        session,
-                        member
-                    );
-
-                    if (moderationPointsResult.points_awarded > 0) {
-                        console.log(`[VerificationDeny] Awarded ${moderationPointsResult.points_awarded} moderation points to ${interaction.user.id}`);
-                    }
-                } catch (modPointsErr) {
-                    // Non-critical error - log but don't fail the denial
-                    console.error('[VerificationDeny] Failed to award moderation points:', modPointsErr);
-                }
-
-                // Clean up session immediately after timeout denial
-                try {
-                    await deleteSession(guildId, userId);
-                } catch (err) {
-                    console.error('[VerificationDeny] Failed to delete session:', err);
-                }
-            }
-        });
-    } catch (err) {
-        console.error('[VerificationDeny] Error:', err);
-        await interaction.editReply(
-            '❌ An error occurred while denying verification. Please try again.'
-        );
+        }, { holdUntilSettled: true });
+    } catch {
+        // Discord REST errors can contain request bodies (including the reason).
+        console.error('[VerificationDeny] Denial failed', { reviewerId: interaction.user.id });
+        await interaction.editReply('An error occurred while denying verification. Please try again.');
     }
 }

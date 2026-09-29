@@ -89,7 +89,7 @@ describe('manual verification quota credit', () => {
         }
     });
 
-    it('hooks approval and both rejection outcomes into the same helper without separate rejection configuration', async () => {
+    it('hooks approval and submitted rejection into the same helper without separate rejection configuration', async () => {
         const handlerSource = await readFile(
             new URL('../../interactions/buttons/verification/approve-deny.ts', import.meta.url),
             'utf8'
@@ -100,7 +100,7 @@ describe('manual verification quota credit', () => {
         );
         const separateSettingName = ['reject', 'verification', 'points'].join('_');
 
-        assert.equal((handlerSource.match(/awardManualVerificationCredit\(/g) ?? []).length, 3);
+        assert.equal((handlerSource.match(/awardManualVerificationCredit\(/g) ?? []).length, 2);
         assert.doesNotMatch(handlerSource, new RegExp(separateSettingName));
         assert.doesNotMatch(quotaUiSource, new RegExp(separateSettingName));
     });

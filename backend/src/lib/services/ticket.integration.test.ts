@@ -38,7 +38,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))('tickets PostgreSQL and a
         state.pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
         await state.pool.query('CREATE TABLE guild(id BIGINT PRIMARY KEY)');
         await state.pool.query('INSERT INTO guild VALUES($1),($2)', [guild, other]);
-        for (const file of ['077_tickets.sql','078_ticket_transcript_outbox.sql']) await state.pool.query(readFileSync(resolve('src/db/migrations', file), 'utf8'));
+        for (const file of ['077_tickets.sql','078_ticket_transcript_outbox.sql','079_clear_delivered_ticket_transcripts.sql']) await state.pool.query(readFileSync(resolve('src/db/migrations', file), 'utf8'));
         await app.register(authPlugin); await app.register(routes);
     });
     beforeEach(async () => { state.authorized = true; await state.pool!.query('TRUNCATE ticket_transcript_event,ticket,ticket_config'); });
@@ -91,6 +91,66 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))('tickets PostgreSQL and a
         await service.acknowledgeTranscript(guild, t.id, 'message:1', 1);
         expect(await service.pendingTranscript(guild, t.id)).toEqual([{ event_key: 'message:1', chunks: ['first','second'], delivered: 1 }]);
         await service.acknowledgeTranscript(guild, t.id, 'message:1', 2); expect(await service.pendingTranscript(guild, t.id)).toEqual([]);
+    });
+    const storedEvent = async (id: string, key: string) => {
+        const result = await state.pool!.query<Record<string, unknown>>(
+            'SELECT ticket_id,event_key,chunks,delivered,created_at FROM ticket_transcript_event WHERE ticket_id=$1 AND event_key=$2', [id, key]);
+        return z.object({ ticket_id: z.string(), event_key: z.string(), chunks: z.array(z.string()), delivered: z.number(), created_at: z.date() }).parse(result.rows[0]);
+    };
+    it('keeps pending payload across reconnect, then atomically clears only the final sequential acknowledgement', async () => {
+        const c = await create(), t = await makeOpen(c.id), key = 'message:retention';
+        const chunks = ['Ticket message', 'Before/After edit, embed text, attachment https://example.com/private'];
+        await service.enqueueTranscript(guild, t.id, key, chunks);
+        const original = await storedEvent(t.id, key);
+        expect(original.chunks).toEqual(chunks); expect(original.delivered).toBe(0);
+        // A failed Discord send produces no ACK; recreate database connections to simulate restart.
+        await state.pool!.end();
+        state.pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
+        expect(await service.pendingTranscript(guild, t.id)).toEqual([{ event_key: key, chunks, delivered: 0 }]);
+        await service.acknowledgeTranscript(other, t.id, key, 1);
+        await service.acknowledgeTranscript(guild, t.id, key, 2); // Cannot skip the first send.
+        expect(await storedEvent(t.id, key)).toEqual(original);
+        await service.acknowledgeTranscript(guild, t.id, key, 1);
+        // Failure of the second send must leave even the first chunk available.
+        expect(await storedEvent(t.id, key)).toEqual({ ...original, delivered: 1 });
+        expect(await service.pendingTranscript(guild, t.id)).toEqual([{ event_key: key, chunks, delivered: 1 }]);
+        await service.acknowledgeTranscript(guild, t.id, key, 1); // Lost ACK response retry.
+        await service.acknowledgeTranscript(guild, t.id, key, 3); // Out-of-range ACK.
+        expect(await storedEvent(t.id, key)).toEqual({ ...original, delivered: 1 });
+        await Promise.all([service.acknowledgeTranscript(guild, t.id, key, 2), service.acknowledgeTranscript(guild, t.id, key, 2)]);
+        expect(await storedEvent(t.id, key)).toEqual({ ...original, delivered: 2, chunks: [] });
+        expect(await service.pendingTranscript(guild, t.id)).toEqual([]);
+        // Replayed catch-up/enqueue and ACK must not resurrect content or duplicate the event.
+        await service.enqueueTranscript(guild, t.id, key, chunks);
+        await service.acknowledgeTranscript(guild, t.id, key, 2);
+        expect(await storedEvent(t.id, key)).toEqual({ ...original, delivered: 2, chunks: [] });
+    });
+    it('HTTP acknowledgement clears a single-chunk event without changing pending ordering', async () => {
+        const c = await create(), t = await makeOpen(c.id);
+        const event = { event_key: 'message:a', chunks: ['Private text'], delivered: 0 };
+        expect((await request('enqueue', { id: t.id, event })).statusCode).toBe(200);
+        await service.enqueueTranscript(guild, t.id, 'message:b', ['Next message']);
+        await state.pool!.query("UPDATE ticket_transcript_event SET created_at='2026-01-01' WHERE ticket_id=$1", [t.id]);
+        expect((await service.pendingTranscript(guild, t.id)).map(e => e.event_key)).toEqual(['message:a', 'message:b']);
+        expect((await request('ack', { id: t.id, event: { ...event, delivered: 1 } })).statusCode).toBe(200);
+        expect((await storedEvent(t.id, event.event_key)).chunks).toEqual([]);
+        expect((await service.pendingTranscript(guild, t.id)).map(e => e.event_key)).toEqual(['message:b']);
+    });
+    it('historical cleanup is idempotent and preserves partial, pending, and inconsistent rows and all metadata', async () => {
+        const c = await create(), t = await makeOpen(c.id);
+        for (const [key, delivered] of [['complete', 2], ['partial', 1], ['pending', 0], ['unknown', 3], ['negative', -1]] as const) {
+            // Model rows written by the previous backend, before payload cleanup existed.
+            await state.pool!.query('INSERT INTO ticket_transcript_event(ticket_id,event_key,chunks,delivered) VALUES($1,$2,$3,$4)',
+                [t.id, key, JSON.stringify(['Readable message', 'Attachment URL and description']), delivered]);
+        }
+        const keys = ['complete', 'partial', 'pending', 'unknown', 'negative'];
+        const before = await Promise.all(keys.map(key => storedEvent(t.id, key)));
+        const migration = readFileSync(resolve('src/db/migrations/079_clear_delivered_ticket_transcripts.sql'), 'utf8');
+        for (let run = 0; run < 2; run++) {
+            await state.pool!.query(migration);
+            const after = await Promise.all(keys.map(key => storedEvent(t.id, key)));
+            expect(after).toEqual(before.map(row => row.event_key === 'complete' ? { ...row, chunks: [] } : row));
+        }
     });
     it('reservation route uses persisted moderator and configured staff roles', async () => { const c = await create(); const response = await request('reserve', { id: c.id, operation_id: randomUUID() }); const t = z.object({ ticket: TicketSchema }).parse(response.json()).ticket; expect(t.staff_role_ids).toContain('100000000000000099'); });
 });

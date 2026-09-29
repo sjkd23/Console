@@ -35,6 +35,7 @@ This bot provides automated raid management, member verification, quota tracking
 | **[quota-system.md](quota-system.md)** | Quota requirements, points, leaderboards | Officers, Organizers |
 | **[moderation.md](moderation.md)** | Punishments, modmail, notes, message management | Security, Officers |
 | **[architecture.md](architecture.md)** | Technical architecture and development guide | Contributors |
+| **[postgresql-encrypted-volume-cutover.md](postgresql-encrypted-volume-cutover.md)** | Production PostgreSQL 14 storage cutover and backups | Operators |
 
 ---
 

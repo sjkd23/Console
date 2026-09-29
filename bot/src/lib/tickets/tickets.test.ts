@@ -71,7 +71,13 @@ const Api = {
         if (action === 'pending') return { events: clone(entries.filter(e => e.delivered < e.chunks.length)) };
         const e = z.object({ event_key: z.string(), chunks: z.array(z.string()), delivered: z.number() }).parse(payload.event);
         if (action === 'enqueue' && !entries.some(x => x.event_key === e.event_key)) entries.push(clone(e));
-        if (action === 'ack') { const found = entries.find(x => x.event_key === e.event_key)!; found.delivered = e.delivered; }
+        if (action === 'ack') {
+            const found = entries.find(x => x.event_key === e.event_key)!;
+            if (found.delivered === e.delivered - 1 && e.delivered <= found.chunks.length) {
+                found.delivered = e.delivered;
+                if (found.delivered === found.chunks.length) found.chunks = [];
+            }
+        }
         return { ok: true };
     },
 };
@@ -233,6 +239,23 @@ describe('shared builder and transcript behavior', () => {
     }
     async function builder() { await openTicketBuilder(interaction('') as unknown as ChatInputCommandInteraction); return [...ticketSessions.values()][0]; }
     const act = async (s: Parameters<typeof ticketBuilderMessage>[0], action: string, kind = 'button', value?: string, inputs?: Record<string, string>) => handleTicketBuilder(builderInteraction(s, action, kind, value, inputs) as unknown as ButtonInteraction);
+    it('ticket panel and opening builders hide footer editing and reject legacy controls', async () => {
+        const s = await builder();
+        for (const view of ['panel', 'opening'] as const) {
+            await act(s, view);
+            const before = clone(s.draft);
+            const preview = ticketBuilderMessage(s);
+            assert.doesNotMatch(JSON.stringify(preview.components), /"value":"Footer"/);
+            assert.match(JSON.stringify(preview.components), /"value":"Title"/);
+            assert.deepEqual(preview.embeds[0].footer, { text: 'Ticket conversations are logged for transcript purposes.' });
+            await act(s, 'editor', 'select', 'Footer');
+            assert.equal(modals.length, 0);
+            assert.match(String(replies.at(-1)!.content), /footers are fixed/);
+            await act(s, 'modal-Footer', 'modal', undefined, { text: 'Override', icon_url: 'https://example.com/icon.png' });
+            assert.match(String(replies.at(-1)!.content), /footers are fixed/);
+            assert.deepEqual(s.draft, before);
+        }
+    });
     it('all four commands require moderator and create opens a builder without slash properties', async () => { for (const c of Object.values(commands)) assert.equal(c.requiredRole, 'moderator'); assert.equal(commands.createticket.data.toJSON().options?.length ?? 0, 0); assert.ok(await builder()); });
     it('unauthorized staff cannot open or operate builder', async () => { authorized = false; await builder(); assert.equal(ticketSessions.size, 0); });
     it('revoked moderator permission prevents subsequent builder mutations', async () => { const s = await builder(); authorized = false; await act(s, 'modal-name', 'modal', undefined, { name: 'Unauthorized change' }); assert.equal(s.draft.name, undefined); });
@@ -250,10 +273,34 @@ describe('shared builder and transcript behavior', () => {
         return { id: '100000000000000888', channelId: t.channel_id, guild, client: guild.client, author: { id: userId, username: 'sjkd' }, createdAt: new Date('2026-09-07T00:00:00Z'), editedAt: new Date(), editedTimestamp: 123,
             partial, content, embeds: [], attachments: new Collection([['a', { name: 'proof.png', size: 42, contentType: 'image/png', url: 'https://example.com/proof.png' }]]) } as unknown as Message;
     }
-    it('user/staff messages include author, timestamp, attachments and suppress mentions', async () => { const t = await open(); await routeTicketMessage(message(t, '@everyone hi'), 'message'); const entry = outbox.get(t.id)!.find(e => e.event_key.startsWith('message:'))!; assert.match(entry.chunks[0], /sjkd.*100000000000000002/); assert.match(entry.chunks[0], /2026-09-07/); assert.match(entry.chunks[0], /proof.png/); assert.ok(sent.filter(p => typeof p.content === 'string' && p.content.includes('@everyone')).every(p => JSON.stringify(p.allowedMentions).includes('"parse":[]'))); });
-    it('edits append before/after and deletes append cached content', async () => { const t = await open(); await routeTicketMessage(message(t, 'After'), 'edit', message(t, 'Before')); await routeTicketMessage(message(t, 'Deleted'), 'delete'); const entries = outbox.get(t.id)!; assert.match(entries.find(e => e.event_key.startsWith('edit:'))!.chunks[0], /Before: Before\nAfter: After/); assert.match(entries.find(e => e.event_key.startsWith('delete:'))!.chunks[0], /Deleted/); });
+    it('user/staff messages include author, timestamp, attachments and suppress mentions', async () => { const t = await open(); await routeTicketMessage(message(t, '@everyone hi'), 'message'); const entry = outbox.get(t.id)!.find(e => e.event_key.startsWith('message:'))!; assert.deepEqual(entry.chunks, []); const content = sent.map(p => p.content).filter((c): c is string => typeof c === 'string' && c.includes('@everyone')).join(''); assert.match(content, /sjkd.*100000000000000002/); assert.match(content, /2026-09-07/); assert.match(content, /proof.png/); assert.ok(sent.filter(p => typeof p.content === 'string' && p.content.includes('@everyone')).every(p => JSON.stringify(p.allowedMentions).includes('"parse":[]'))); });
+    it('edits append before/after and deletes append cached content', async () => { const t = await open(); await routeTicketMessage(message(t, 'After'), 'edit', message(t, 'Before')); await routeTicketMessage(message(t, 'Deleted'), 'delete'); const entries = outbox.get(t.id)!; assert.deepEqual(entries.find(e => e.event_key.startsWith('edit:'))!.chunks, []); assert.deepEqual(entries.find(e => e.event_key.startsWith('delete:'))!.chunks, []); const content = sent.map(p => p.content).join(''); assert.match(content, /Before: Before\nAfter: After/); assert.match(content, /Deleted/); });
     it('uncached deletes explicitly state content unavailable', async () => { const t = await open(); const e = messageEvent(message(t, '', true), 'delete'); assert.match(e.chunks[0], /content unavailable/); assert.match(e.chunks[0], /100000000000000888/); });
-    it('transcript send failure leaves durable pending chunks for retry', async () => { const t = await open(); failSend = true; await assert.rejects(() => routeTicketMessage(message(t, 'Pending'), 'message')); const pending = outbox.get(t.id)!.find(e => e.event_key.startsWith('message:'))!; assert.equal(pending.delivered, 0); failSend = false; await flushTranscript(guild, t); assert.equal(pending.delivered, pending.chunks.length); });
-    it('backend enqueue outage retains edit events and retries before finalization', async () => { const t = await open(); failEnqueue = true; await assert.rejects(() => routeTicketMessage(message(t, 'After outage'), 'edit', message(t, 'Before outage'))); failEnqueue = false; await flushTranscript(guild, t); const entry = outbox.get(t.id)!.find(e => e.event_key.startsWith('edit:'))!; assert.match(entry.chunks[0], /After outage/); assert.equal(entry.delivered, entry.chunks.length); });
+    it('transcript send failure leaves durable pending chunks for retry', async () => { const t = await open(); failSend = true; await assert.rejects(() => routeTicketMessage(message(t, 'Pending'), 'message')); const pending = outbox.get(t.id)!.find(e => e.event_key.startsWith('message:'))!; assert.equal(pending.delivered, 0); failSend = false; await flushTranscript(guild, t); assert.equal(pending.delivered, 1); assert.deepEqual(pending.chunks, []); });
+    it('backend enqueue outage retains edit events and retries before finalization', async () => { const t = await open(); failEnqueue = true; await assert.rejects(() => routeTicketMessage(message(t, 'After outage'), 'edit', message(t, 'Before outage'))); failEnqueue = false; await flushTranscript(guild, t); const entry = outbox.get(t.id)!.find(e => e.event_key.startsWith('edit:'))!; assert.match(sent.map(p => p.content).join(''), /After outage/); assert.equal(entry.delivered, 1); assert.deepEqual(entry.chunks, []); });
     it('unrelated guild channel messages do not query the backend', async () => { const t = await open(); const m = message({ ...t, channel_id: panelId }, 'ignored'); const before = outbox.size; await routeTicketMessage(m, 'message'); assert.equal(outbox.size, before); });
 });
+
+// Exercise the actual publication/opening paths, not only the renderer in isolation.
+for (const footer of [undefined, 'Staff support', 'Staff support • Ticket conversations are logged for transcript purposes.']) {
+    it(`enforces transcript footers on published panels and ticket openings: ${footer}`, async () => {
+        const c = newConfig();
+        if (footer) {
+            c.panel_embed.footer = { text: footer, icon_url: 'https://example.com/icon.png' };
+            c.opening_embed.footer = { text: footer, icon_url: 'https://example.com/icon.png' };
+        }
+        configs.set(c.id, clone(c));
+        const before = clone(c);
+        await publishPanel(guild, actor, c);
+        await open(c);
+        const embeds = sent.flatMap(p => z.array(z.object({ title: z.string().optional(), footer: z.object({ text: z.string(), icon_url: z.string().optional() }).optional() }).passthrough()).parse(p.embeds ?? []));
+        for (const title of ['Apply', 'Questions']) {
+            const embed = embeds.find(e => e.title === title)!;
+            assert.ok(embed);
+            assert.equal(embed.footer!.text.split('Ticket conversations are logged for transcript purposes.').length - 1, 1);
+            assert.deepEqual(embed.footer, { text: 'Ticket conversations are logged for transcript purposes.' });
+        }
+        assert.deepEqual(configs.get(c.id)!.panel_embed, before.panel_embed);
+        assert.deepEqual(configs.get(c.id)!.opening_embed, before.opening_embed);
+    });
+}

@@ -1,5 +1,5 @@
 // bot/src/lib/utilities/button-mutex.ts
-import type { ButtonInteraction } from 'discord.js';
+import type { ButtonInteraction, ModalSubmitInteraction } from 'discord.js';
 import { MessageFlags } from 'discord.js';
 
 /**
@@ -242,7 +242,7 @@ const buttonMutex = new ButtonMutex();
  * ```
  */
 export async function withButtonLock(
-    interaction: ButtonInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction,
     lockKey: string,
     action: () => Promise<void>,
     options: { holdUntilSettled?: boolean } = {}

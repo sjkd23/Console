@@ -73,7 +73,7 @@ export async function handleRealmClosed(btn: ButtonInteraction, runId: string) {
             btn,
             runId,
             pingMessageId
-                ? '✅ **Realm Closed** message sent (raiders have been pinged!)'
+                ? '✅ **Realm Closed** status updated'
                 : '⚠️ **Realm Closed** was saved, but the raider announcement could not be sent.'
         );
     } catch (err) {
@@ -171,7 +171,7 @@ export async function handleMinibossSelect(interaction: StringSelectMenuInteract
             interaction,
             runId,
             pingMessageId
-                ? `✅ **Mini: ${selectedMiniboss}** announced! Raiders have been pinged.`
+                ? `✅ **Mini: ${selectedMiniboss}** status updated.`
                 : `⚠️ **Mini: ${selectedMiniboss}** was saved, but the raider announcement could not be sent.`
         );
     } catch (err) {
@@ -231,7 +231,7 @@ export async function handleThirdRoom(btn: ButtonInteraction, runId: string) {
             btn,
             runId,
             pingMessageId
-                ? '✅ **Third Room** announced (raiders have been pinged!)'
+                ? '✅ **Third Room** status updated'
                 : '⚠️ **Third Room** was saved, but the raider announcement could not be sent.'
         );
     } catch (err) {

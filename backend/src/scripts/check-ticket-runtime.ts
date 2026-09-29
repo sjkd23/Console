@@ -35,6 +35,9 @@ try {
     await call('enqueue', { id, event });
     await call('ack', { id, event: { ...event, delivered: 1 } });
     assert.deepEqual(await call('pending', { id }), { events: [] });
+    const retained = await pool.query<{ chunks: string[]; delivered: number }>(
+        'SELECT chunks,delivered FROM ticket_transcript_event WHERE ticket_id=$1 AND event_key=$2', [id, event.event_key]);
+    assert.deepEqual(retained.rows, [{ chunks: [], delivered: 1 }]);
     const closeOperation = randomUUID();
     await call('close', { id, operation_id: closeOperation });
     const closed = z.object({ ticket: TicketSchema }).parse(await call('checkpoint', { id, operation_id: closeOperation, patch: { status: 'closed' } }));

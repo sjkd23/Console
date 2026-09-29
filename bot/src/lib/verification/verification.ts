@@ -783,6 +783,7 @@ export async function logVerificationEvent(
     options?: {
         embed?: EmbedBuilder;
         error?: boolean;
+        redactErrorDetails?: boolean; // REST errors may contain sensitive message bodies.
         sessionThreadId?: string; // Store thread ID in session to reuse for same attempt
     }
 ): Promise<void> {
@@ -905,6 +906,6 @@ export async function logVerificationEvent(
         }
     } catch (err) {
         // Don't fail the verification process if logging fails
-        console.error('[VerificationLogging] Failed to log event:', err);
+        console.error('[VerificationLogging] Failed to log event:', options?.redactErrorDetails ? { userId, guildId: guild.id } : err);
     }
 }

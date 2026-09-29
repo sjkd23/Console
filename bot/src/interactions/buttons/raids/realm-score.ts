@@ -117,8 +117,9 @@ export async function handleRealmScore(btn: ButtonInteraction, runId: string) {
         await pubMsg.edit({ embeds: [updatedEmbed, ...embeds.slice(1)] });
 
         // Send realm score ping message (NO TIMER - this is the key difference from key popped)
+        let statusMessageId: string | null = null;
         if (btn.guild) {
-            await sendRealmScorePing(btn.client, parseInt(runId), btn.guild, scoreValue);
+            statusMessageId = await sendRealmScorePing(btn.client, parseInt(runId), btn.guild, scoreValue);
         }
 
         // Log realm score update to raid-log
@@ -130,7 +131,9 @@ export async function handleRealmScore(btn: ButtonInteraction, runId: string) {
         });
 
         // Refresh organizer panel with confirmation message
-        await refreshOrganizerPanel(submitted, runId, `✅ **Realm score set:** ${scoreValue}% (raiders have been pinged!)`);
+        await refreshOrganizerPanel(submitted, runId, statusMessageId
+            ? `✅ **Realm score set:** ${scoreValue}% (status updated)`
+            : `⚠️ **Realm score set:** ${scoreValue}%, but the status message could not be updated.`);
 
     } catch (err) {
         logger.error('Failed to set realm score', {

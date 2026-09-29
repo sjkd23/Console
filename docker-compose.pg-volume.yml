@@ -1,0 +1,10 @@
+# Opt in only for the planned production storage cutover. Keep docker-compose.yml unchanged.
+# CONSOLE_PGDATA_HOST_PATH must be an existing PGDATA directory on the mounted DO Volume.
+services:
+  db:
+    volumes:
+      - type: bind
+        source: ${CONSOLE_PGDATA_HOST_PATH:?Set CONSOLE_PGDATA_HOST_PATH to the existing Volume-backed PGDATA directory}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false

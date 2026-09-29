@@ -66,6 +66,28 @@ describe('run ID HTTP contract', () => {
         await app.close();
     });
 
+    it('persists O3 status tracking separately from ordinary ping tracking', async () => {
+        testState.query.mockResolvedValue({ rows: [], rowCount: 1 });
+        const response = await app.inject({
+            method: 'POST', url: '/runs/674/o3-status-message',
+            payload: { o3StatusMessageId: '100000000000000005' },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(testState.query).toHaveBeenCalledWith(
+            'UPDATE run SET o3_status_message_id = $2::bigint WHERE id = $1::bigint',
+            [674, '100000000000000005'],
+        );
+    });
+
+    it('rejects invalid O3 status message IDs before writing tracking', async () => {
+        const response = await app.inject({
+            method: 'POST', url: '/runs/674/o3-status-message',
+            payload: { o3StatusMessageId: 'not-a-snowflake' },
+        });
+        expect(response.statusCode).toBe(400);
+        expect(testState.query).not.toHaveBeenCalled();
+    });
+
     it('serializes POST /runs runId as the canonical number when pg supplied a string BIGINT', async () => {
         const response = await app.inject({
             method: 'POST',
@@ -119,6 +141,7 @@ describe('run ID HTTP contract', () => {
                 description: null,
                 role_id: null,
                 ping_message_id: null,
+                o3_status_message_id: null,
                 key_pop_count: 0,
                 chain_amount: null,
                 screenshot_url: null,
@@ -138,6 +161,7 @@ describe('run ID HTTP contract', () => {
             id: 675,
             activeRunsChannelId: '100000000000000005',
             activeRunsMessageId: '100000000000000006',
+            o3StatusMessageId: null,
         });
         expect(typeof response.json().id).toBe('number');
     });

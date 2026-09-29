@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, PermissionFlagsBits, type ButtonInteraction, type Client, type Guild, type Message, type PartialMessage } from 'discord.js';
 import { z } from 'zod';
-import { renderEmbed } from '../embeds/render.js';
+import { renderTicketEmbed } from './render.js';
 import { embedError } from '../embeds/builder.js';
 import { hasRequiredRoleOrHigher } from '../permissions/permissions.js';
 import { BackendError } from '../utilities/http.js';
@@ -155,6 +155,7 @@ export async function createTicket(interaction: ButtonInteraction, configId: str
         ticket = await api.checkpoint(guild.id, actor, ticket.id, operation, patch);
     };
     try {
+        const openingEmbed = renderTicketEmbed(result.config.opening_embed);
         const category = await ticketCategory(guild, result.config.category_id);
         const logs = await logDestination(guild);
         const permissions = await privateOverwrites(guild, ticket);
@@ -170,7 +171,7 @@ export async function createTicket(interaction: ButtonInteraction, configId: str
         ticketLog('Transcript thread created', ticket);
         await lifecycle(guild, ticket, 'opened', `Ticket opened\nType: ${ticket.type_name}\nCreator: ${interaction.user.username} (${ticket.user_id})\nOpened: ${ticket.created_at}\nChannel: <#${channel.id}>`);
         activeChannels.set(channel.id, ticket);
-        const opening = await channel.send({ content: `Ticket opened by <@${ticket.user_id}>`, embeds: [renderEmbed(result.config.opening_embed)],
+        const opening = await channel.send({ content: `Ticket opened by <@${ticket.user_id}>`, embeds: [openingEmbed],
             components: [ticketButton('close', ticket.id)], allowedMentions: { parse: [], users: [ticket.user_id] } });
         await checkpoint({ opening_message_id: opening.id });
         ticketLog('Opening message sent', ticket);

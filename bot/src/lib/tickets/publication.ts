@@ -1,7 +1,7 @@
 import type { Guild, Message } from 'discord.js';
 import { ChannelType } from 'discord.js';
 import type { EmbedActor } from '../embeds/contract.js';
-import { renderEmbed } from '../embeds/render.js';
+import { renderTicketEmbed } from './render.js';
 import { createLogger } from '../logging/logger.js';
 import * as api from './api.js';
 import { fetchChannel, missing, noMentions, panelDestination, ticketButton, validateResources } from './discord.js';
@@ -13,7 +13,7 @@ export async function exclusive<T>(key: string, work: () => Promise<T>): Promise
     if (locks.has(key)) throw new Error('This ticket panel is already being managed. Retry shortly.');
     locks.add(key); try { return await work(); } finally { locks.delete(key); }
 }
-const payload = (c: TicketConfig) => ({ embeds: [renderEmbed(c.panel_embed)], components: [ticketButton('create', c.id)], allowedMentions: noMentions });
+const payload = (c: TicketConfig) => ({ embeds: [renderTicketEmbed(c.panel_embed)], components: [ticketButton('create', c.id)], allowedMentions: noMentions });
 async function tracked(guild: Guild, c: TicketConfig): Promise<Message | null> {
     if (guild.id !== c.guild_id) throw new Error('Wrong server.');
     if (!c.published_channel_id || !c.panel_message_id) return null;

@@ -242,6 +242,7 @@ export const RunDetailsSchema = z.object({
     description: z.string().nullable(),
     roleId: z.string().nullable(),
     pingMessageId: z.string().nullable(),
+    o3StatusMessageId: z.string().nullable().default(null),
     keyPopCount: z.number().int().nonnegative(),
     chainAmount: z.number().int().positive().nullable(),
     screenshotUrl: z.string().nullable(),

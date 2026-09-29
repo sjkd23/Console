@@ -90,6 +90,7 @@ import {
 import {
     handleVerificationApprove,
     handleVerificationDeny,
+    handleVerificationDenyModal,
     handleVerificationApproveModal,
 } from './interactions/buttons/verification/approve-deny.js';
 import {
@@ -754,6 +755,10 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
+            if (interaction.customId.startsWith('verification:deny_modal:')) {
+                await safeHandleInteraction(interaction, () => handleVerificationDenyModal(interaction), { ephemeral: true });
+                return;
+            }
             if (interaction.customId.startsWith('verification:approve_modal:') || interaction.customId.startsWith('verification:approve_confirm:')) {
                 await safeHandleInteraction(interaction, () => handleVerificationApproveModal(interaction), { ephemeral: true });
                 return;
