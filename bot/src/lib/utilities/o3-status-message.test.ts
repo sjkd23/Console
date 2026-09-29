@@ -22,12 +22,13 @@ const edits: Array<{ id: string; payload: MessageEditOptions }> = [];
 const deletes: string[] = [];
 let failEdit = false;
 const messages = new Map<string, ReturnType<typeof makeMessage>>();
-function makeMessage(id: string) {
+function makeMessage(id: string, content = `@here <@&${roleId}>`) {
     return {
-        id, deletable: true,
+        id, content, deletable: true,
         edit: async (payload: MessageEditOptions) => {
             if (failEdit) throw new Error('Missing permissions');
             edits.push({ id, payload });
+            messages.get(id)!.content = payload.content ?? '';
         },
         delete: async () => { deletes.push(id); messages.delete(id); },
     };
@@ -41,7 +42,7 @@ const channel = {
     } },
     send: async (payload: MessageCreateOptions) => {
         sends.push(payload);
-        const message = makeMessage(String(100 + sends.length));
+        const message = makeMessage(String(100 + sends.length), payload.content ?? '');
         messages.set(message.id, message);
         return message;
     },
@@ -62,9 +63,9 @@ mock.module('./http.js', { namedExports: {
     },
 } });
 mock.module('./dungeon-role-pings.js', { namedExports: {
-    resolveDungeonRolePingIds: async () => [],
+    resolveDungeonRolePingIds: async () => ['100000000000000009'],
 } });
-const { sendRealmScorePing, sendKeyPoppedPing } = await import('./run-ping.js');
+const { sendRunPing, sendRealmScorePing, sendKeyPoppedPing } = await import('./run-ping.js');
 const { sendO3ProgressionPing } = await import('./o3-progression.js');
 const progress = (messageText: string) => sendO3ProgressionPing({
     client, guild, runId: 42, messageText, includePartyLocation: false,
@@ -77,17 +78,32 @@ beforeEach(() => {
 });
 
 describe('O3 status message lifecycle', () => {
-    it('sends the first score with the existing content and raid-role ping', async () => {
-        const id = await sendRealmScorePing(client, 42, guild, 50);
+    it('tracks Start and edits it on the first score, retaining all original mentions', async () => {
+        const id = await sendRunPing(client, 42, guild);
         assert.equal(runs.get(42)!.o3StatusMessageId, id);
-        assert.equal(sends.length, 1);
-        assert.equal(sends[0].content, `**Realm Score: 50%** <@&${roleId}>\n\n**Oryx 3** • Party: **Party** • Location: **Location**\n[Jump to Raid Panel](https://discord.com/channels/${guild.id}/100000000000000003/100000000000000004)`);
-        assert.equal(sends[0].allowedMentions, undefined);
         assert.equal(runs.get(42)!.pingMessageId, null);
+        assert.match(sends[0].content!, /Raid Starting!/);
+        assert.equal(sends[0].allowedMentions, undefined);
+        assert.equal(await sendRealmScorePing(client, 42, guild, 50), id);
+        assert.equal(sends.length, 1);
+        assert.match(edits[0].payload.content!, /Realm Score: 50%/);
+        for (const mention of ['@here', `<@&${roleId}>`, '<@&100000000000000009>']) {
+            assert.ok(sends[0].content!.includes(mention));
+            assert.ok(edits[0].payload.content!.includes(mention));
+        }
+        assert.deepEqual(edits[0].payload.allowedMentions, { parse: [] });
+        assert.deepEqual(deletes, []);
+    });
+
+    it('does not create a status message when no start announcement is tracked', async () => {
+        assert.equal(await sendRealmScorePing(client, 42, guild, 50), null);
+        assert.equal(await progress('Mini: Dammah'), null);
+        assert.equal(sends.length, 0);
+        assert.deepEqual(deletes, []);
     });
 
     it('edits repeated scores, closure, miniboss and third room on the same message without pings', async () => {
-        const id = await sendRealmScorePing(client, 42, guild, 50);
+        const id = await sendRunPing(client, 42, guild);
         await sendRealmScorePing(client, 42, guild, 60);
         await progress('Realm Closed');
         await progress('Mini: Dammah');
@@ -99,6 +115,8 @@ describe('O3 status message lifecycle', () => {
         for (const edit of edits) {
             assert.equal(edit.id, id);
             assert.deepEqual(edit.payload.allowedMentions, { parse: [] });
+            assert.ok(edit.payload.content!.includes('@here'));
+            assert.ok(edit.payload.content!.includes('<@&100000000000000009>'));
         }
         assert.match(edits[0].payload.content!, /Realm Score: 60%/);
         assert.match(edits[2].payload.content!, /Mini: Dammah/);
@@ -108,7 +126,7 @@ describe('O3 status message lifecycle', () => {
     });
 
     it('keeps dungeon-entered sends and role pings separate from status edits', async () => {
-        const id = await sendRealmScorePing(client, 42, guild, 50);
+        const id = await sendRunPing(client, 42, guild);
         const keyId = await sendKeyPoppedPing(client, 42, guild, '2026-09-29T00:00:00Z');
         assert.notEqual(keyId, id);
         assert.match(sends[1].content!, /Dungeon Entered!/);
@@ -124,15 +142,33 @@ describe('O3 status message lifecycle', () => {
     });
 
     it('starts a chained run with a fresh status even in the same channel', async () => {
-        const oldId = await sendRealmScorePing(client, 42, guild, 90);
+        const oldId = await sendRunPing(client, 42, guild);
         runs.set(43, makeRun(43));
-        const newId = await sendRealmScorePing(client, 43, guild, 10);
+        const newId = await sendRunPing(client, 43, guild);
         assert.notEqual(newId, oldId);
         assert.equal(sends.length, 2);
         assert.equal(edits.length, 0);
         assert.ok(sends[1].content!.includes(`<@&${roleId}>`));
         await sendRealmScorePing(client, 43, guild, 20);
         assert.equal(edits[0].id, newId);
+    });
+
+    it('manual pings do not delete or replace the O3 start announcement', async () => {
+        const id = await sendRunPing(client, 42, guild);
+        await sendRunPing(client, 42, guild, 'ping');
+        await progress('Mini: Dammah');
+        assert.equal(edits[0].id, id);
+        assert.deepEqual(deletes, []);
+        assert.equal(runs.get(42)!.o3StatusMessageId, id);
+    });
+
+    it('preserves ordinary start-ping tracking for other dungeon types', async () => {
+        runs.get(42)!.runKind = 'single';
+        const id = await sendRunPing(client, 42, guild);
+        assert.equal(runs.get(42)!.pingMessageId, id);
+        assert.equal(runs.get(42)!.o3StatusMessageId, null);
+        await sendRunPing(client, 42, guild, 'ping');
+        assert.deepEqual(deletes, [id]);
     });
 
     it('uses persisted tracking without needing prior process memory', async () => {
@@ -144,7 +180,7 @@ describe('O3 status message lifecycle', () => {
     });
 
     it('does not replace or clear a deleted tracked message', async () => {
-        const id = await sendRealmScorePing(client, 42, guild, 50);
+        const id = await sendRunPing(client, 42, guild);
         messages.delete(id!);
         assert.equal(await sendRealmScorePing(client, 42, guild, 60), null);
         assert.equal(sends.length, 1);
@@ -152,7 +188,7 @@ describe('O3 status message lifecycle', () => {
     });
 
     it('retains tracking after an edit failure and can retry', async () => {
-        const id = await sendRealmScorePing(client, 42, guild, 50);
+        const id = await sendRunPing(client, 42, guild);
         failEdit = true;
         assert.equal(await progress('Mini: Dammah'), null);
         assert.equal(runs.get(42)!.o3StatusMessageId, id);
@@ -161,14 +197,16 @@ describe('O3 status message lifecycle', () => {
         assert.equal(sends.length, 1);
     });
 
-    it('serializes overlapping first scores into one send and one edit', async () => {
+    it('serializes overlapping scores into edits of the start announcement', async () => {
+        const id = await sendRunPing(client, 42, guild);
         const ids = await Promise.all([
             sendRealmScorePing(client, 42, guild, 50),
             sendRealmScorePing(client, 42, guild, 60),
         ]);
         assert.equal(ids[0], ids[1]);
+        assert.equal(ids[0], id);
         assert.equal(sends.length, 1);
-        assert.equal(edits.length, 1);
-        assert.match(edits[0].payload.content!, /Realm Score: 60%/);
+        assert.equal(edits.length, 2);
+        assert.match(edits[1].payload.content!, /Realm Score: 60%/);
     });
 });

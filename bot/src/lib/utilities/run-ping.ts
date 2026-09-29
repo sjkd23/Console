@@ -44,7 +44,7 @@ export async function sendRunPing(
         const textChannel = channel as GuildTextBasedChannel;
 
         // Delete the previous ping message if it exists
-        if (run.pingMessageId) {
+        if (run.pingMessageId && !(run.runKind === 'oryx_3' && messageType === 'starting')) {
             try {
                 const oldPingMessage = await textChannel.messages.fetch(run.pingMessageId).catch(() => null);
                 if (oldPingMessage && oldPingMessage.deletable) {
@@ -93,10 +93,16 @@ export async function sendRunPing(
         // Send the new ping message
         const pingMessage = await textChannel.send({ content });
 
-        // Store the new ping message ID in the database
-        await postJSON(`/runs/${runId}/ping-message`, { 
-            pingMessageId: pingMessage.id 
-        }, { guildId: guild.id });
+        // O3's start announcement is its permanent status message, not a disposable ping.
+        if (run.runKind === 'oryx_3' && messageType === 'starting') {
+            await postJSON(`/runs/${runId}/o3-status-message`, {
+                o3StatusMessageId: pingMessage.id
+            }, { guildId: guild.id });
+        } else {
+            await postJSON(`/runs/${runId}/ping-message`, {
+                pingMessageId: pingMessage.id
+            }, { guildId: guild.id });
+        }
 
         logger.info('Sent run ping message', { 
             runId, 
@@ -214,7 +220,7 @@ export async function sendKeyPoppedPing(
     }
 }
 
-/** Send the initial O3 status with a role ping, then edit it without pinging. */
+/** Edit the O3 start announcement with the realm score without pinging again. */
 export async function sendRealmScorePing(
     client: Client,
     runId: number,
