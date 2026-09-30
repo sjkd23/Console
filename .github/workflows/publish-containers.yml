@@ -1,0 +1,136 @@
+name: Validate and publish Console containers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize all refs so manual runs cannot race a main release's latest tags.
+concurrency:
+  group: console-container-publishing
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: console_ticket_verify_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d console_ticket_verify_ci"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      BACKEND_API_KEY: ci-only-not-a-production-secret
+      DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/console_ticket_verify_ci
+      TEST_DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/console_ticket_verify_ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            bot/package-lock.json
+            backend/package-lock.json
+      - name: Install clean dependencies
+        run: |
+          npm ci --prefix bot --no-audit --no-fund
+          npm ci --prefix backend --no-audit --no-fund
+      - name: Tests, TypeScript and ESM checks
+        run: |
+          npm test --prefix bot
+          npm test --prefix backend
+          npm run check:esm-imports --prefix bot
+          npm run build --prefix bot
+          npm run check:production-runtime --prefix bot
+          npm run build --prefix backend
+      - name: Compose and deployment safety
+        run: |
+          node scripts/check-compose-separation.mjs
+          bash -n scripts/deploy-production.sh scripts/publish-images.sh scripts/pg-volume-preflight.sh
+          node --test scripts/deploy-production.test.mjs scripts/publish-images.test.mjs
+      - uses: docker/setup-buildx-action@v4
+      - name: Build bot from clean service context
+        uses: docker/build-push-action@v7
+        with:
+          context: ./bot
+          load: true
+          tags: console-bot:validated
+          platforms: linux/amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Build backend from clean service context
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          load: true
+          tags: console-backend:validated
+          platforms: linux/amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Validate final images with production dependencies
+        run: |
+          docker run --rm console-bot:validated node dist/scripts/check-production-runtime.js
+          docker run -d --name console-backend-ci --network host \
+            -e NODE_ENV=production -e BACKEND_API_KEY -e DATABASE_URL console-backend:validated
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4000/v1/health; then ready=true; break; fi
+            sleep 1
+          done
+          docker logs console-backend-ci
+          test "$ready" = true
+          docker run --rm --network host -e NODE_ENV=production -e BACKEND_API_KEY -e DATABASE_URL \
+            console-backend:validated node dist/scripts/check-ticket-runtime.js
+          docker stop console-backend-ci
+      - name: Export tested images
+        run: docker save -o console-images.tar console-bot:validated console-backend:validated
+      - uses: actions/upload-artifact@v7
+        with:
+          name: validated-console-images
+          path: console-images.tar
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: validated-console-images
+      - name: Load the exact tested images
+        run: docker load -i console-images.tar
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable SHA tags and main latest
+        env:
+          CONSOLE_REPOSITORY: ${{ github.repository }}
+          CONSOLE_COMMIT_SHA: ${{ github.sha }}
+          CONSOLE_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/publish-images.sh

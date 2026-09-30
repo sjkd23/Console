@@ -1,4 +1,5 @@
-# Opt in only for the planned production storage cutover. Keep docker-compose.yml unchanged.
+# Opt in only for the planned production storage cutover or deployments after that cutover.
+# Combine with image-only docker-compose.yml; preserve the selected release/project name.
 # CONSOLE_PGDATA_HOST_PATH must be an existing PGDATA directory on the mounted DO Volume.
 services:
   db:

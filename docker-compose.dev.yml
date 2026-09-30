@@ -2,6 +2,7 @@ services:
   backend:
     image: rotmg-raid-backend:development
     build:
+      context: ./backend
       dockerfile: Dockerfile.dev
     environment:
       NODE_ENV: development
@@ -13,6 +14,7 @@ services:
   bot:
     image: rotmg-raid-bot:development
     build:
+      context: ./bot
       dockerfile: Dockerfile.dev
     environment:
       NODE_ENV: development

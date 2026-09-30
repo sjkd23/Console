@@ -30,6 +30,7 @@ This bot provides automated raid management, member verification, quota tracking
 | Document | Purpose | Audience |
 |----------|---------|----------|
 | **[setup.md](setup.md)** | Initial bot installation and guild configuration | Administrators |
+| **[production-deployment.md](production-deployment.md)** | GHCR publishing, manual deployments, authentication and image rollback | Operators |
 | **[verification.md](verification.md)** | Member verification workflows (RealmEye + manual) | Security, Admins |
 | **[raid-management.md](raid-management.md)** | Creating runs, headcounts, party finder, key tracking | Organizers |
 | **[quota-system.md](quota-system.md)** | Quota requirements, points, leaderboards | Officers, Organizers |

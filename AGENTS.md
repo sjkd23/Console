@@ -90,7 +90,7 @@ await query(`SELECT * FROM users WHERE id = ${userId}`); // SQL Injection risk
 
 1.  **Migrations:** `npm run migrate` in `backend/`.
 2.  **Commands:** `npm run register:dev` in `bot/` if you change names/options. Production uses the compiled `npm run register` entrypoint.
-3.  **Docker:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` runs the local development stack. `docker compose up -d --build` is the production deployment path so source changes are compiled into fresh images.
+3.  **Docker:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` runs the local development stack. Production uses published GHCR images only: select a published `CONSOLE_IMAGE_TAG` in `.env.production`, then run `bash scripts/deploy-production.sh`. See `docs/production-deployment.md`; never build on production.
 4.  **Logs:** Check `docker compose logs -f backend` if the API fails.
 
 ---

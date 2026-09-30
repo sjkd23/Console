@@ -85,10 +85,12 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
 
 3. **Start production services:**
    ```bash
-   docker compose up -d --build
+   cp .env.production.example .env.production
+   CONSOLE_IMAGE_TAG=<published-full-commit-sha> bash scripts/deploy-production.sh
    ```
 
-   This will:
+   Complete the [first-time GHCR setup](production-deployment.md) first. Production
+   pulls published images and does not install dependencies or build code. This will:
    - Start PostgreSQL database
    - Run database migrations automatically
    - Start backend API on port 4000
@@ -96,13 +98,13 @@ Under **Bot** → **Privileged Gateway Intents**, enable:
 
 4. **Verify running:**
    ```bash
-   docker compose logs -f
+   docker compose --env-file .env.production -f docker-compose.yml logs -f
    ```
    Look for "Bot is ready!" and "Fastify listening on..."
 
 ### Docker Local Development
 
-The default Compose file is the production deployment. Add the development
+The default Compose file is the image-only production deployment. Add the development
 overlay when working locally:
 
 ```bash
@@ -318,7 +320,7 @@ docker-compose restart bot
 
 **Re-register commands** if slash commands are missing from Discord:
 ```bash
-docker-compose run --rm bot npm run register
+docker compose --env-file .env.production -f docker-compose.yml run --rm --no-deps --pull never bot npm run register
 ```
 
 ### `/setroles` or `/setchannels` says "Access Denied"
@@ -346,8 +348,8 @@ docker-compose run --rm bot npm run register
 
 **Docker setup:**
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose --env-file .env.production -f docker-compose.yml logs db backend
+bash scripts/deploy-production.sh
 ```
 
 **Manual setup:**
@@ -372,7 +374,7 @@ docker-compose up -d
 **Check:**
 - Backend logs: `docker-compose logs backend`
 - Look for 500 errors or database issues
-- Run migrations: `docker-compose exec backend npm run migrate`
+- Production migrations run before the API starts. To invoke the same compiled runner manually: `docker compose --env-file .env.production -f docker-compose.yml exec backend node dist/scripts/migrate.js`.
 
 ### Role hierarchy issues
 
@@ -401,12 +403,11 @@ ports:
 
 ### Production Deployment
 
-For production:
-1. Use strong `BACKEND_API_KEY` (generate with `openssl rand -hex 32`)
-2. Use separate PostgreSQL instance (not Docker)
-3. Enable SSL for backend (reverse proxy recommended)
-4. Set `NODE_ENV=production` in `.env` files
-5. Use process manager (PM2) or container orchestration
+Follow [Production deployment](production-deployment.md) for GHCR publishing,
+manual release selection, pull/start commands, and rollback. Keep a strong matching
+`BACKEND_API_KEY` in both service environment files. PostgreSQL remains the existing
+container with its existing networking and volumes; encrypted DigitalOcean storage
+is a separate optional cutover. Gateway and reverse-proxy configuration are unchanged.
 
 ### Backup Strategy
 

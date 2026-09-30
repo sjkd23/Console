@@ -18,10 +18,7 @@ services:
       retries: 15
 
   backend:
-    image: rotmg-raid-backend:production
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${CONSOLE_IMAGE_NAMESPACE:-sjkd23/console}-backend:${CONSOLE_IMAGE_TAG:-latest}
     container_name: rotmg_backend
     env_file:
       - ./backend/.env
@@ -37,10 +34,7 @@ services:
       - "4000:4000"
 
   bot:
-    image: rotmg-raid-bot:production
-    build:
-      context: ./bot
-      dockerfile: Dockerfile
+    image: ghcr.io/${CONSOLE_IMAGE_NAMESPACE:-sjkd23/console}-bot:${CONSOLE_IMAGE_TAG:-latest}
     container_name: rotmg_bot
     env_file:
       - ./bot/.env

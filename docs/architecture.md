@@ -665,14 +665,15 @@ npm run dev
 **1. Configure environment:**
 
 ```bash
-cp .env.example .env
-# Edit .env with your Discord credentials
+cp bot/.env.example bot/.env
+cp backend/.env.example backend/.env
+# Edit both files; use matching BACKEND_API_KEY values.
 ```
 
 **2. Start services:**
 
 ```bash
-docker-compose up -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 **3. View logs:**
@@ -685,7 +686,7 @@ docker-compose logs -f backend
 **4. Rebuild after code changes:**
 
 ```bash
-docker-compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 ### Testing
@@ -703,11 +704,9 @@ npm test
 **Integration tests:**
 
 ```bash
-# Start test database
-docker-compose -f docker-compose.test.yml up -d
-
-# Run integration tests
-npm run test:integration
+# Point only at an isolated test database (never production).
+cd backend
+TEST_DATABASE_URL=postgres://postgres:<test-password>@localhost:<test-port>/<test-db> npm test
 ```
 
 **Manual testing:**
@@ -723,79 +722,32 @@ npm run test:integration
 
 ### Production Setup
 
-**Docker Compose (recommended):**
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_DB: rotmg_bot
-      POSTGRES_USER: botuser
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "botuser"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: rotmg_bot
-      DB_USER: botuser
-      DB_PASSWORD: ${DB_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
-      API_KEY: ${API_KEY}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "3000:3000"
-
-  bot:
-    build:
-      context: ./bot
-      dockerfile: Dockerfile
-    environment:
-      DISCORD_TOKEN: ${DISCORD_TOKEN}
-      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
-      BACKEND_URL: http://backend:3000
-      BACKEND_API_KEY: ${API_KEY}
-    depends_on:
-      - backend
-
-volumes:
-  postgres_data:
-```
-
-**Start production:**
+Use the repository's image-only `docker-compose.yml`. GitHub Actions validates and
+publishes bot/backend images to GHCR on pushes to `main` or manual workflow runs.
+Production deployment remains an owner action and never builds locally:
 
 ```bash
-docker-compose up -d
+cp .env.production.example .env.production
+CONSOLE_IMAGE_TAG=<published-full-commit-sha> bash scripts/deploy-production.sh
 ```
+
+Follow [Production deployment](production-deployment.md) for GHCR authentication,
+first-time setup, release pinning, image rollback, and the optional encrypted
+PostgreSQL Volume override. Backend startup runs compiled migrations before the
+API. Image rollback does not reverse schema/data migrations.
 
 ### Environment Variables
 
 **Required for bot:**
-- `DISCORD_TOKEN` — Bot token from Discord Developer Portal
-- `DISCORD_CLIENT_ID` — Application ID
+- `SECRET_KEY` — Bot token from Discord Developer Portal
+- `APPLICATION_ID` — Application ID
+- `DISCORD_GUILD_IDS` — Comma-separated guild IDs
 - `BACKEND_URL` — Backend API URL
 - `BACKEND_API_KEY` — Shared secret for bot↔backend auth
 
 **Required for backend:**
-- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` — Database credentials
-- `JWT_SECRET` — Secret for signing JWT tokens
-- `API_KEY` — Shared secret for bot authentication
+- `DATABASE_URL` — PostgreSQL connection string
+- `BACKEND_API_KEY` — Shared secret for bot authentication
 
 **Optional:**
 - `NODE_ENV` — `production` or `development`
@@ -807,17 +759,17 @@ docker-compose up -d
 
 ```bash
 # Backend health endpoint
-curl http://localhost:3000/health
+curl http://localhost:4000/v1/health
 
 # Bot status (check Docker logs)
-docker logs rotmg-bot | tail -n 50
+docker logs rotmg_bot | tail -n 50
 ```
 
 **Database backups:**
 
 ```bash
 # Automated daily backup
-docker exec postgres pg_dump -U botuser rotmg_bot > backup-$(date +%Y%m%d).sql
+docker exec rotmg_db pg_dump -U postgres rotmg_raids > backup-$(date +%Y%m%d).sql
 ```
 
 **Log rotation:**

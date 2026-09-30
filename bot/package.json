@@ -4,6 +4,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "test": "node scripts/run-tests.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",

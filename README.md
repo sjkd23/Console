@@ -62,19 +62,24 @@ A Discord bot for organizing **Realm of the Mad God** raids. It includes interac
    NODE_ENV=production
    ```
 
-3. Build and start the production services.
+3. Select a published release and start the production services.
 
    ```bash
-   docker compose up -d --build
+   cp .env.production.example .env.production
+   CONSOLE_IMAGE_TAG=<published-full-commit-sha> bash scripts/deploy-production.sh
    ```
 
-The default Compose file builds production images. The backend runs migrations
-before starting the compiled API, and the bot runs its compiled entry point.
+The default Compose file pulls GHCR production images; it contains no application
+build definitions. GitHub Actions validates and publishes images on pushes to
+`main` or manual execution. Deployment remains an owner action. The backend runs
+migrations before starting the compiled API, and the bot runs its compiled entry
+point. Follow the [production deployment guide](docs/production-deployment.md)
+for first-time GHCR access, release selection, rollback, and encrypted storage.
 
 Register slash commands after the initial setup or after changing command names or options:
 
 ```bash
-docker compose run --rm bot npm run register
+docker compose --env-file .env.production -f docker-compose.yml run --rm --no-deps bot npm run register
 ```
 
 ### Local Development with Docker
