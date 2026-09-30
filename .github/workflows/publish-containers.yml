@@ -64,7 +64,7 @@ jobs:
         run: |
           node scripts/check-compose-separation.mjs
           bash -n scripts/deploy-production.sh scripts/publish-images.sh scripts/pg-volume-preflight.sh
-          node --test scripts/deploy-production.test.mjs scripts/publish-images.test.mjs
+          node --test scripts/check-compose-separation.test.mjs scripts/deploy-production.test.mjs scripts/publish-images.test.mjs
       - uses: docker/setup-buildx-action@v4
       - name: Build bot from clean service context
         uses: docker/build-push-action@v7

@@ -24,6 +24,9 @@ function renderCompose(files, settings = {}) {
     return configSchema.parse(JSON.parse(execFileSync('docker', [
         'compose', '--env-file', process.platform === 'win32' ? 'NUL' : '/dev/null',
         ...files.flatMap(file => ['--file', file]),
+        // Clear service env_file references before resolution, independently of
+        // whether this Compose version checks them under --no-env-resolution.
+        '--file', 'scripts/compose-check.override.yml',
         'config', '--no-env-resolution', '--format', 'json',
     ], {
         cwd: root, encoding: 'utf8',
@@ -59,7 +62,10 @@ const mounts = encrypted.services.db.volumes.filter(volume => volume.target === 
 assert.equal(mounts.length, 1, 'Encrypted override must replace rather than append the PGDATA mount');
 assert.equal(mounts[0].type, 'bind');
 assert.equal(mounts[0].source.replaceAll('\\', '/'), pgdata);
-assert.equal(mounts[0].bind?.create_host_path, false);
+// Compose v2 omits false booleans in JSON. Also check the explicit source setting
+// so omitting create_host_path in the override cannot silently pass this check.
+assert.equal(mounts[0].bind?.create_host_path ?? false, false);
+assert.match(readFileSync(join(root, 'docker-compose.pg-volume.yml'), 'utf8'), /^\s+bind:\r?\n\s+create_host_path:\s+false\s*$/m, 'PG override must explicitly disable host-path creation');
 const { volumes: originalVolumes, ...originalDb } = production.services.db;
 const { volumes: encryptedVolumes, ...encryptedDb } = encrypted.services.db;
 assert.deepEqual(encryptedDb, originalDb, 'Storage override must preserve all other DB settings');

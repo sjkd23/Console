@@ -1,0 +1,7 @@
+# Structural checks only. Never include this override in deployment commands.
+# Reset the list: an ordinary empty list would retain the inherited env_file paths.
+services:
+  backend:
+    env_file: !reset []
+  bot:
+    env_file: !reset []

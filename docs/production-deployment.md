@@ -229,10 +229,15 @@ Run the local configuration/script checks with:
 ```bash
 node scripts/check-compose-separation.mjs
 bash -n scripts/deploy-production.sh scripts/publish-images.sh scripts/pg-volume-preflight.sh
-node --test scripts/deploy-production.test.mjs scripts/publish-images.test.mjs
+node --test scripts/check-compose-separation.test.mjs scripts/deploy-production.test.mjs scripts/publish-images.test.mjs
 ```
 
 The Compose check needs installed backend dependencies and the Compose CLI, but no
-Docker daemon or application secrets. Actual image construction and image smoke
+Docker daemon or application secrets. It explicitly applies the test-only
+`scripts/compose-check.override.yml` to clear service `env_file` references, so
+ignored runtime environment files need not exist. Never include that override in
+deployment commands. A regression test runs the checker in an isolated checkout
+without runtime env files and confirms production build definitions are still
+rejected. Actual image construction and image smoke
 tests need a running daemon; a locally passing check does not prove a GitHub run
 has succeeded.
