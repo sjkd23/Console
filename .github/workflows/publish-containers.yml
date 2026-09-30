@@ -16,6 +16,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    environment: Void Cat
     timeout-minutes: 30
     services:
       postgres:
@@ -29,6 +30,10 @@ jobs:
           --health-cmd "pg_isready -U postgres -d console_ticket_verify_ci"
           --health-interval 5s --health-timeout 3s --health-retries 15
     env:
+      APPLICATION_ID: ${{ vars.APPLICATION_ID }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      DISCORD_GUILD_IDS: ${{ vars.DISCORD_GUILD_IDS }}
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
       BACKEND_API_KEY: ci-only-not-a-production-secret
       DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/console_ticket_verify_ci
       TEST_DATABASE_URL: postgres://postgres:ci-only@127.0.0.1:5432/console_ticket_verify_ci
