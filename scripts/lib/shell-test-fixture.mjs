@@ -24,7 +24,15 @@ case "$*" in
   inspect*) printf '%s\n' "\x24{MOCK_CURRENT_MOUNT:-volume}" ;;
   *'config --quiet') test "\x24{MOCK_CONFIG_FAIL:-false}" != true ;;
   *'config --images backend bot')
-    printf 'ghcr.io/sjkd23/console-backend:%s\nghcr.io/sjkd23/console-bot:%s\n' "\x24{MOCK_TAG:-latest}" "\x24{MOCK_TAG:-latest}" ;;
+    # Compose includes dependency images even when applications are selected.
+    printf 'postgres:14\nghcr.io/sjkd23/console-backend:%s\nghcr.io/sjkd23/console-bot:%s\n' "\x24{MOCK_TAG:-latest}" "\x24{MOCK_TAG:-latest}" ;;
+  *'config --no-env-resolution --format yaml backend bot')
+    test "\x24{MOCK_MODEL_FAIL:-false}" != true
+    if test -n "\x24{MOCK_COMPOSE_MODEL:-}"; then
+      printf '%s\n' "$MOCK_COMPOSE_MODEL"
+    else
+      printf 'name: console\nservices:\n  db:\n    image: postgres:14\n  backend:\n    image: ghcr.io/sjkd23/console-backend:%s\n  bot:\n    image: ghcr.io/sjkd23/console-bot:%s\n' "\x24{MOCK_TAG:-latest}" "\x24{MOCK_TAG:-latest}"
+    fi ;;
   *'pull backend bot') test "\x24{MOCK_PULL_FAIL:-false}" != true ;;
   'image inspect postgres:14') test "\x24{MOCK_NO_POSTGRES:-false}" != true ;;
   'image inspect '*console-backend:*) printf '%s\n' "\x24{MOCK_BACKEND_SHA:-$MOCK_SHA}" ;;

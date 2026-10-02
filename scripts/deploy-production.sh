@@ -45,29 +45,68 @@ if current_mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destinatio
     exit 1
   fi
 fi
-images=$("${compose[@]}" config --images backend bot)
+# Service selection can include dependencies. Read only the named services'
+# image fields from Compose's canonical YAML (not an unordered --images list).
+# Bash is already required; no host JSON/YAML parser or Node runtime is needed.
+images=$("${compose[@]}" config --no-env-resolution --format yaml backend bot | (
+  in_services=false
+  service=''
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    if test "$line" = services:; then
+      in_services=true
+    elif [[ "$line" =~ ^[^[:space:]] ]]; then
+      in_services=false
+    elif test "$in_services" = true; then
+      if [[ "$line" =~ ^\ \ [^[:space:]] ]]; then
+        service=''
+        case "$line" in
+          '  backend:') service=backend ;;
+          '  bot:') service=bot ;;
+        esac
+      elif test -n "$service" && [[ "$line" =~ ^\ \ \ \ image:\ (.+)$ ]]; then
+        image=${BASH_REMATCH[1]}
+        # Valid image references need no YAML escapes; allow quoted scalars too.
+        case "$image" in
+          \"*\") image=${image:1:${#image}-2} ;;
+          \'*\') image=${image:1:${#image}-2} ;;
+        esac
+        printf '%s %s\n' "$service" "$image"
+      fi
+    fi
+  done
+))
 namespace=''
 tag=''
-count=0
-while IFS= read -r image; do
+bot_count=0
+backend_count=0
+while IFS=' ' read -r service image; do
   [[ "$image" =~ ^ghcr\.io/([a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)-(bot|backend):(latest|[0-9a-f]{40})$ ]] || {
     echo "Invalid production image (use latest or a full commit SHA): $image" >&2; exit 1;
   }
+  test "$service" = "${BASH_REMATCH[2]}" || { echo "Wrong application image for $service" >&2; exit 1; }
   if test -n "$namespace"; then
-    test "$namespace" = "${BASH_REMATCH[1]}" && test "$tag" = "${BASH_REMATCH[3]}"
+    test "$namespace" = "${BASH_REMATCH[1]}" && test "$tag" = "${BASH_REMATCH[3]}" || {
+      echo 'Bot/backend namespaces or tags differ' >&2; exit 1;
+    }
   fi
   namespace=${BASH_REMATCH[1]}
   tag=${BASH_REMATCH[3]}
-  count=$((count + 1))
+  case "$service" in
+    bot) bot_count=$((bot_count + 1)) ;;
+    backend) backend_count=$((backend_count + 1)) ;;
+  esac
 done <<< "$images"
-test "$count" -eq 2 || { echo 'Expected exactly two application images' >&2; exit 1; }
+test "$bot_count" -eq 1 && test "$backend_count" -eq 1 || {
+  echo 'Expected exactly one bot image and one backend image' >&2; exit 1;
+}
 printf 'Deploying %s at %s\n' "$namespace" "$tag"
 
 # Pull failure (including missing GHCR authentication) stops before changing services.
 # Keep PostgreSQL at its existing image during application updates; pull it on first install.
 "${compose[@]}" pull backend bot
 release_sha=''
-while IFS= read -r image; do
+while IFS=' ' read -r service image; do
   image_sha=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
   [[ "$image_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Missing release revision on $image" >&2; exit 1; }
   if test -n "$release_sha"; then
