@@ -88,7 +88,10 @@ export async function logCommandExecution(
             success: isSuccess
         });
     } catch (error) {
-        logger.error('Failed to log command execution', { error });
+        logger.error('Failed to log command execution', {
+            guildId: interaction.guildId, userId: interaction.user.id,
+            failure: error instanceof Error ? error.name : 'UnknownError',
+        });
     }
 }
 
@@ -148,7 +151,10 @@ export async function logModerationAction(
 
         await botLogChannel.send({ embeds: [embed] });
     } catch (error) {
-        logger.error('Failed to log moderation action', { error });
+        logger.error('Failed to log moderation action', {
+            guildId, actorId, targetId, action,
+            failure: error instanceof Error ? error.name : 'UnknownError',
+        });
     }
 }
 
@@ -196,7 +202,10 @@ export async function logConfigChange(
 
         await botLogChannel.send({ embeds: [embed] });
     } catch (error) {
-        logger.error('Failed to log config change', { error });
+        logger.error('Failed to log config change', {
+            guildId, actorId, configType,
+            failure: error instanceof Error ? error.name : 'UnknownError',
+        });
     }
 }
 
@@ -425,6 +434,9 @@ export async function logVerificationAction(
 
         await botLogChannel.send({ embeds: [embed] });
     } catch (error) {
-        logger.error('Failed to log verification action', { error });
+        logger.error('Failed to log verification action', {
+            guildId, actorId, targetId, action,
+            failure: error instanceof Error ? error.name : 'UnknownError',
+        });
     }
 }

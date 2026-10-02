@@ -748,12 +748,13 @@ async function processQuotaPeriods(client: Client): Promise<void> {
 
             if (!item.due) continue;
 
-            const { memberIds } = await getRoleMembersWithCache(role);
+            const { memberIds, fetchResult } = await getRoleMembersWithCache(role);
             const finalized = await finalizeDueQuotaPeriods(
                 item.guild_id,
                 item.quota_role_id,
                 memberIds,
-                10
+                10,
+                fetchResult.complete
             );
             for (const period of finalized.periods) {
                 await deliverQuotaPeriodLog(client, period);

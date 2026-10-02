@@ -13,7 +13,7 @@ vi.mock('../../db/pool.js', () => ({
     query: (sql: string, params?: unknown[]) => database.pool!.query(sql, params),
 }));
 import { getQuotaRoleConfig, upsertQuotaRoleConfig } from '../quota/quota.js';
-import { getActiveQuotaPeriod, getActiveQuotaLeaderboard, finalizeDueQuotaPeriods, manuallyResetQuotaPeriod } from './quota-period-service.js';
+import { getActiveQuotaPeriod, getActiveQuotaLeaderboard, finalizeDueQuotaPeriods, manuallyResetQuotaPeriod, closeAndDeleteQuotaConfig, getQuotaPeriodHistory } from './quota-period-service.js';
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const guildId = '100000000000000001';
@@ -43,6 +43,31 @@ describe.runIf(Boolean(connectionString))('quota configuration and persisted act
         await database.pool?.end();
         await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
         await admin.end();
+    });
+
+    it.each([undefined, false, true].flatMap(complete =>
+        ['manual', 'scheduled', 'deactivate', 'delete'].map(operation => ({ complete, operation }))
+    ))('persists $operation roster completeness $complete without losing known zero-point members', async ({ complete, operation }) => {
+        await upsertQuotaRoleConfig(guildId, roleId, { required_points: 10, reset_interval_days: 7 });
+        if (operation === 'scheduled') {
+            await database.pool!.query(`UPDATE quota_period SET starts_at = NOW() - INTERVAL '7 days 1 hour',
+                ends_at = NOW() - INTERVAL '1 hour' WHERE guild_id = $1 AND quota_role_id = $2`, [guildId, roleId]);
+            await finalizeDueQuotaPeriods(guildId, roleId, [organizerId], 1, complete);
+        } else if (operation === 'deactivate') {
+            await upsertQuotaRoleConfig(guildId, roleId, { required_points: 0, member_user_ids: [organizerId], roster_complete: complete });
+        } else if (operation === 'delete') {
+            await closeAndDeleteQuotaConfig(guildId, roleId, 'config_deleted', [organizerId], complete);
+        } else {
+            await manuallyResetQuotaPeriod(guildId, roleId, [organizerId], complete);
+        }
+        const [finalized] = await getQuotaPeriodHistory(guildId, roleId);
+        expect(finalized.roster_complete).toBe(complete === true);
+        expect(finalized.results).toEqual([{
+            user_id: organizerId, earned_points: 0, carry_in: 0, effective_total: 0,
+            met_quota: false, carry_out: 0, result_source: 'live_roster',
+        }]);
+        const persisted = await database.pool!.query('SELECT roster_complete FROM quota_period WHERE id = $1', [finalized.id]);
+        expect(persisted.rows[0].roster_complete).toBe(complete === true);
     });
 
     it('resizes the current interval atomically without changing snapshots, events, or totals', async () => {
@@ -97,10 +122,10 @@ describe.runIf(Boolean(connectionString))('quota configuration and persisted act
         } finally {
             await database.pool!.query('ALTER TABLE quota_period DROP CONSTRAINT test_interval_limit');
         }
-        await upsertQuotaRoleConfig(guildId, roleId, { panel_message_id: channelId });
+        await upsertQuotaRoleConfig(guildId, roleId, { panel_message_id: channelId, roster_complete: false });
         expect(await getActiveQuotaPeriod(guildId, roleId)).toEqual(before);
         await database.pool!.query('DELETE FROM quota_period WHERE guild_id = $1 AND quota_role_id = $2', [guildId, roleId]);
-        await upsertQuotaRoleConfig(guildId, roleId, { panel_message_id: organizerId });
+        await upsertQuotaRoleConfig(guildId, roleId, { panel_message_id: organizerId, roster_complete: false });
         expect(await getActiveQuotaPeriod(guildId, roleId)).toBeNull();
         expect((await getQuotaRoleConfig(guildId, roleId))!.panel_message_id).toBe(organizerId);
     });

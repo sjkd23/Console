@@ -30,7 +30,7 @@ describe('verification SQL failure logging', () => {
 
     it('logs the failed query and error without logging the denial reason parameter', async () => {
         await app.register(verificationRoutes);
-        state.databaseQuery.mockRejectedValueOnce(new Error('synthetic SQL failure'));
+        state.databaseQuery.mockRejectedValueOnce(Object.assign(new Error(`synthetic SQL failure: ${secret}`), { code: '22001', detail: secret }));
 
         const response = await app.inject({
             method: 'PATCH',
@@ -44,7 +44,7 @@ describe('verification SQL failure logging', () => {
         expect(state.logError).toHaveBeenCalledTimes(1);
         const [context, message] = state.logError.mock.calls[0];
         expect(message).toBe('Query failed');
-        expect(context).toMatchObject({ params: '[redacted]', error: 'synthetic SQL failure' });
+        expect(context).toMatchObject({ params: '[redacted]', code: '22001', error: 'Database query failed (sensitive details redacted)' });
         expect(context.sql).toContain('UPDATE verification_session');
         expect(JSON.stringify(state.logError.mock.calls)).not.toContain(secret);
         await app.close();

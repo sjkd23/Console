@@ -958,10 +958,11 @@ export default async function runsRoutes(app: FastifyInstance) {
         // Store screenshot URL
         await query(
             `UPDATE run SET screenshot_url = $2 WHERE id = $1::bigint`,
-            [runId, screenshotUrl]
+            [runId, screenshotUrl],
+            { redactParams: true }
         );
 
-        logger.info({ runId, guildId: run.guild_id, actorId, screenshotUrl }, 
+        logger.info({ runId, guildId: run.guild_id, actorId },
             'Screenshot URL stored for run');
 
         return reply.send({ ok: true });

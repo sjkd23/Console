@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 import { backendConfig } from '../config.js';
 import { logger } from '../lib/logging/logger.js';
 
@@ -32,7 +33,7 @@ export const pool = new Pool({
 
 const SLOW_QUERY_THRESHOLD_MS = 100;
 
-export async function query<T extends import('pg').QueryResultRow = any>(text: string, params?: any[], options: { redactParams?: boolean } = {}) {
+export async function query<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(text: string, params?: unknown[], options: { redactParams?: boolean } = {}) {
     const queryId = randomUUID().slice(0, 8);
     const start = Date.now();
     
@@ -73,17 +74,24 @@ export async function query<T extends import('pg').QueryResultRow = any>(text: s
     } catch (err) {
         const duration = Date.now() - start;
         
-        // Log errors at error level with full context (always visible)
+        // PostgreSQL messages, detail and stack can repeat parameter values.
+        // Redacted failures must also be safe for callers to log or serialize.
+        const parsedCode = z.object({ code: z.string().regex(/^[0-9A-Z]{5}$/) }).safeParse(err);
+        const code = parsedCode.success ? parsedCode.data.code : undefined;
+        const safeError = options.redactParams
+            ? Object.assign(new Error('Database query failed (sensitive details redacted)'), { name: 'DatabaseError', code })
+            : err;
         logger.error({ 
             queryId, 
             duration,
             sql: text,
             params: options.redactParams ? '[redacted]' : params,
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined
+            code,
+            error: safeError instanceof Error ? safeError.message : String(safeError),
+            stack: safeError instanceof Error ? safeError.stack : undefined
         }, 'Query failed');
         
-        throw err;
+        throw safeError;
     }
 }
 

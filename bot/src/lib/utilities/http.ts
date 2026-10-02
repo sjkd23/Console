@@ -993,6 +993,7 @@ export async function updateQuotaRoleConfig(
         reset_interval_days?: number;
         rollover_enabled?: boolean;
         member_user_ids?: string[];
+        roster_complete?: boolean;
         panel_message_id?: string | null;
         moderation_points?: number;
         base_exalt_points?: number;
@@ -1073,6 +1074,7 @@ export async function deleteQuotaRoleConfig(
         actor_roles?: string[];
         actor_has_admin_permission?: boolean;
         member_user_ids?: string[];
+        roster_complete?: boolean;
         deletion_reason?: 'config_deleted' | 'role_deleted';
     }
 ): Promise<{
@@ -1144,11 +1146,13 @@ export async function finalizeDueQuotaPeriods(
     guildId: string,
     roleId: string,
     memberUserIds: string[],
-    maxPeriods = 10
+    maxPeriods = 10,
+    rosterComplete = false
 ): Promise<{ periods: QuotaPeriod[]; remaining_due: boolean }> {
     return postJSON(`/quota/periods/${guildId}/${roleId}/finalize-due`, {
         member_user_ids: memberUserIds,
         max_periods: maxPeriods,
+        roster_complete: rosterComplete,
     });
 }
 
@@ -1160,6 +1164,7 @@ export async function manuallyResetQuotaPeriod(
         actor_roles?: string[];
         actor_has_admin_permission?: boolean;
         member_user_ids: string[];
+        roster_complete?: boolean;
     }
 ): Promise<{ periods: QuotaPeriod[]; remaining_due: boolean; caught_up_count: number }> {
     return postJSON(`/quota/periods/${guildId}/${roleId}/manual-reset`, payload);

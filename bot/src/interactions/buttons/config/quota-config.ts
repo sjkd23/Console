@@ -301,21 +301,21 @@ export async function handleQuotaBasicModal(interaction: ModalSubmitInteraction)
 
     try {
         const quotaRole = interaction.guild?.roles.cache.get(roleId);
-        const memberUserIds = quotaRole
-            ? (await getRoleMembersWithCache(quotaRole)).memberIds
-            : undefined;
+        const roster = quotaRole ? await getRoleMembersWithCache(quotaRole) : undefined;
+        const memberUserIds = roster?.memberIds;
         const updated = await updateQuotaRoleConfig(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
             required_points: requiredPoints,
             reset_interval_days: resetIntervalDays,
             member_user_ids: requiredPoints <= 0 ? memberUserIds : undefined,
+            roster_complete: roster?.fetchResult.complete ?? false,
         });
 
         let reconciliationNote = '';
         if (requiredPoints > 0) {
             try {
-                const finalized = await finalizeDueQuotaPeriods(interaction.guildId!, roleId, memberUserIds ?? []);
+                const finalized = await finalizeDueQuotaPeriods(interaction.guildId!, roleId, memberUserIds ?? [], 10, roster?.fetchResult.complete ?? false);
                 for (const period of finalized.periods) await deliverQuotaPeriodLog(interaction.client, period);
                 if (finalized.remaining_due) reconciliationNote = '\nFurther catch-up will continue on the scheduled task.';
             } catch (error) {
@@ -1107,11 +1107,12 @@ export async function handleQuotaResetPanel(interaction: ButtonInteraction) {
             await interaction.editReply('❌ The configured Discord role no longer exists. It will be closed by automatic cleanup.');
             return;
         }
-        const { memberIds } = await getRoleMembersWithCache(role);
+        const { memberIds, fetchResult } = await getRoleMembersWithCache(role);
         const reset = await manuallyResetQuotaPeriod(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: true,
             member_user_ids: memberIds,
+            roster_complete: fetchResult.complete,
         });
         for (const period of reset.periods) {
             await deliverQuotaPeriodLog(interaction.client, period);
@@ -1212,11 +1213,12 @@ export async function handleQuotaDeleteConfig(interaction: ButtonInteraction) {
         // Delete the quota configuration from the database
         const hasAdminPerm = member?.permissions.has(PermissionFlagsBits.Administrator);
         const quotaRole = interaction.guild?.roles.cache.get(roleId);
-        const roleMembers = quotaRole ? (await getRoleMembersWithCache(quotaRole)).memberIds : undefined;
+        const roster = quotaRole ? await getRoleMembersWithCache(quotaRole) : undefined;
         const deleted = await deleteQuotaRoleConfig(interaction.guildId!, roleId, {
             actor_user_id: interaction.user.id,
             actor_has_admin_permission: hasAdminPerm,
-            member_user_ids: roleMembers,
+            member_user_ids: roster?.memberIds,
+            roster_complete: roster?.fetchResult.complete ?? false,
             deletion_reason: 'config_deleted',
         });
         for (const period of deleted.finalized_periods) {

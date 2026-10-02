@@ -549,6 +549,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         const Params = z.object({ guild_id: zSnowflake, role_id: zSnowflake });
         const Body = z.object({
             member_user_ids: z.array(zSnowflake).default([]),
+            roster_complete: z.boolean().default(false),
             max_periods: z.number().int().min(1).max(100).default(10),
         });
         const params = Params.safeParse(req.params);
@@ -560,7 +561,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 params.data.guild_id,
                 params.data.role_id,
                 body.data.member_user_ids,
-                body.data.max_periods
+                body.data.max_periods,
+                body.data.roster_complete
             ));
         } catch (err) {
             logger.error({ err, ...params.data }, 'Failed to finalize due quota periods');
@@ -576,6 +578,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             actor_roles: z.array(zSnowflake).optional(),
             actor_has_admin_permission: z.boolean().optional(),
             member_user_ids: z.array(zSnowflake).default([]),
+            roster_complete: z.boolean().default(false),
         });
         const params = Params.safeParse(req.params);
         const body = Body.safeParse(req.body);
@@ -589,7 +592,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
             return reply.send(await manuallyResetQuotaPeriod(
                 params.data.guild_id,
                 params.data.role_id,
-                body.data.member_user_ids
+                body.data.member_user_ids,
+                body.data.roster_complete
             ));
         } catch (err) {
             logger.error({ err, ...params.data }, 'Failed to manually reset quota period');
@@ -646,6 +650,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             reset_interval_days: z.number().int().min(1).max(365).optional(),
             rollover_enabled: z.boolean().optional(),
             member_user_ids: z.array(zSnowflake).optional(),
+            roster_complete: z.boolean().default(false),
             panel_message_id: zSnowflake.nullable().optional(),
             moderation_points: z.number().min(0).optional().refine(
                 (val) => val === undefined || Number.isFinite(val) && Math.round(val * 100) === val * 100,
@@ -865,6 +870,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
             actor_roles: z.array(zSnowflake).optional(),
             actor_has_admin_permission: z.boolean().optional(),
             member_user_ids: z.array(zSnowflake).optional(),
+            roster_complete: z.boolean().default(false),
             deletion_reason: z.enum(['config_deleted', 'role_deleted']).default('config_deleted'),
         });
 
@@ -876,7 +882,7 @@ export default async function quotaRoutes(app: FastifyInstance) {
         }
 
         const { guild_id, role_id } = p.data;
-        const { actor_user_id, actor_roles, actor_has_admin_permission, member_user_ids, deletion_reason } = b.data;
+        const { actor_user_id, actor_roles, actor_has_admin_permission, member_user_ids, roster_complete, deletion_reason } = b.data;
 
         // Authorization
         let authorized = false;
@@ -905,7 +911,8 @@ export default async function quotaRoutes(app: FastifyInstance) {
                 guild_id,
                 role_id,
                 deletion_reason,
-                member_user_ids
+                member_user_ids,
+                roster_complete
             );
 
             return reply.send({

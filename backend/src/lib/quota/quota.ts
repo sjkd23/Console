@@ -214,11 +214,12 @@ export async function upsertQuotaRoleConfig(
         editname_points?: number; // Points for /editname command
         addnote_points?: number; // Points for /addnote command
         member_user_ids?: string[]; // Live roster used only when deactivating quota automation
+        roster_complete?: boolean;
     }
 ): Promise<QuotaRoleConfig> {
     // Panel tracking is metadata only: never activate, finalize, or recreate a config.
     if (config.panel_message_id !== undefined
-        && Object.entries(config).every(([key, value]) => value === undefined || key === 'panel_message_id')) {
+        && Object.entries(config).every(([key, value]) => value === undefined || key === 'panel_message_id' || key === 'roster_complete')) {
         const updated = await query(
             `UPDATE quota_role_config SET panel_message_id = $3::bigint, updated_at = NOW()
              WHERE guild_id = $1::bigint AND discord_role_id = $2::bigint`,
@@ -408,7 +409,8 @@ export async function upsertQuotaRoleConfig(
             client,
             guildId,
             discordRoleId,
-            config.member_user_ids
+            config.member_user_ids,
+            config.roster_complete ?? false
         );
     }
 

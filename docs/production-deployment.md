@@ -179,9 +179,34 @@ schema compatibility and recovery backups before deploying or rolling back.
 
 ## Encrypted DigitalOcean PostgreSQL Volume
 
-Perform the [separate storage cutover](postgresql-encrypted-volume-cutover.md) first
-in its own maintenance window. After it is stable, every deployment/rollback must
-include the storage override and recorded filesystem UUID:
+### Current production: named volume on encrypted Docker storage
+
+The operator reports that production uses a separate 20 GB DigitalOcean Block
+Storage Volume encrypted at rest. Docker's persistent data root is
+`/mnt/volume_nyc3_1790759919647/docker`, and containerd's persistent root is
+`/mnt/volume_nyc3_1790759919647/containerd`. PostgreSQL 14 uses the normal Docker
+named volume `console_pgdata`, physically stored beneath
+`/mnt/volume_nyc3_1790759919647/docker/volumes/console_pgdata/_data`.
+Production uses ordinary `bash scripts/deploy-production.sh` with a published
+`CONSOLE_IMAGE_TAG`; it does not use `--pg-volume` or a direct PGDATA bind mount.
+
+Runtime bot/backend environment files are symlinked into
+`/mnt/volume_nyc3_1790759919647/console-config/`. The DigitalOcean Cloud Firewall
+blocks public PostgreSQL port 5469 and backend port 4000; SSH management is
+permitted as configured. The production `bot_log` transcript destination is
+staff-only, according to the operator. These are deployment facts, not guarantees
+for other installations or substitutes for checking host mount/boot ordering.
+
+The old production Droplet and its old snapshot have been destroyed. A final
+PostgreSQL migration dump exists on the encrypted Volume, with an independent
+owner-held copy whose encryption and retention properties are not established.
+
+### Optional: direct PGDATA bind mount
+
+The [storage cutover runbook](postgresql-encrypted-volume-cutover.md) describes
+the still-supported optional bind-mount topology. Only installations that choose
+that topology must retain its override and recorded filesystem UUID on every
+deployment/rollback:
 
 ```bash
 export CONSOLE_PGDATA_HOST_PATH=/mnt/<existing-volume-mount>/pgdata

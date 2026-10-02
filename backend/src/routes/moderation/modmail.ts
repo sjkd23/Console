@@ -119,13 +119,15 @@ export default async function modmailRoutes(app: FastifyInstance) {
             await query(
                 `INSERT INTO modmail_message (ticket_id, author_id, content, attachments, sent_at, is_staff_reply)
                  VALUES ($1, $2::bigint, $3, $4::jsonb, NOW(), false)`,
-                [ticket_id, user_id, content, JSON.stringify(attachments)]
+                [ticket_id, user_id, content, JSON.stringify(attachments)],
+                { redactParams: true }
             );
 
             return reply.code(201).send(ticket);
         } catch (err) {
             console.error('[Modmail] Error creating ticket:', err);
-            if ((err as any).code === '23505') {
+            const databaseError = z.object({ code: z.string() }).safeParse(err);
+            if (databaseError.success && databaseError.data.code === '23505') {
                 return Errors.validation(reply, 'A ticket with this ID already exists');
             }
             return Errors.internal(reply, 'Failed to create modmail ticket');
@@ -262,7 +264,8 @@ export default async function modmailRoutes(app: FastifyInstance) {
                 `INSERT INTO modmail_message (ticket_id, author_id, content, attachments, sent_at, is_staff_reply)
                  VALUES ($1, $2::bigint, $3, $4::jsonb, NOW(), $5)
                  RETURNING message_id, ticket_id, author_id, content, attachments, sent_at, is_staff_reply`,
-                [ticket_id, author_id, content, JSON.stringify(attachments), is_staff_reply]
+                [ticket_id, author_id, content, JSON.stringify(attachments), is_staff_reply],
+                { redactParams: true }
             );
 
             if (result.rows.length === 0) {
@@ -441,7 +444,8 @@ export default async function modmailRoutes(app: FastifyInstance) {
                     modmail_blacklisted_by = $4::bigint,
                     modmail_blacklisted_at = NOW()
                  RETURNING guild_id, user_id, modmail_blacklisted, modmail_blacklist_reason, modmail_blacklisted_by, modmail_blacklisted_at`,
-                [guild_id, user_id, reason, actor_user_id]
+                [guild_id, user_id, reason, actor_user_id],
+                { redactParams: true }
             );
 
             // Log audit event

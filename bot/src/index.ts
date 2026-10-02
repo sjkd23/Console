@@ -142,7 +142,7 @@ const client = new Client({
         GatewayIntentBits.GuildMessages, // Required for message collectors in guild channels
         GatewayIntentBits.GuildEmojisAndStickers, // Required for emoji cache
         GatewayIntentBits.DirectMessages, // Required for DM-based verification
-        GatewayIntentBits.MessageContent, // Required for guild ticket transcripts and DM verification
+        GatewayIntentBits.MessageContent, // Required for ordinary messages and transcripts in managed guild ticket channels
     ],
     partials: [Partials.Channel, Partials.GuildMember, Partials.User, Partials.Message]
 });

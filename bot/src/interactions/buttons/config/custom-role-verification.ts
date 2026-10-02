@@ -252,10 +252,13 @@ async function collectScreenshot(
             await logVerificationEvent(
                 guild,
                 userId,
-                `**[Custom Role] Screenshot submitted** for role <@&${fullSession.role_id}>\n**Screenshot:** [View](${attachment.url})\nWaiting for staff review...`
+                `**[Custom Role] Screenshot submitted** for role <@&${fullSession.role_id}>\n**Screenshot:** [View](${attachment.url})\nWaiting for staff review...`,
+                { redactErrorDetails: true }
             );
         } catch (err) {
-            console.error('[CustomRoleScreenshot] Error submitting:', err);
+            console.error('[CustomRoleScreenshot] Error submitting:', {
+                guildId, userId, sessionId, failure: err instanceof Error ? err.name : 'UnknownError',
+            });
             await dmChannel.send(
                 '❌ **Submission Failed**\n\n' +
                 'An error occurred while submitting your screenshot. Please try again by clicking the "Get Verified" button in the server.'
@@ -320,7 +323,9 @@ async function createVerificationTicket(
             ticket_message_id: ticketMessage.id,
         });
     } catch (err) {
-        console.error('[CustomRoleTicket] Error creating ticket:', err);
+        console.error('[CustomRoleTicket] Error creating ticket:', {
+            guildId: guild.id, userId, sessionId: session.id, failure: err instanceof Error ? err.name : 'UnknownError',
+        });
     }
 }
 
@@ -601,14 +606,18 @@ export async function handleCustomRoleDenyModal(interaction: ModalSubmitInteract
             interaction.guild!,
             session.user_id,
             `**[Custom Role] Verification denied** by ${interaction.user} for role ${role}\n**Reason:** ${reason}`,
-            { error: true }
+            { error: true, redactErrorDetails: true }
         );
 
         await interaction.editReply(
             `✅ **Denied**\n\nVerification denied. The user has been notified.`
         );
     } catch (err) {
-        console.error('[CustomRoleDenyModal] Error:', err);
+        console.error('[CustomRoleDenyModal] Error:', {
+            guildId: interaction.guildId,
+            reviewerId: interaction.user.id,
+            failure: err instanceof Error ? err.name : 'UnknownError',
+        });
         await interaction.editReply('❌ An error occurred while processing the denial.');
     }
 }

@@ -20,6 +20,7 @@ export async function logAudit(
     await query(
         `INSERT INTO audit (guild_id, actor_id, action, subject, meta)
          VALUES ($1::bigint, $2::bigint, $3, $4, $5)`,
-        [guildId, actorId, action, subject, meta ? JSON.stringify(meta) : null]
+        [guildId, actorId, action, subject, meta ? JSON.stringify(meta) : null],
+        { redactParams: true }
     );
 }

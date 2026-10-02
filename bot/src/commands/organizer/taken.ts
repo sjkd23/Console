@@ -178,7 +178,7 @@ export const taken: SlashCommand = {
                     guildId: guild.id,
                     runId: activeRun.id,
                     userId: interaction.user.id,
-                    error: e instanceof Error ? e.message : String(e)
+                    failure: e instanceof Error ? e.name : 'UnknownError'
                 });
             }
 
@@ -195,7 +195,6 @@ export const taken: SlashCommand = {
                 runId: activeRun.id,
                 userId: interaction.user.id,
                 dungeonName: activeRun.dungeonLabel,
-                screenshotUrl: screenshot.url,
                 screenshotSize: screenshot.size,
                 screenshotType: screenshot.contentType
             });
@@ -214,8 +213,7 @@ export const taken: SlashCommand = {
                 guildId: guild.id,
                 runId: activeRun?.id,
                 userId: interaction.user.id,
-                error: err instanceof Error ? err.message : String(err),
-                stack: err instanceof Error ? err.stack : undefined
+                failure: err instanceof Error ? err.name : 'UnknownError'
             });
         }
     }

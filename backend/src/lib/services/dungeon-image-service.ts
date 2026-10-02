@@ -57,7 +57,8 @@ export async function setDungeonImage(options: {
              filename = EXCLUDED.filename,
              updated_at = NOW()
          RETURNING guild_id, dungeon_key, image_data, content_type, filename, updated_at`,
-        [options.guildId, options.dungeonKey, options.data, options.contentType, options.filename]
+        [options.guildId, options.dungeonKey, options.data, options.contentType, options.filename],
+        { redactParams: true }
     );
     const row = result.rows[0];
     if (!row) throw new Error('Dungeon image upsert did not return a record.');

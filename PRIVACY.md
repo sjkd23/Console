@@ -1,6 +1,6 @@
 # Console Privacy Policy
 
-Last updated: September 28, 2026
+Last updated: October 2, 2026
 
 ## Overview
 
@@ -10,13 +10,16 @@ Console is a Discord bot used by Realm of the Mad God communities for raid organ
 
 Depending on the features you use, Console may process or store:
 
-- Discord user and server IDs; channel and role IDs; usernames and server nicknames.
-- Verified in-game names, RealmEye profile information used for verification, screenshots, verification status, and staff review details.
-- Raid participation, organizer statistics, key contributions, quota points, periods, and results.
-- Moderation actions, reasons, staff notes, modmail messages and attachment URLs, and command or audit records.
-- Ticket requests, form answers, processing and delivery records, messages in Console-managed ticket channels, and attachment names, sizes, types, and URLs.
+- Discord/API identifiers and metadata: user, server, channel, role, and message IDs; usernames and server nicknames; raid participation, organizer statistics, key contributions, quota points, periods, and results.
+- Ordinary guild messages in Console-managed ticket channels: conversation text, known edits/deletions, embed text/media references, and attachment names, sizes, types, and URLs. This transcription uses the privileged guild Message Content intent.
+- Direct messages: submitted modmail support messages and attachment URLs, and verification submissions sent to the bot. DMs are separate from privileged guild Message Content.
+- Structured interaction, modal, and slash-command input: ticket requests and form answers, in-game names, verification screenshots/review details, moderation reasons and staff notes, support replies, and command/audit records. This input does not require privileged guild Message Content.
+- Administrator-authored configuration/content: server settings, verification instructions, ticket templates, saved embed text and media references, and dungeon raid images, including uploaded image file bytes stored in the database.
+- RealmEye profile information used for verification, and limited operational diagnostic metadata such as operation names, IDs, SQL/error codes, and timings. Sensitive database writes redact parameters and repeated error details in diagnostic logs.
 
 Console does not collect every category from every user. Console does not collect Discord Presence information.
+
+Discord.js transiently receives and caches gateway messages Discord delivers to the bot, including messages outside managed tickets. Console does not generally archive arbitrary guild conversation in PostgreSQL.
 
 ## How Information Is Used
 
@@ -24,13 +27,13 @@ Console uses this information to run raids, verify players, track participation 
 
 ## Ticket Transcripts
 
-Ticket conversations in Console-managed ticket channels are transcribed to the server's configured Discord transcript location for authorized staff. Ticket messages visibly state: “Ticket conversations are logged for transcript purposes.” Transcripts can include message text, edits or deletions known to Console, and attachment details and URLs.
+Ticket conversations in Console-managed ticket channels are transcribed to the server-configured Discord logging/transcript destination. Access is governed by that server's Discord permissions, which administrators control. Ticket messages visibly state: “Ticket conversations are logged for transcript purposes.” Transcripts can include message text, edits or deletions known to Console, and embed and attachment details and URLs.
 
-To deliver transcripts reliably, Console may temporarily keep pending or partly delivered transcript events in its database. Their readable content remains there while delivery or recovery is needed. Once a complete event is delivered and acknowledged, Console clears that content from the current database row; identifying and delivery details may remain. The rendered transcript remains in Discord. Clearing the database row does not immediately remove copies in backups or older database storage.
+To deliver transcripts reliably, Console may temporarily keep pending or partly delivered transcript events in its database. Their readable chunks remain there while delivery or recovery is needed. After the final sequential acknowledgement for an event, Console clears its readable chunks from the completed outbox row; identifying and delivery details may remain. The rendered transcript remains in Discord. Clearing the database row does not immediately remove copies in backups or older database storage.
 
 ## Modmail
 
-Modmail is separate from ticket transcript delivery. Console stores submitted modmail messages and attachment URLs in its database as support history. Closing modmail does not automatically delete that history.
+Modmail is separate from ticket transcript delivery. Console stores DM-based support submissions, attachment URLs, and staff replies submitted through commands as support history in its database. Closing modmail does not automatically delete that history. This history is not the justification for privileged guild Message Content.
 
 ## Data Retention
 
@@ -38,7 +41,7 @@ Retention varies by record. Pending or partly delivered ticket transcript conten
 
 ## Data Sharing
 
-Appropriate staff of a Discord server may see information through Console's configured outputs, including moderation records and ticket transcript channels. Console's operating infrastructure, including its database and hosting environment, also processes or stores data. Console does not sell user data.
+Information is delivered through the server's configured outputs, including moderation records and ticket transcripts; visibility depends on that server's Discord permissions. Console's operating infrastructure, including its database and hosting environment, also processes or stores data. Console does not sell user data.
 
 ## AI and Machine Learning
 

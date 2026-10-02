@@ -33,7 +33,7 @@ export default async function notesRoutes(app: FastifyInstance) {
         const parsed = CreateNoteBody.safeParse(req.body);
 
         if (!parsed.success) {
-            logger.error({ issues: parsed.error.issues, body: req.body }, 'Validation failed for POST /notes');
+            logger.error({ issues: parsed.error.issues.map(({ code, path }) => ({ code, path })) }, 'Validation failed for POST /notes');
             const msg = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
             return Errors.validation(reply, msg || 'Invalid request');
         }
@@ -69,7 +69,8 @@ export default async function notesRoutes(app: FastifyInstance) {
                 `INSERT INTO note (id, guild_id, user_id, moderator_id, note_text, created_at)
                  VALUES ($1, $2::bigint, $3::bigint, $4::bigint, $5, NOW())
                  RETURNING id, guild_id, user_id, moderator_id, note_text, created_at`,
-                [noteId, guild_id, user_id, actor_user_id, note_text]
+                [noteId, guild_id, user_id, actor_user_id, note_text],
+                { redactParams: true }
             );
 
             const note = result.rows[0];

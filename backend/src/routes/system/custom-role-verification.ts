@@ -69,7 +69,8 @@ export default async function customRoleVerificationRoutes(app: FastifyInstance)
                     example_image_url = $7,
                     panel_message_id = NULL
                  RETURNING id, guild_id, role_id, role_channel_id, verification_channel_id, instructions, role_description, example_image_url, panel_message_id, created_at, created_by_user_id`,
-                [guild_id, role_id, role_channel_id, verification_channel_id, instructions, role_description || null, example_image_url || null, created_by_user_id]
+                [guild_id, role_id, role_channel_id, verification_channel_id, instructions, role_description || null, example_image_url || null, created_by_user_id],
+                { redactParams: true }
             );
 
             return reply.code(200).send(res.rows[0]);
@@ -209,7 +210,8 @@ export default async function customRoleVerificationRoutes(app: FastifyInstance)
              SET ${setClauses.join(', ')}
              WHERE id = $${paramIndex++}
              RETURNING id, guild_id, role_id, role_channel_id, verification_channel_id, instructions, role_description, example_image_url, panel_message_id, created_at, created_by_user_id`,
-            values
+            values,
+            { redactParams: true }
         );
 
         if (!res.rowCount || res.rowCount === 0) {
@@ -441,7 +443,8 @@ export default async function customRoleVerificationRoutes(app: FastifyInstance)
              WHERE id = $${paramIndex++}
              RETURNING id, guild_id, user_id, role_verification_id, screenshot_url, ticket_message_id, 
                        status, reviewed_by_user_id, reviewed_at, denial_reason, created_at, updated_at, expires_at`,
-            values
+            values,
+            { redactParams: true }
         );
 
         if (!res.rowCount || res.rowCount === 0) {

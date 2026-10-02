@@ -242,7 +242,7 @@ export default async function verificationRoutes(app: FastifyInstance) {
                        reviewed_by_user_id, denial_reason,
                        created_at, updated_at, expires_at`,
             values,
-            { redactParams: updates.denial_reason !== undefined }
+            { redactParams: true }
         );
 
         if (!res.rowCount || res.rowCount === 0) {
@@ -403,7 +403,8 @@ export default async function verificationRoutes(app: FastifyInstance) {
                 updates.manual_verify_instructions_image ?? null,
                 updates.panel_custom_message_image ?? null,
                 updates.realmeye_instructions_image ?? null,
-            ]
+            ],
+            { redactParams: true }
         );
 
         return reply.code(200).send(res.rows[0]);

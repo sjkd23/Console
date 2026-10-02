@@ -83,6 +83,7 @@ interface FinalizeOptions {
     roleId: string;
     closeReason: QuotaPeriodCloseReason;
     liveMemberIds?: string[];
+    liveRosterComplete?: boolean;
     includeLiveRoster: boolean;
     forceClose: boolean;
     createSuccessor: boolean;
@@ -399,7 +400,7 @@ async function finalizeSingleBoundaryInTransaction(
                  finalized_at = NOW()
              WHERE id = $1::bigint AND status = 'active'
              RETURNING id::text`,
-            [period.id, options.closeReason, options.includeLiveRoster]
+            [period.id, options.closeReason, options.includeLiveRoster && options.liveRosterComplete === true]
         );
 
         if (finalized.rows.length === 0) {
@@ -458,13 +459,15 @@ export async function deactivateQuotaAutomationInTransaction(
     client: PoolClient,
     guildId: string,
     roleId: string,
-    liveMemberIds?: string[]
+    liveMemberIds?: string[],
+    liveRosterComplete = false
 ): Promise<QuotaPeriod | null> {
     return finalizeSingleBoundaryInTransaction(client, {
         guildId,
         roleId,
         closeReason: 'deactivated',
         liveMemberIds,
+        liveRosterComplete,
         includeLiveRoster: liveMemberIds !== undefined,
         forceClose: true,
         createSuccessor: false,
@@ -494,7 +497,8 @@ export async function finalizeDueQuotaPeriods(
     guildId: string,
     roleId: string,
     liveMemberIds: string[],
-    maxPeriods = QUOTA_CATCH_UP_BATCH_SIZE
+    maxPeriods = QUOTA_CATCH_UP_BATCH_SIZE,
+    liveRosterComplete = false
 ): Promise<PeriodProcessingResult> {
     const periods: QuotaPeriod[] = [];
 
@@ -522,6 +526,7 @@ export async function finalizeDueQuotaPeriods(
             roleId,
             closeReason: 'scheduled',
             liveMemberIds,
+            liveRosterComplete,
             includeLiveRoster,
             forceClose: false,
             createSuccessor: true,
@@ -537,7 +542,8 @@ export async function finalizeDueQuotaPeriods(
 export async function manuallyResetQuotaPeriod(
     guildId: string,
     roleId: string,
-    liveMemberIds: string[]
+    liveMemberIds: string[],
+    liveRosterComplete = false
 ): Promise<PeriodProcessingResult & { caught_up_count: number }> {
     const periods: QuotaPeriod[] = [];
     let safetyCounter = 0;
@@ -564,6 +570,7 @@ export async function manuallyResetQuotaPeriod(
         roleId,
         closeReason: 'manual',
         liveMemberIds,
+        liveRosterComplete,
         includeLiveRoster: true,
         forceClose: true,
         createSuccessor: true,
@@ -578,7 +585,8 @@ export async function closeAndDeleteQuotaConfig(
     guildId: string,
     roleId: string,
     reason: 'config_deleted' | 'role_deleted',
-    liveMemberIds?: string[]
+    liveMemberIds?: string[],
+    liveRosterComplete = false
 ): Promise<PeriodProcessingResult> {
     const periods: QuotaPeriod[] = [];
     let safetyCounter = 0;
@@ -604,6 +612,7 @@ export async function closeAndDeleteQuotaConfig(
         roleId,
         closeReason: reason,
         liveMemberIds,
+        liveRosterComplete,
         includeLiveRoster: liveMemberIds !== undefined,
         forceClose: true,
         createSuccessor: false,

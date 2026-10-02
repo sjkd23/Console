@@ -71,7 +71,8 @@ export default async function commandLogRoutes(app: FastifyInstance) {
                     success,
                     error_code ?? null,
                     latency_ms ?? null,
-                ]
+                ],
+                { redactParams: true }
             );
 
             const logId = result.rows[0]?.id;

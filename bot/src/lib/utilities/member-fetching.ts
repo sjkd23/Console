@@ -50,6 +50,8 @@ export interface MemberFetchResult {
      * Whether the fetch completed successfully
      */
     success: boolean;
+    /** Cache covers the known guild member count; fallback results are unverified. */
+    complete: boolean;
     
     /**
      * Source of the member data
@@ -113,6 +115,7 @@ export async function fetchGuildMembersWithTimeout(
                 return {
                     success: true,
                     source: 'backoff-skip',
+                    complete: false,
                     memberCount: cachedCount
                 };
             } else {
@@ -149,6 +152,7 @@ export async function fetchGuildMembersWithTimeout(
         return {
             success: true,
             source: 'cache',
+            complete: totalCount > 0 && cachedCount === totalCount,
             memberCount: cachedCount
         };
     }
@@ -186,6 +190,7 @@ export async function fetchGuildMembersWithTimeout(
         return {
             success: true,
             source: 'fetch',
+            complete: guild.memberCount > 0 && fetchedCount === guild.memberCount,
             memberCount: fetchedCount
         };
         
@@ -207,6 +212,7 @@ export async function fetchGuildMembersWithTimeout(
         return {
             success: false,
             source: 'timeout-fallback',
+            complete: false,
             memberCount: cachedCount,
             error: errorMessage
         };

@@ -52,7 +52,7 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
         const parsed = CreatePunishmentBody.safeParse(req.body);
 
         if (!parsed.success) {
-            logger.error({ issues: parsed.error.issues, body: req.body }, 'Validation failed for POST /punishments');
+            logger.error({ issues: parsed.error.issues.map(({ code, path }) => ({ code, path })) }, 'Validation failed for POST /punishments');
             const msg = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
             return Errors.validation(reply, msg || 'Invalid request');
         }
@@ -101,7 +101,8 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
                 `INSERT INTO punishment (id, guild_id, user_id, moderator_id, type, reason, expires_at, active, created_at)
                  VALUES ($1, $2::bigint, $3::bigint, $4::bigint, $5, $6, $7::timestamptz, TRUE, NOW())
                  RETURNING id, guild_id, user_id, moderator_id, type, reason, expires_at, active, created_at`,
-                [punishmentId, guild_id, user_id, actor_user_id, type, reason, expiresAt]
+                [punishmentId, guild_id, user_id, actor_user_id, type, reason, expiresAt],
+                { redactParams: true }
             );
 
             const punishment = result.rows[0];
@@ -434,7 +435,8 @@ export default async function punishmentsRoutes(app: FastifyInstance) {
                  WHERE id = $1
                  RETURNING id, guild_id, user_id, moderator_id, type, reason, expires_at, active, created_at,
                            removed_at, removed_by, removal_reason`,
-                [id, actor_user_id, removal_reason]
+                [id, actor_user_id, removal_reason],
+                { redactParams: true }
             );
 
             const updated = result.rows[0];

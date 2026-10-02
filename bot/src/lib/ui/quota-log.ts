@@ -65,7 +65,7 @@ export function buildQuotaLogEmbeds(period: QuotaPeriod, roleName: string): Embe
             `**Close reason:** ${period.close_reason ?? 'unknown'}\n` +
             (period.roster_complete
                 ? '**Roster:** Complete live role roster included'
-                : '**Roster:** Historical reconstruction; unverifiable zero-point members omitted')
+                : '**Roster:** Completeness not verified; some zero-point members may be missing')
         )
         .setColor(0x5865F2)
         .setTimestamp(period.finalized_at ? new Date(period.finalized_at) : new Date());

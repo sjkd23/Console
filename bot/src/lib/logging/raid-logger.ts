@@ -123,7 +123,8 @@ export async function logToThread(
     client: Client,
     context: RaidLogContext,
     message: string,
-    embed?: EmbedBuilder
+    embed?: EmbedBuilder,
+    redactErrorDetails = false
 ): Promise<void> {
     try {
         const thread = await getOrCreateLogThread(client, context);
@@ -136,7 +137,9 @@ export async function logToThread(
 
         await thread.send(content);
     } catch (error) {
-        logger.error('Failed to log message to thread', { error, context });
+        logger.error('Failed to log message to thread', redactErrorDetails
+            ? { guildId: context.guildId, runId: context.runId, failure: error instanceof Error ? error.name : 'UnknownError' }
+            : { error, context });
     }
 }
 
@@ -376,7 +379,7 @@ export async function logScreenshotSubmission(
         .setColor(0x3498db)
         .setTimestamp(new Date());
 
-    await logToThread(client, context, '', embed);
+    await logToThread(client, context, '', embed, true);
 }
 
 /**

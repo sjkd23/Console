@@ -126,7 +126,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
              FROM raider 
              WHERE guild_id = $1::bigint 
              AND (LOWER(ign) = LOWER($2) OR LOWER(alt_ign) = LOWER($2))`,
-            [guild_id, ign]
+            [guild_id, ign],
+            { redactParams: true }
         );
 
         if (!res.rowCount || res.rowCount === 0) {
@@ -195,12 +196,13 @@ export default async function raidersRoutes(app: FastifyInstance) {
              WHERE guild_id = $1::bigint 
              AND LOWER(ign) = LOWER($2) 
              AND user_id != $3::bigint`,
-            [guild_id, ign, user_id]
+            [guild_id, ign, user_id],
+            { redactParams: true }
         );
 
         if (existingIgn.rowCount && existingIgn.rowCount > 0) {
             const conflictUserId = existingIgn.rows[0].user_id;
-            console.log(`[Verify] IGN "${ign}" is already used by user ${conflictUserId} in guild ${guild_id}`);
+            console.log(`[Verify] IGN conflict for user ${conflictUserId} in guild ${guild_id}`);
             return reply.code(409).send({
                 error: {
                     code: 'IGN_ALREADY_IN_USE',
@@ -227,7 +229,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
                 status = 'approved',
                 verified_at = NOW()
              RETURNING guild_id, user_id, ign, status, verified_at`,
-            [guild_id, user_id, ign]
+            [guild_id, user_id, ign],
+            { redactParams: true }
         );
 
         // Log audit event
@@ -269,7 +272,7 @@ export default async function raidersRoutes(app: FastifyInstance) {
         const { user_id } = p.data;
         const { actor_user_id, actor_roles, guild_id, ign } = b.data;
 
-        console.log(`[Update IGN] Actor ${actor_user_id} in guild ${guild_id} updating ${user_id} to IGN "${ign}"`);
+        console.log(`[Update IGN] Actor ${actor_user_id} in guild ${guild_id} updating ${user_id}`);
 
         // Authorization: actor must have the 'security' role or higher
         try {
@@ -310,7 +313,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
              WHERE guild_id = $1::bigint 
              AND LOWER(ign) = LOWER($2) 
              AND user_id != $3::bigint`,
-            [guild_id, ign, user_id]
+            [guild_id, ign, user_id],
+            { redactParams: true }
         );
 
         if (ignConflict.rowCount && ignConflict.rowCount > 0) {
@@ -337,7 +341,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
              SET ign = $3
              WHERE guild_id = $1::bigint AND user_id = $2::bigint
              RETURNING guild_id, user_id, ign, alt_ign, status, verified_at`,
-            [guild_id, user_id, ign]
+            [guild_id, user_id, ign],
+            { redactParams: true }
         );
 
         // Log audit event
@@ -489,7 +494,7 @@ export default async function raidersRoutes(app: FastifyInstance) {
         const { user_id } = p.data;
         const { actor_user_id, actor_roles, guild_id, alt_ign } = b.data;
 
-        console.log(`[Add Alt] Actor ${actor_user_id} in guild ${guild_id} adding alt "${alt_ign}" for ${user_id}`);
+        console.log(`[Add Alt] Actor ${actor_user_id} in guild ${guild_id} adding alt for ${user_id}`);
 
         // Authorization: actor must have the 'security' role or higher
         try {
@@ -550,7 +555,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
              WHERE guild_id = $1::bigint 
              AND user_id != $2::bigint
              AND (LOWER(ign) = LOWER($3) OR LOWER(alt_ign) = LOWER($3))`,
-            [guild_id, user_id, alt_ign]
+            [guild_id, user_id, alt_ign],
+            { redactParams: true }
         );
 
         if (ignConflict.rowCount && ignConflict.rowCount > 0) {
@@ -578,7 +584,8 @@ export default async function raidersRoutes(app: FastifyInstance) {
              SET alt_ign = $3
              WHERE guild_id = $1::bigint AND user_id = $2::bigint
              RETURNING guild_id, user_id, ign, alt_ign, status, verified_at`,
-            [guild_id, user_id, alt_ign]
+            [guild_id, user_id, alt_ign],
+            { redactParams: true }
         );
 
         // Log audit event

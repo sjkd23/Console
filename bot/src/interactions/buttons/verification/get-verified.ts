@@ -1141,7 +1141,6 @@ async function collectScreenshot(
             console.error('[ManualVerification] Session disappeared during screenshot submission', {
                 guildId,
                 userId,
-                screenshotUrl: attachment.url,
             });
             
             await dmChannel.send(
@@ -1256,7 +1255,9 @@ async function collectScreenshot(
                 `**Verification ticket created** in <#${manualVerificationChannelId}>. Awaiting Security+ approval.`
             );
         } catch (err) {
-            console.error('[ManualVerification] Error creating ticket:', err);
+            console.error('[ManualVerification] Error creating ticket:', {
+                guildId, userId, failure: err instanceof Error ? err.name : 'UnknownError',
+            });
             await cancelSessionSafely(guildId, userId, 'manual verification ticket creation failed');
             await dmChannel.send(
                 '❌ **Error**\n\n' +
